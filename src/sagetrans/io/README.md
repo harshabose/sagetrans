@@ -10,7 +10,8 @@ absolute imports mean it does not shadow the standard library.)
 | `results.py` | `write_results`, `write_csv`, `require_writable` — the folder writer with the DRAFT guard |
 | `figures.py` | tornado, range-margin, Pareto and feasibility figures; `save_figure` |
 | `report.py` | `ReportInputs`, `build_report`, `flagged_assumptions` |
-| `gate.py` | `release_gate`, `GateResult`, `verification_from_junit`, `REQUIRED_TESTS` |
+| `gate.py` | `release_gate`, `GateResult`, `verification_from_junit`, `REQUIRED_TESTS`, `SEARCH_ANALYSES` |
+| `ci_check.py` | `python -m sagetrans.io.ci_check junit.xml`: fails CI if any of T-01…T-15 is missing or failing |
 
 ## The run record (`record.py`)
 
@@ -25,15 +26,17 @@ Written as `run_record.json` next to every output (FR-09, NFR-07). A `FullRunRec
 | `code_version`, `git_commit`, `git_dirty`, `date` | where the numbers came from |
 | `analyses` | name → the input hash of each contributing analysis's own `RunRecord` |
 | `seeds` | seeds used by stochastic searches |
+| `search_spreads` | for each analysis that used a stochastic search (`"B2"`, `"C"`): the three-seed cost spread, i.e. the **real-problem T-12 evidence** the gate checks |
 | `override` | `True` if the DRAFT refusal was overridden for this write |
 | `outputs` | file name → SHA-256 of every file written |
 
-`build_record(config, analyses, seeds=(), override=False)` combines the register state with the
-analyses' records. **It is DRAFT if the configuration has any `TBD` parameter, or if any
-contributing analysis record is DRAFT** — and every analysis record is DRAFT while the physics runs
-on placeholders. `git_state()` returns the short commit and a dirty flag (`"no-commit"` and dirty
-when there is no commit, as in this repository today). `record.footer()` is the one-line text put on
-figures: `run record <hash8> | DRAFT | commit … | date`.
+`build_record(config, analyses, seeds=(), override=False, search_spreads=None)` combines the register
+state with the analyses' records. **It is DRAFT if the configuration has any `TBD` parameter, if the
+register references a file that does not exist (`Config.missing_files()`), or if any contributing
+analysis record is DRAFT** — and every analysis record is DRAFT while the physics runs on
+placeholders. `reasons` lists each cause. `git_state()` returns the short commit and a dirty flag
+(`"no-commit"` and dirty only when the repository has no commit). `record.footer()` is the one-line
+text put on figures: `run record <hash8> | DRAFT | commit … | date`.
 
 `check_outputs(folder)` re-hashes every file the record names and returns `{file: matches}`, so a
 hand-edited output is detected.
@@ -86,15 +89,23 @@ dominating inputs that are not measured; the report states them as assumptions w
 
 ## The release gate (`gate.py`)
 
-A result is released only if **all** of the following hold (proposal §12); `release_gate(record,
-verification, sens, flagged_assumptions, required_tests=T-01…T-15)` returns a `GateResult(passed,
-reasons, warnings)` and `.summary()` prints it.
+A result is released only if **all** of the following hold (proposal §12, plus rule 3, which the
+proposal's wording does not spell out); `release_gate(record, verification, sens,
+flagged_assumptions, required_tests=T-01…T-15)` returns a `GateResult(passed, reasons, warnings)`
+and `.summary()` prints it.
 
 1. **The run record is not DRAFT.**
 2. **Every required verification test is present and passing.** An ID with no result counts as a
    failure.
-3. **The evidence-grade summary is attached** (non-zero counts).
-4. **The sensitivity ranking is stable** across the two sample sizes (Spearman ≥ 0.8 and top-3
+3. **T-12 holds on the real problem for every analysis that used a stochastic search.** This is a
+   separate rule because the `test_t12_…` unit test only exercises the search machinery on an
+   analytic cost, so "T-12 passes" in step 2 says nothing about whether an actual optimum is
+   repeatable. If the record lists analysis `"C"` or `"B2"` (`gate.SEARCH_ANALYSES`), it must also
+   carry that analysis's three-seed spread in `search_spreads`, and the spread must be at most 1 %
+   (`gate.T12_SPREAD_MAX`). A missing or NaN spread blocks. With the A-based start B2's seeds
+   disagreed by 4–9 %, so a record containing B2 is blocked until that is fixed.
+4. **The evidence-grade summary is attached** (non-zero counts).
+5. **The sensitivity ranking is stable** across the two sample sizes (Spearman ≥ 0.8 and top-3
    overlap ≥ 2/3 for every output), **and every dominating input is either measured or flagged as an
    assumption with its range.** An input that is still `TBD` cannot be flagged away — it must be
    supplied. Flagged-but-unmeasured inputs pass with a warning that carries their range.
@@ -103,10 +114,16 @@ reasons, warnings)` and `.summary()` prints it.
 `test_tNN_` to `T-NN`; an ID passes only if every test carrying it passed. The suite's tests are
 named to this convention (for example `test_t11_collocation_replayed_…`).
 
-**Status today: the gate always blocks.** The register has `TBD` mass and wing area, and every
-analysis ran on placeholder physics, so the record is DRAFT; and mass and wing area dominate several
-outputs. That is the intended behaviour, shown in a demo run: `RELEASE: BLOCKED` with the DRAFT
-reasons and the TBD dominating inputs. CI does not yet produce a JUnit file or call the gate.
+**In CI.** The workflow runs `pytest --junitxml=junit.xml`, then
+`python -m sagetrans.io.ci_check junit.xml`, which prints one line per ID and exits non-zero if any
+of T-01…T-15 is missing or failing (so renaming or deleting a verification test is caught), and
+uploads the JUnit file as an artifact. CI does **not** call `release_gate` itself: releasing needs a
+run record built from real analysis results, which only a person running an analysis can supply.
+
+**Status today: the gate always blocks.** The register has `TBD` mass and wing area and points at
+files that do not exist, and every analysis ran on placeholder physics, so the record is DRAFT; and
+mass and wing area dominate several outputs. That is the intended behaviour, shown in a demo run:
+`RELEASE: BLOCKED` with the DRAFT reasons and the TBD dominating inputs.
 
 ## Example
 
@@ -123,6 +140,8 @@ vp, scen = placeholder_vehicle(), Scenario(100.0)
 cfg = Config.from_yaml("configs/vehicle.yaml")
 model = S.HeadlineModel(vp, scen, S.default_inputs(vp, scen))
 sens = S.run_sensitivity(model, r_small=6, r_large=12)
+# if an optimisation (analysis C or B2) fed the result, register its three-seed spread too:
+#   build_record(cfg, {..., "C": res.record}, search_spreads={"C": res.search.spread})
 rec = build_record(cfg, {"sensitivity": sens.record}, seeds=(0,))
 text = report.build_report(report.ReportInputs("Study", rec, cfg, model({}), sens=sens))
 folder = results.write_results(

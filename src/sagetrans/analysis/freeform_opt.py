@@ -1,9 +1,14 @@
 """Analysis B2: speed-scheduled back-transition law tuned over the ensemble (section 10B).
 
 Bare-minimum M5 version: back-transition only, no altitude feedback, CMA-ES from the same
-search machinery and cost (10.1) as analysis C. B1 does not exist yet (M6), so the initial
-knots come from analysis A's pre-spun schedule instead of B1; where A is infeasible they fall
-back to fixed defaults.
+search machinery and cost (10.1) as analysis C. The default starting knots come from analysis A's
+pre-spun schedule (where A is infeasible they fall back to fixed defaults). The proposal starts
+B2 from B1's solution replotted against V / V_s: `init_from_collocation` does that, and
+`optimise(..., init_params=...)` accepts it.
+
+Repeatability (T-12) of B2 was NOT met from the A-based start (seed spread 4-9 %); whether the
+B1 start fixes it is not yet shown. Record the spread (`result.search.spread`) in the run record
+(`build_record(..., search_spreads={"B2": ...})`) so the release gate can check it.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from sagetrans.analysis import runs
+from sagetrans.analysis import collocation, runs
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
 from sagetrans.analysis.ensemble import CostWeights, RunMetrics, ensemble_cost
 from sagetrans.analysis.search import Bounds, SearchResult, cma_minimise
@@ -64,6 +69,31 @@ def init_from_zero_loss(
     return prm
 
 
+def init_from_collocation(
+    prob: collocation.Problem, sol: collocation.B1Solution
+) -> dict[str, float]:
+    """Starting knots from a B1 solution, re-plotted against V / V_s (proposal step 2 of B2).
+
+    The rotor throttle is converted from B1's effective throttle to the ESC command, the knots
+    are read off by interpolating over airspeed (the trajectory's speed falls through the knots),
+    and `s_on` is the normalised speed at which B1 first switches the rotors on.
+    """
+    scen = prob.scen
+    v_s = runs.stall_speed(prob.vp, scen.rho)
+    s = np.hypot(sol.x[:, 2] + scen.headwind_ms, sol.x[:, 3]) / v_s
+    dz = prob.dead_zone
+    cmd = dz + (1.0 - dz) * sol.u[:, 0]
+    order = np.argsort(s)
+    prm: dict[str, float] = {}
+    for i, sk in enumerate(S_KNOTS):
+        prm[f"d{i}"] = float(np.clip(np.interp(sk, s[order], cmd[order]), 0.0, DELTA_MAX))
+        prm[f"t{i}"] = float(np.clip(np.interp(sk, s[order], sol.u[order, 1]), *THETA_RANGE))
+    on = np.flatnonzero(sol.u[:, 0] > 1e-3)  # first node with the rotors meaningfully on
+    s_on = float(s[on[0]]) if on.size else S_KNOTS[-1]
+    prm["s_on"] = float(np.clip(s_on, BOUNDS.lo[-1], BOUNDS.hi[-1]))
+    return prm
+
+
 def evaluate(
     vp: VehicleParams, scen: Scenario, p: FreeFormParams, v0_air: float = 22.0,
     v_f: float = 1.0, agl0: float = 100.0,
@@ -97,9 +127,16 @@ def optimise(
     seeds: tuple[int, ...] = (1, 2, 3),
     popsize: int = 12,
     maxiter: int = 15,
+    init_params: dict[str, float] | None = None,
+    sigma0: float = 0.25,
 ) -> FreeFormResult:
-    """Tune the knots of (8.1) over the ensemble; no altitude feedback."""
-    init = init_from_zero_loss(vp, init_scen or scens[0], v0_air)
+    """Tune the knots of (8.1) over the ensemble; no altitude feedback.
+
+    The start is `init_params` if given (for example `init_from_collocation`), otherwise analysis
+    A's pre-spun schedule. `sigma0` is CMA-ES's initial step size on the unit cube; a start that is
+    already good (B1) wants a smaller one than a poor start.
+    """
+    init = init_params or init_from_zero_loss(vp, init_scen or scens[0], v0_air)
 
     def metrics(prm: dict[str, float]) -> list[RunMetrics]:
         fp = decode(prm)
@@ -108,7 +145,9 @@ def optimise(
     def cost(u: np.ndarray) -> float:
         return ensemble_cost(metrics(BOUNDS.to_physical(u)), weights)
 
-    res = cma_minimise(cost, BOUNDS.to_unit(init), seeds, popsize=popsize, maxiter=maxiter)
+    res = cma_minimise(
+        cost, BOUNDS.to_unit(init), seeds, sigma0=sigma0, popsize=popsize, maxiter=maxiter
+    )
     best = BOUNDS.to_physical(res.best_x)
     return FreeFormResult(
         decode(best), res.best_f, res.f_start, metrics(best), res,
@@ -116,4 +155,11 @@ def optimise(
     )  # fmt: skip
 
 
-__all__ = ["FreeFormResult", "decode", "evaluate", "init_from_zero_loss", "optimise"]
+__all__ = [
+    "FreeFormResult",
+    "decode",
+    "evaluate",
+    "init_from_collocation",
+    "init_from_zero_loss",
+    "optimise",
+]

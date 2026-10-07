@@ -16,6 +16,14 @@ source and a status** (FR-01, design principles of section 1, section 9).
 > `Config`. So a `Config` currently supplies the *evidence grade, DRAFT label and hash* of a
 > result, while the numbers come from `placeholder_vehicle()`. Closing that link is the first
 > step toward a releasable result (see `PROJECT_REPORT.md`, "What is not done").
+>
+> **Until then, a drift guard** (`tests/unit/test_register_drift.py`) keeps the two from silently
+> disagreeing: every register entry that carries a value must be listed with the physics value it
+> corresponds to (rotor count, pack count, nominal voltage, capacity, `Q_TRANSITION_MS`) and must
+> agree with it in SI. Adding a value to the register without wiring it into that table fails the
+> test. The register also points at two files that do not exist (`rotors.ct_map`,
+> `battery.ecm_file`); `Config.missing_files()` reports them and the run record counts them as a
+> reason for DRAFT.
 
 ## The status vocabulary
 
@@ -66,6 +74,7 @@ directory of the YAML (the root for `file` records).
 | `get(path)` | the value **in SI**; raises `MissingParameterError` if it is `TBD` or a file record |
 | `file_path(path)` | the resolved path of a file record |
 | `evidence_counts()` | `{status: count}` over every grade (zeros included) |
+| `missing_files()` | dotted paths of file records whose file does not exist (the hash records these as `"missing"`); `build_record` treats any as a DRAFT reason |
 | `is_draft` / `label` | `True`/`"DRAFT"` if any record is `TBD`, else `"RELEASED"` |
 | `require_releasable(override=False)` | raise `DraftConfigError` listing the TBD paths, unless overridden |
 | `config_hash()` | SHA-256 of what determines a result (below) |

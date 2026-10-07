@@ -37,8 +37,8 @@ def touchdown(ground_amsl_m: float = 0.0) -> Event:
     return Event("touchdown", lambda t, x, a: float(x[1]) - ground_amsl_m, -1, True)
 
 
-def ground_speed_below(v_f: float, headwind: float = 0.0) -> Event:
-    """Ground speed falls to V_f (end of back-transition, speed part)."""
+def ground_speed_below(v_f: float) -> Event:
+    """Ground speed (`vx`, a ground-frame speed) falls to V_f: end of the back-transition."""
     return Event("ground_speed_reached", lambda t, x, a: float(x[2]) - v_f, -1, True)
 
 

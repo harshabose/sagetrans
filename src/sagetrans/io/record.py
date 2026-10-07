@@ -50,6 +50,10 @@ class FullRunRecord:
     date: str
     analyses: dict[str, str]  # analysis name -> input hash of its own record
     seeds: tuple[int, ...] = ()
+    # three-seed cost spread of each analysis that used a stochastic search ("B2", "C"): the
+    # real-problem T-12 evidence, which the release gate checks (the unit test of T-12 only
+    # exercises the search machinery on an analytic cost)
+    search_spreads: dict[str, float] = field(default_factory=dict)
     override: bool = False  # the DRAFT refusal was explicitly overridden
     outputs: dict[str, str] = field(default_factory=dict)  # file name -> sha256
 
@@ -69,16 +73,23 @@ def build_record(
     analyses: Mapping[str, RunRecord],
     seeds: tuple[int, ...] = (),
     override: bool = False,
+    search_spreads: Mapping[str, float] | None = None,
 ) -> FullRunRecord:
     """Combine the configuration state with the records of the analyses that fed an output.
 
     The record is DRAFT if the configuration has any TBD parameter, or if any contributing
     analysis ran on placeholder physics (its own record is DRAFT).
+
+    `search_spreads` maps an analysis that used a stochastic search ("B2" or "C") to the
+    three-seed cost spread of that search (`SearchResult.spread`).
     """
     reasons: list[str] = []
     if config.is_draft:
         tbd = sorted(p for p in config if config.record(p).status.value == "TBD")
         reasons.append("configuration has TBD parameters: " + ", ".join(tbd))
+    missing = config.missing_files()
+    if missing:
+        reasons.append("register references files that do not exist: " + ", ".join(missing))
     for name, rec in analyses.items():
         if rec.label == "DRAFT":
             reasons.append(f"analysis '{name}' ran on placeholder inputs (record is DRAFT)")
@@ -94,6 +105,7 @@ def build_record(
         date=dt.date.today().isoformat(),
         analyses={k: v.input_hash for k, v in analyses.items()},
         seeds=seeds,
+        search_spreads=dict(search_spreads or {}),
         override=override,
     )
 

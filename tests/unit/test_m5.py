@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from sagetrans.analysis import freeform_opt, restricted, runs
+from sagetrans.analysis import braking, freeform_opt, restricted, runs
 from sagetrans.analysis.common import Scenario
 from sagetrans.analysis.ensemble import (
     CostWeights,
@@ -170,6 +170,32 @@ def test_back_transition_defaults_complete_without_failure_and_gain_altitude():
     sc = Scenario(100.0)
     m = restricted.evaluate_back(VP, sc, restricted.DEFAULT_PARAMS)
     assert m.failures == () and m.excursion > 1.0 and m.energy > 0 and m.distance > 0
+
+
+def test_c_sets_q_trans_decel_from_analysis_d_not_from_the_ideal_planner():
+    sc = Scenario(100.0, mass_kg=1.1 * VP.m, headwind_ms=2.0)
+    vps = sc.vehicle_for(VP)
+    prm = dict(restricted.DEFAULT_PARAMS)
+    x0 = runs.cruise_entry_state(vps, sc, 22.0)
+    sim_a = restricted.plan_decel(vps, sc, prm, x0, 1.0, "simulated")
+    ideal = restricted.plan_decel(vps, sc, prm, x0, 1.0, "ideal")
+    # the simulated source IS analysis D's worst-case a_eq from the same entry state
+    bp = BackTransitionParams.for_vehicle(
+        vps, sc.rho, sc.soc, sc.altitude_amsl_m, T_bt=prm["T_bt"], theta_A=prm["theta_A"],
+        theta_P=restricted.THETA_P, delta_min=prm["spin_min"],
+    )  # fmt: skip
+    d = braking.measure_a_eq(vps, sc, float(x0[2]), bp, x0=x0)
+    assert sim_a == pytest.approx(d.a_eq, rel=1e-12)
+    assert ideal == pytest.approx(
+        braking.ideal_stopping(float(x0[2]), prm["theta_A"], prm["T_bt"], 1.0, dt=2e-3)[1]
+    )
+    assert abs(sim_a - ideal) > 1e-3  # the two planners are genuinely different numbers
+    with pytest.raises(ValueError, match="a_plan_source"):
+        restricted.plan_decel(vps, sc, prm, x0, 1.0, "nonsense")
+    # both sources give a complete evaluation (the run stops)
+    for src in ("simulated", "ideal"):
+        m = restricted.evaluate_back(VP, sc, prm, a_plan_source=src)
+        assert "not_stopped" not in m.failures and m.distance > 0
 
 
 def test_failure_flags_report_a_run_that_does_not_stop():

@@ -174,15 +174,26 @@ or the air speed (open question O-02): in a headwind the air-speed test switches
 **What it found (placeholder).** `ideal_stopping(25 m/s, 20°)` gives 87.5 m and `a_eq = 3.57 m/s²`
 without the ramp, and 124.5 m / 2.51 m/s² with a 3 s ramp (69.8 m during the ramp) — matching the
 proposal's worked example. The simulated worst-case `a_eq` was about 2.6 m/s², 3 % *above* the
-ideal figure, because wing drag helps. The proposal calls the ideal figure an upper bound on `a_eq`;
-with this wing that is not strictly true. The altitude excursion is a **gain** of about 18 m at
-25 m/s (nose-up lift), no loss. At `a_plan = 2.5 m/s²` the 25 m/s case overshoots by about 22 m;
-switching earlier reduces it.
+ideal figure, because wing drag helps. **The ideal figure is therefore not a bound on `a_eq` in
+either direction**: lag lowers the real `a_eq`, wing drag raises it, and which wins depends on the
+wing. (The proposal's §10D originally called it an upper bound; that sentence has been corrected.)
+The altitude excursion is a **gain** of about 18 m at 25 m/s (nose-up lift), no loss. At
+`a_plan = 2.5 m/s²` the 25 m/s case overshoots by about 22 m; switching earlier reduces it.
+
+**Scenario mass is applied.** `run_braking` uses `scen.vehicle_for(vp)` for the model, for the
+initial hover rotor speed, and for the hover-throttle feed-forward of the altitude hold
+(`refresh_hover=True`; set it false to keep a caller's `delta_hover`). An earlier version used the
+nominal mass everywhere, so the ensemble's 0.85–1.15 mass axis was silently inert in `a_eq` and in
+the `Q_TRANS_DECEL` recommendation; a regression test now covers it. The effect is real: at 25 m/s
+the worst-case `a_eq` is 2.70 / 2.59 / 2.50 / 2.43 m/s² at mass ×0.85 / 1.0 / 1.15 / 1.3 (stopping
+distance 115 to 128 m), so the *minimum* over an ensemble — the recommendation — is set by the heavy
+end.
 
 **Tests:** the planner example (87.5/124.5/69.8 m), the simulated limit case where `a_eq` equals
 `g tan(theta)` within 0.5 % (frozen-state harness, no ramp), the signed excursion, the altitude
-hold in hover, `recommend_decel` being the minimum, earlier switching reducing overshoot, and the
-air-speed test switching earlier in a headwind.
+hold in hover, `recommend_decel` being the minimum, earlier switching reducing overshoot, the
+air-speed test switching earlier in a headwind, and the **scenario-mass regression** (the old code
+gave a difference of exactly 0.0).
 
 ---
 
@@ -277,36 +288,65 @@ transition, cruise stub, back-transition, with the cost taken as the worst excur
 transitions, summed energy, and the back-transition distance.
 
 **Not in the decision vector:** `PTCH_LIM_MAX_DEG` (fixed at 35° so `Q_A_ANGLE_MAX` binds),
-`Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled). **`Q_TRANS_DECEL` is not decided:** each
-evaluation sets it from `braking.ideal_stopping` (the ideal-pitch planner). The proposal asks for
-the *simulated* `a_eq` from analysis D; the ideal planner is a cheap stand-in and the real
-figure is slightly different.
+`Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled). **`Q_TRANS_DECEL` is not decided by the
+search; it comes from analysis D.** `plan_decel(vps, scen, prm, x0, v_f, source)` sets it inside every
+evaluation, as the proposal asks (§10C step 4). With `a_plan_source="simulated"` (the default) it is
+the worst-case `a_eq` that `braking.measure_a_eq` simulates **for the same parameters, scenario and
+entry state**, so the planner is self-consistent with what the aircraft can do. `"ideal"` uses the
+ideal-pitch planner (`braking.ideal_stopping`) instead: no extra simulation, but it ignores wing
+drag, lift and pitch lag, so it is not a bound on the simulated figure in either direction (at 22 m/s
+with default parameters the two differ: 2.35 simulated against 2.42 ideal m/s²). An earlier version
+used the ideal planner only; this was changed after review. The simulated source roughly doubles the
+cost of an evaluation.
 
-`optimise(vp, scens, scope, weights, seeds, popsize, maxiter)` runs CMA-ES from a mid-range default
-and returns the best parameters, the cost, the default's cost, per-scenario metrics and the search.
-`evaluate_back` also takes `controller_overrides` (used by the sensitivity analysis to vary
-controller gains).
+`optimise(vp, scens, scope, weights, seeds, popsize, maxiter, a_plan_source)` runs CMA-ES from a
+mid-range default and returns the best parameters, the cost, the default's cost, per-scenario
+metrics and the search. `evaluate_back` also takes `controller_overrides` (used by the sensitivity
+analysis to vary controller gains; they are applied to the planning run as well as the main run).
 
-**What it found (placeholder, 4-scenario ensemble).** The cost fell from 2.05 to 1.96. The optimiser
-drove `T_bt` and `spin_min` to their lower bounds; the altitude excursion stayed near 12–14 m, i.e.
-the parameters the autopilot offers barely move it. **Three seeds agreed to a spread of 2e-5** (T-12
-satisfied for C). A 3-seed run took about 2 minutes.
+**What it found (placeholder, 4-scenario ensemble, simulated `Q_TRANS_DECEL`).** The cost fell from
+2.09 to 2.00. The optimiser drove `T_bt` and `spin_min` toward their lower bounds; the altitude
+excursion stayed near 12–14 m, i.e. the parameters the autopilot offers barely move it. **Three
+seeds agreed to a spread of 0.10 %** (T-12 satisfied for C; 2e-5 with the earlier ideal planner). A
+3-seed run took about 5 minutes. Record `result.search.spread` in the run record as
+`search_spreads={"C": …}` so the release gate can check it.
 
 ---
 
 ## B2 — speed-scheduled law (`freeform_opt.py`)
 
 Tunes the 13 parameters of the free-form law (6 rotor-throttle knots, 6 pitch knots, `s_on`) over an
-ensemble with the same cost and search as C, **back-transition only**. B1 does not exist at the time
-of the initial design, so the starting knots come from analysis A's pre-spun schedule re-plotted
-against `V/V_s` (`init_from_zero_loss`); where A is infeasible they fall back to fixed defaults.
+ensemble with the same cost and search as C, **back-transition only**. There are two starts:
 
-**What it found (placeholder).** The initial knots cost 8.7, driven by excursions of 70 m or more in two of the four scenarios. After 180 evaluations
-per seed the best cost was 1.94 and after 540 it was 1.60, against C's 1.96 on the same ensemble: the
-free-form law reached an excursion of about 8–10 m against C's 12–14 m. **But the seeds did not agree:
-the spread was 4.4 % at 180 evaluations and 9 % at 540. T-12 is therefore *not* satisfied for B2.**
-The landscape (13 dimensions, no feedback, discontinuous penalties, a start far from the optimum) needs
-a much larger budget or a better start such as B1's solution.
+* `init_from_zero_loss` (the default): analysis A's pre-spun schedule re-plotted against `V/V_s`;
+  where A is infeasible the knots fall back to fixed defaults.
+* `init_from_collocation(prob, sol)`: a B1 solution re-plotted against `V/V_s` (the proposal's
+  step 2), with the rotor throttle converted from B1's effective throttle to the ESC command and
+  `s_on` read from where B1 first switches the rotors on. Pass it as `optimise(..., init_params=…)`.
+
+`optimise` also takes `sigma0`, CMA-ES's initial step size on the unit cube (default 0.25).
+
+**What it found (placeholder, the same 4-scenario ensemble as C; 180 evaluations per seed unless
+stated).**
+
+| Start | Start cost | Best cost | Seed spread | T-12 (≤ 1 %) |
+| --- | --- | --- | --- | --- |
+| A-based, `sigma0` 0.25 | 8.68 | 1.94 | 4.4 % | fails |
+| A-based, `sigma0` 0.25, 540 evaluations | 8.68 | 1.60 | 9 % | fails |
+| B1-based, `sigma0` 0.25 | **1.90** | 1.75 | 8.7 % | fails |
+| B1-based, `sigma0` 0.10 | 1.90 | **1.69** | 5.0 % | fails |
+| B1-based, `sigma0` 0.04 | 1.90 | 1.75 | 5.3 % | fails |
+| *C for comparison* | 2.09 | 2.00 | 0.10 % | passes |
+
+The B1 start is far better as a *starting point* (cost 1.90 against 8.68 — already below C's best,
+because it begins near a good open-loop trajectory) and reaches lower costs at the same budget, but
+**B2's optimum is still not repeatable from three seeds, so T-12 is not satisfied for B2.** With the
+default step size one seed never left the start; smaller steps help (spread 8.7 % → 5 %) but not
+enough. The landscape (13 dimensions, no altitude feedback, discontinuous failure penalties) probably
+needs a much larger budget, a different search setup, or fewer free parameters. The B2 free-form law
+reached an excursion of about 8–10 m against C's 12–14 m, so the result is lower-cost than C but not
+reproducible. **The release gate blocks any run record that includes `"B2"` without a spread of at
+most 1 %** (see `io/README.md`).
 
 ---
 
@@ -429,12 +469,15 @@ state-of-charge scenario axes. Relative ranges default to ±20 %; scenario axes 
   inputs, plus any carrying at least 10 % of the summed index).
 * `weakest_status(statuses)` grades a result by its dominating inputs' weakest evidence.
 
-**What it found (placeholder, all 21 inputs, Morris at 6 and 12 trajectories).** Rankings were stable:
-Spearman 0.96–0.99 and top-3 overlap 1.0 for every output. Dominating inputs: for **excursion**, the
-lift-curve slope, wing area, `CD0` and the altitude-hold gain; for **distance**, headwind (it changes the
-ground speed at entry), wing area and stall angle; for **energy**, mass, headwind and the rotor thrust
-coefficient; for **range**, wing area, mass and `CD0`. Mass and wing area are TBD in the register, so the
-weakest grade among the dominating inputs is TBD for every output.
+**What it found (placeholder, all 21 inputs, Morris at 6 and 12 trajectories; re-run after the
+review fixes, about 105 s).** Rankings were stable: Spearman 0.96–0.99 and top-3 overlap 1.0 for
+every output. Dominating inputs: for **excursion**, wing area, the lift-curve slope, `CD0` and the
+altitude-hold gain; for **distance**, headwind (it changes the ground speed at entry), wing area and
+mass, with the stall angle close behind; for **energy**, mass, headwind and the rotor thrust
+coefficient; for **range** (measured in the earlier run with the energy budget attached), wing area,
+mass and `CD0`. Mass and wing area are TBD in the register, so the weakest grade among the dominating
+inputs is TBD for every output. Since the review fixes, the planner inside `evaluate_back` is the
+simulated `a_eq`, which roughly doubles the cost of each run (0.23 s against 0.13 s).
 
 **Tests** (`test_m7.py`): Morris recovers a linear model's coefficients exactly; Sobol total-order
 indices match the analytic variance shares (0.2 and 0.8) within 0.05; rank stability; OAT rows match direct

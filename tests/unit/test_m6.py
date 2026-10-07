@@ -123,6 +123,21 @@ def test_replay_check_rejects_a_solution_that_cheats_between_nodes(
     assert chk.passes() and not doctored.passes()  # a 0 m claim against a ~10 m replay
 
 
+def test_b2_can_start_from_the_b1_solution(prob: K.Problem, sol10: K.B1Solution):
+    prm = freeform_opt.init_from_collocation(prob, sol10)
+    assert set(prm) == set(freeform_opt.BOUNDS.names)
+    u = freeform_opt.BOUNDS.to_unit(prm)
+    assert np.all((0.0 <= u) & (u <= 1.0))
+    fp = freeform_opt.decode(prm)
+    # the free-form law runs from this start; it is a start, not a claim that it is good
+    m = freeform_opt.evaluate(VP, SC, fp, 22.0)
+    assert np.isfinite([m.excursion, m.energy, m.distance]).all()
+    # the rotors are off above the speed where B1 first switches them on, and the rotor knots at
+    # high V/V_s carry B1's near-idle command (the ESC dead zone), not an invented value
+    assert fp.s_on <= freeform_opt.S_KNOTS[-1]
+    assert fp.delta_r[-1] >= prob.dead_zone - 1e-6
+
+
 def test_solve_verified_and_sweep_report_all_attempts():
     small = K.make_problem(VP, SC, 22.0, K.CollocationOptions(n=20, max_iter=300))
     pts = K.pareto_sweep(small, [12.0], [300.0], guesses=[K.baseline_guess(small)])

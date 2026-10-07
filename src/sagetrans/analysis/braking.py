@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from sagetrans.analysis import runs
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
 from sagetrans.control.ardupilot_like import BackTransitionParams, Position1Controller
 from sagetrans.dynamics import events as ev
@@ -71,11 +72,20 @@ def run_braking(
     agl0: float = 100.0,
     vehicle: CasadiVehicle | None = None,
     x0: np.ndarray | None = None,
+    refresh_hover: bool = True,
 ) -> BrakingResult:
-    """Simulate Position1 from ground speed v0 to ground speed v_f."""
-    veh = vehicle or CasadiVehicle(vp)
+    """Simulate Position1 from ground speed v0 to ground speed v_f.
+
+    The scenario's mass is applied (`scen.vehicle_for`) to the model, to the initial rotor speed
+    and, unless `refresh_hover` is false, to the hover throttle feed-forward of the altitude hold.
+    A `vehicle` passed in explicitly (a test harness) is used as given.
+    """
+    vps = scen.vehicle_for(vp)
+    veh = vehicle or runs.vehicle_for(vps)
     bp = replace(bp, h_tgt=scen.altitude_amsl_m)
-    start = x0 if x0 is not None else _initial_state(vp, scen, v0, rotors)
+    if refresh_hover:
+        bp = replace(bp, delta_hover=trim.hover_throttle(vps, scen.rho, scen.soc))
+    start = x0 if x0 is not None else _initial_state(vps, scen, v0, rotors)
     res = simulate(
         veh, Position1Controller(bp), scen.environment(), start, t_end,
         [ev.ground_speed_below(v_f), ev.touchdown(scen.altitude_amsl_m - agl0)],
@@ -107,9 +117,8 @@ def recommend_decel(
     """a_rec: minimum (or the given lower percentile) of a_eq over scenarios and entry speeds."""
     rows: list[tuple[Scenario, float, float]] = []
     for sc in scenarios:
-        bps = replace(bp, delta_hover=trim.hover_throttle(vp, sc.rho, sc.soc))
         for v0 in v0_grid:
-            r = measure_a_eq(vp, sc, v0, bps, **kw)
+            r = measure_a_eq(vp, sc, v0, bp, **kw)
             if not math.isnan(r.a_eq):
                 rows.append((sc, v0, r.a_eq))
     vals = np.array([r[2] for r in rows])
@@ -129,10 +138,5 @@ def landing_error(
     """Switch at d = V_ref^2 / (2 a_plan) and brake with the position cascade (method 3, 5)."""
     v_air = v0 + scen.headwind_ms  # headwind is positive against the aircraft
     v_ref = v0 if speed_test == "ground" else v_air
-    bps = replace(
-        bp,
-        x_tgt=v_ref**2 / (2.0 * a_plan),
-        delta_hover=trim.hover_throttle(vp, scen.rho, scen.soc),
-        brake_at_limit=False,
-    )
+    bps = replace(bp, x_tgt=v_ref**2 / (2.0 * a_plan), brake_at_limit=False)
     return run_braking(vp, scen, v0, bps, **kw)

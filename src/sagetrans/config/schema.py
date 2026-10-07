@@ -157,6 +157,18 @@ class Config:
     def label(self) -> str:
         return "DRAFT" if self.is_draft else "RELEASED"
 
+    def missing_files(self) -> list[str]:
+        """Paths of file records whose file does not exist (the hash records them as 'missing').
+
+        A register entry that points at a coefficient map or fit file that is not in the
+        repository cannot feed the physics, whatever its status says.
+        """
+        return sorted(
+            p
+            for p, r in self._records.items()
+            if r.file is not None and not self.file_path(p).is_file()
+        )
+
     def require_releasable(self, override: bool = False) -> None:
         """Refuse report writing for a DRAFT configuration unless explicitly overridden."""
         if self.is_draft and not override:

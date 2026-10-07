@@ -12,6 +12,11 @@ from sagetrans.analysis.sensitivity import SensitivityResult
 from sagetrans.io.record import FullRunRecord
 
 REQUIRED_TESTS = tuple(f"T-{i:02d}" for i in range(1, 16))
+# Analyses that use a stochastic search must register under these names in the run record and
+# carry their three-seed cost spread; T-12 must hold on the REAL problem, not only on the analytic
+# cost the unit test uses.
+SEARCH_ANALYSES = ("B2", "C")
+T12_SPREAD_MAX = 0.01
 # a dominating input may be quoted as released only if measured, or flagged as an assumption
 MEASURED = ("measured",)
 MIN_SPEARMAN = 0.8
@@ -75,6 +80,17 @@ def release_gate(
             reasons.append(f"{tid}: no verification result")
         elif not verification[tid]:
             reasons.append(f"{tid}: verification failed")
+    for name in SEARCH_ANALYSES:
+        if name not in record.analyses:
+            continue
+        spread = record.search_spreads.get(name)
+        if spread is None:
+            reasons.append(f"T-12 on the real problem: no three-seed spread recorded for '{name}'")
+        elif not spread <= T12_SPREAD_MAX:
+            reasons.append(
+                f"T-12 on the real problem: '{name}' seeds disagree by {spread:.1%} "
+                f"(limit {T12_SPREAD_MAX:.0%}); the optimum is not repeatable"
+            )
     if sum(record.evidence_counts.values()) == 0:
         reasons.append("evidence-grade summary missing")
     if sens is None:

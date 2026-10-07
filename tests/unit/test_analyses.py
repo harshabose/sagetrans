@@ -163,3 +163,26 @@ def test_d_earlier_switch_reduces_overshoot_and_air_speed_test_is_earlier_in_hea
     a = braking.landing_error(VP, wind, 25.0, 2.5, bp, speed_test="air")
     assert a.overshoot is not None and g.overshoot is not None
     assert a.overshoot < g.overshoot  # air-speed test switches earlier in a headwind
+
+
+def test_d_scenario_mass_reaches_the_model_the_hover_start_and_the_feed_forward():
+    # regression: run_braking once ignored Scenario.mass_kg, so the 0.85-1.15 mass axis of the
+    # ensemble was inert in the Q_TRANS_DECEL recommendation
+    light, heavy = Scenario(100.0), Scenario(100.0, mass_kg=1.3 * VP.m)
+    bp = BackTransitionParams.for_vehicle(VP, light.rho, light.soc, 100.0)
+    r_l = braking.measure_a_eq(VP, light, 25.0, bp)
+    r_h = braking.measure_a_eq(VP, heavy, 25.0, bp)
+    assert abs(r_h.a_eq - r_l.a_eq) > 1e-6 and abs(r_h.x_actual - r_l.x_actual) > 1e-6
+    # hover rotor speed scales with sqrt(thrust) = sqrt(mass), applied to the initial state
+    ratio = float(r_h.sim["omega_r"][0] / r_l.sim["omega_r"][0])
+    assert ratio == pytest.approx(1.3**0.5, rel=1e-3)
+    # the recommendation and the landing error see it too
+    a_rec_l, _ = braking.recommend_decel(VP, [light], [25.0], bp)
+    a_rec_h, _ = braking.recommend_decel(VP, [heavy], [25.0], bp)
+    assert abs(a_rec_h - a_rec_l) > 1e-6
+    e_l = braking.landing_error(VP, light, 25.0, 2.5, bp)
+    e_h = braking.landing_error(VP, heavy, 25.0, 2.5, bp)
+    assert e_l.overshoot != e_h.overshoot
+    # the hover feed-forward follows the scenario mass unless refresh is switched off
+    off = braking.measure_a_eq(VP, heavy, 25.0, bp, refresh_hover=False)
+    assert abs(off.a_eq - r_h.a_eq) > 1e-9

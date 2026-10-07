@@ -83,7 +83,8 @@ Standard factories in `events.py`:
 | `ground_speed_below(v_f)` | `vx` falls to `v_f` (end of the back-transition) | yes |
 | `vrs_entry(limit)` | `V_c/v_h` falls below `limit` (a **sourced** boundary is required) | no |
 
-(`ground_speed_below` has a `headwind` argument that is unused: `vx` is already a ground speed.)
+(`ground_speed_below` takes only `v_f`: `vx` is already a ground-frame speed, so no wind argument
+is needed. An earlier signature had an unused `headwind` parameter; it was removed.)
 
 ### Metrics (`compute_metrics`)
 

@@ -2,13 +2,18 @@
 
 Status at the time of writing: milestones **M0–M7 are implemented**; M8 (calibration against
 iron-bird data and software-in-the-loop) is not started because it needs data that does not exist
-yet. **130 tests pass**, and `ruff`, `mypy --strict` and the `import-linter` layering contract are
-clean. **Nothing has been committed to git** (the repository has no commits).
+yet. **144 tests pass**, and `ruff`, `mypy --strict` and the `import-linter` layering contract are
+clean. M0–M7 are in commit `d9f9966`; the review follow-up described in section 4a is in the commit
+after it (`Fix review findings…`). Both are on `origin/master`.
 
 This document explains what was done, in what order, what went wrong and how it was fixed, what the
-numbers mean, where the code departs from `proposal.md`, and what remains. Each package also has its
-own `README.md` with the detail of its modules (`src/sagetrans/README.md` and one in each
-sub-package, plus `tests/README.md`).
+numbers mean, where the code departs from the design (`proposal.md`), and what remains. Each package
+also has its own `README.md` with the detail of its modules (`src/sagetrans/README.md` and one in
+each sub-package, plus `tests/README.md`).
+
+> **`proposal.md` is not in the repository.** It is listed in `.gitignore`, so it is kept locally
+> and a fresh clone will not contain it. Equation and section numbers cited here and in the READMEs
+> (for example "eq. 6.11", "§10D") refer to that local file.
 
 ---
 
@@ -88,7 +93,7 @@ sagetrans/
     control/               baseline controller, free-form law                   (README)
     analysis/              analyses A, B1, B2, C, D, E, F, sensitivity, search   (README)
     io/                    run record, results writer, figures, report, gate    (README)
-  tests/                   1,641 lines, 130 tests                              (README)
+  tests/                   144 tests                                           (README)
 ```
 
 Layering (lower layers never import higher ones; enforced in CI):
@@ -302,6 +307,69 @@ output is refused without an override (T-14); and the release gate's four condit
 
 ---
 
+## 4a. Review follow-up (after the first commit)
+
+A review of the committed code raised the points below. Each was checked against the code first;
+the first two were real defects of mine and are the most important findings of this whole project
+after the bus-current error. The follow-up is committed on top of `d9f9966`; the test suite (144
+tests) passes with it.
+
+### Confirmed and fixed
+
+| Finding | What was wrong | Fix |
+| --- | --- | --- |
+| **Analysis D ignored scenario mass** | `run_braking` built `CasadiVehicle(vp)` and called `hover_omega`/`hover_throttle` with the nominal vehicle, never `scen.vehicle_for(vp)`. A run at mass ×1.3 gave an identical `a_eq` and stopping distance (difference exactly 0.0). The ensemble's 0.85–1.15 mass axis was therefore inert in the `Q_TRANS_DECEL` recommendation. | `run_braking` applies the scenario mass to the model, the initial rotor speed and the hover feed-forward; `recommend_decel` and `landing_error` rely on it. A regression test **fails on the old code and passes on the new**. Measured effect at 25 m/s: worst-case `a_eq` 2.70 / 2.59 / 2.50 / 2.43 m/s² at mass ×0.85 / 1.0 / 1.15 / 1.3, so the recommendation (the minimum) is set by the heavy end. The other analyses (C, B2, B1) already used `vehicle_for`. |
+| **The T-12 gate could pass falsely** | `release_gate` matches tests by name, and the only `test_t12_*` runs on an analytic cost. B2, whose three seeds disagree by 4–9 %, would have satisfied the gate. | The run record carries a `search_spreads` entry for each analysis that used a stochastic search (`"C"`, `"B2"`); the gate blocks a record that lists one of them without a spread of at most 1 % (missing and NaN also block). Tested, including the exact case of B2 at 9 %. |
+| **C and D were not aligned** | C set `Q_TRANS_DECEL` from the ideal planner while D measures it by simulation. | C now defaults to `a_plan_source="simulated"` (D's worst-case `a_eq`, same parameters, scenario and entry state); `"ideal"` remains selectable. A test checks the two C sources equal D's and the ideal planner. Real-problem T-12 for C re-measured: **spread 0.10 %, still passes** (cost 2.09 → 2.00). |
+| **"Ideal is an upper bound on `a_eq`" was wrong** | the design doc said so; the simulation gave a worst-case `a_eq` 3 % *above* the ideal. | `proposal.md` §10D corrected locally (it is not tracked): the ideal figure is not a bound in either direction. The READMEs say the same. |
+| **Register and physics could drift apart** | no link, and `configs/vehicle.yaml` points at `maps/ct_lift.csv` and `maps/ecm_fit_v1.npz`, which do not exist. | A drift test requires every register value to be paired with its physics default (they agree today); `Config.missing_files()` lists the missing files and the run record counts them as a reason for DRAFT. This is a guard, **not** the link itself. |
+| **No JUnit output; no CI step for the gate** | `verification_from_junit` was never fed. | CI now runs `pytest --junitxml=junit.xml`, then `python -m sagetrans.io.ci_check junit.xml` (fails if any of T-01…T-15 is missing or failing), and uploads the JUnit file. Checked against a real run: all 15 IDs present and passing. CI still does not call `release_gate` itself (that needs a run record built from real analysis results). |
+| **Unused `ground_speed_below(headwind=…)`** | the parameter did nothing. | Removed (no caller used it). |
+| **Report errors** | it said there were no commits (`d9f9966` exists) and cited `proposal.md`, which is untracked. | Corrected at the top of this document and in the package README: `proposal.md` is local-only because `.gitignore` lists it. |
+
+### B2 from the B1 solution — implemented, but did not fix repeatability
+
+`freeform_opt.init_from_collocation` re-plots a B1 solution against `V/V_s` as B2's starting knots, and
+`optimise` accepts it (and a step size, `sigma0`). Measured on the real problem, same ensemble:
+
+| B2 start | Start cost | Best cost | Seed spread |
+| --- | --- | --- | --- |
+| analysis A, `sigma0` 0.25 | 8.68 | 1.94 | 4.4 % |
+| B1, `sigma0` 0.25 | 1.90 | 1.75 | 8.7 % |
+| B1, `sigma0` 0.10 | 1.90 | 1.69 | 5.0 % |
+| B1, `sigma0` 0.04 | 1.90 | 1.75 | 5.3 % |
+
+The B1 start is a far better starting point and reaches lower costs, but **T-12 is still not met for
+B2**; the gate will block any record that includes it. The review's suggestion was right as far as
+it goes, and it is not sufficient at this budget.
+
+### Acknowledged, and what the code does about each
+
+* **Stall blend cliff (`M = 100 /rad`).** Not changed — it is the model. B1 works around it with a
+  stall margin enforced at nodes and midpoints (this is why replay mismatches stopped). It stays a
+  physically questionable feature to revisit with wing data.
+* **`gamma = atan2(vh, va)` at hover.** Genuinely unaddressed: its derivative is undefined at `V = 0`.
+  Simulation never differentiates it and B1 stays at about 1 m/s or more, **except** that a tailwind
+  equal to the end ground speed would bring airspeed near zero; B1 has not been run there.
+* **`if_else` attitude rate limit.** Non-smooth in every mode. Inactive in the B1 solutions (largest
+  pitch rate about 1.0 rad/s against a 1.5 rad/s limit); trouble is expected if a problem drives it.
+* **Motor torque step at zero current.** Already smoothed in collocation (`tanh`); exact `sign` for
+  simulation. (So this one is addressed where gradients matter.)
+* **Controller behaviours** (Position1 only brakes and drifts backward after an overshoot; the
+  low-speed sink at 6–10 m/s from slow assumed gains; the air-speed switch test firing early in a
+  headwind), **events already past zero at the first sample never fire**, and **serial evaluation**:
+  all accurate and all documented in the READMEs; none changed.
+
+### Not done from the review
+
+* **The register → physics link.** Only the drift guard and the missing-file check; `VehicleParams` is
+  still built from placeholder dataclasses.
+* **A B2 that is repeatable.** Needs a different approach or budget (see the table above).
+* **Real-problem T-12 as a unit test.** Three-seed optimisations take minutes; the requirement is
+  enforced through the gate and the run record instead.
+
+---
+
 ## 5. Cross-cutting design decisions and corrections
 
 ### 5.1 One vehicle model, written once, in CasADi
@@ -333,10 +401,10 @@ The proposal's eq. (6.11) took `I_bus = Σ I_m`. The corrected model uses `I_bus
 | Eq. (6.11) | bus current = motor current | bus current = `δ × I_m` | printed form violates energy balance |
 | Parameter register | physics reads the register | physics reads placeholder dataclasses; the register supplies grade/hash only | register has no data yet; linking is the next step |
 | M5 scope | full baseline, B2 and C over forward + back | back-transition only for B2 and C comparison; `full` scope exists for C | instruction: bare minimum |
-| `Q_TRANS_DECEL` in C | set from D's simulated `a_eq` | set from the ideal-pitch planner | cost of a simulation per evaluation |
+| `Q_TRANS_DECEL` in C | set from D's simulated `a_eq` | originally the ideal-pitch planner; **now the simulated worst-case `a_eq` by default** (`a_plan_source="ideal"` still selectable) | aligned with D after review (section 4a); costs about twice the simulation per evaluation |
 | C decision vector | 9 parameters | 3 (back) / 6 (full) | `PTCH_LIM_MAX_DEG`, `Q_TRANS_FAIL`, `BATT_WATT_MAX` fixed or not modelled |
 | Search | parallel evaluation, cached by config hash | serial, cached by parameter vector | CasADi objects cannot be pickled |
-| B2 start | fit to B1 | analysis A's pre-spun schedule | B1 did not exist yet |
+| B2 start | fit to B1 | analysis A's pre-spun schedule by default; `init_from_collocation` fits it to B1 | B1 did not exist when B2 was built; the B1 start was added later and did not make B2 repeatable |
 | Analysis D | includes cruise and switch | starts at the switch point | advice taken in M3; cruise is in C `full` |
 | Stall failure | `alpha_w > alpha_s` for a set time | only while `V ≥` the 1g stall speed | below it the rotors carry the weight by design |
 | B1 constraints | listed in (10.4) | plus `|v_h| ≤ 3 m/s`, stall margin 0.85, regulariser, effective-throttle control | convergence and replay fidelity |
@@ -367,7 +435,7 @@ The proposal's eq. (6.11) took `I_bus = Σ I_m`. The corrected model uses `I_bus
 | Baseline vs B1 at equal excursion and distance | about 4.5 kJ vs 2.2 kJ |
 | Tuned C / tuned B2 / default baseline | 13.4 m, 3.2 kJ / 8.1 m, 2.4 kJ / 12.4 m, 4.5 kJ |
 | Maximum range of the placeholder budget | several hundred km (a property of the placeholder wing and pusher) |
-| Dominating inputs | excursion: lift-curve slope, wing area, `CD0`, altitude-hold gain; distance: headwind, wing area, stall angle; energy: mass, headwind, rotor `CT0`; range: wing area, mass, `CD0` |
+| Dominating inputs (re-run after the review fixes; ranking Spearman 0.96–0.99) | excursion: wing area, lift-curve slope, `CD0`, altitude-hold gain; distance: headwind, wing area, mass (stall angle close); energy: mass, headwind, rotor `CT0`; range: wing area, mass, `CD0` |
 
 ---
 
@@ -376,17 +444,18 @@ The proposal's eq. (6.11) took `I_bus = Σ I_m`. The corrected model uses `I_bus
 | ID | Status |
 | --- | --- |
 | T-01 … T-11, T-13, T-14, T-15 | pass |
-| T-12 | passes on an analytic cost and on analysis C; **fails for analysis B2** at the budgets tried |
+| T-12 | passes on an analytic cost and on analysis C (0.10 % spread, re-measured with the simulated `Q_TRANS_DECEL`); **fails for analysis B2** (4.4–9 % from the A start; 5.0–8.7 % from the B1 start). The unit test covers only the analytic cost; the real-problem figure is enforced by the gate (`search_spreads`) |
 | FR-01…FR-09 | implemented; FR-06 (derivative-free repeatability) met by C, not by B2 |
-| Release gate | implemented and tested; blocks every current result (DRAFT) |
+| Release gate | implemented and tested, including the real-problem T-12 rule; blocks every current result (DRAFT) |
 | NFR-01 (determinism) | met (seeded searches, byte-identical outputs) |
 | NFR-02 (SI units) | met at the input boundary |
 | NFR-03 (speed) | 60 s segment under 1 s; 100-scenario ensemble not timed |
 | NFR-05 (layering) | enforced by `import-linter` |
 | NFR-08 (one vehicle definition) | met |
 
-CI runs `ruff`, `mypy --strict`, `lint-imports` and `pytest`. It does **not** yet produce a JUnit file or
-call the release gate.
+CI runs `ruff`, `mypy --strict`, `lint-imports` and `pytest --junitxml`, then `ci_check` (fails if any of
+T-01…T-15 is missing or failing) and uploads the JUnit file. It does **not** call `release_gate`: that
+needs a run record built from real analysis results.
 
 ---
 
@@ -399,19 +468,23 @@ with an assumed acceleration); `kappa` for the vortex-ring limit (unsourced).
 
 **Not done:**
 
-* Linking `VehicleParams` to the `Config` register, so a result's grade comes from real inputs.
+* Linking `VehicleParams` to the `Config` register, so a result's grade comes from real inputs. (A drift
+  guard and a missing-file check exist; the link does not.)
 * M8: calibration against iron-bird data and SITL (V-01…V-07).
 * Closing the ArduPilot questions O-01…O-11 (no source reading was done; the baseline's behaviour is the
   documented structure with assumed shapes and gains).
-* A JUnit step in CI feeding the gate; a `cli.py`; the named scenario set S-01…S-06 as YAML; three
-  cost weightings in reports; figures beyond the four built.
+* A `cli.py`; the named scenario set S-01…S-06 as YAML; three cost weightings in reports; figures
+  beyond the four built. (The JUnit step in CI now exists.)
 * Revising the proposal's milestone sections to match the code.
 * A sourced vortex-ring-state exclusion in B1, and a free rotor start that counts its pre-entry energy.
 
-**Technical risks:** B1's convergence is fragile and its results must be replay-verified; B2 needs a
-better start or budget; the stall blend's sharpness makes the lift cliff-like, which is physically
-questionable and must be revisited with wind-tunnel or flight data; the rotor torque is even in speed
-(a documented limitation); sensitivity rankings depend on the ranges chosen for the inputs.
+**Technical risks:** B1's convergence is fragile and its results must be replay-verified; B2 is not
+repeatable (a B1 start helps but does not fix it); the stall blend's sharpness makes the lift
+cliff-like, which is physically questionable and must be revisited with wind-tunnel or flight data;
+`gamma = atan2(vh, va)` has no defined derivative at hover and the attitude rate limit is non-smooth
+(both documented in `physics/README.md`); the rotor torque is even in speed; sensitivity rankings
+depend on the ranges chosen for the inputs; and the Q_TRANS_DECEL recommendation is only as good as
+the mass range of the ensemble now that mass is applied.
 
 ---
 
@@ -419,7 +492,7 @@ questionable and must be revisited with wind-tunnel or flight data; the rotor to
 
 ```bash
 pip install -e ".[dev]"
-pytest                               # 130 tests, about 2 minutes
+pytest                               # 144 tests, about 3 minutes
 ruff check . && mypy && lint-imports
 ```
 
@@ -430,9 +503,11 @@ from sagetrans.physics.params import placeholder_vehicle
 from sagetrans.analysis.common import Scenario
 vp, sc = placeholder_vehicle(), Scenario(100.0)
 
-# T-12 on analysis C (about 2 min):  restricted.optimise(vp, latin_hypercube(4, vp, seed=1), "back",
+# T-12 on analysis C (about 5 min):  restricted.optimise(vp, latin_hypercube(4, vp, seed=1), "back",
 #                                                          popsize=8, maxiter=15)  -> .search.spread
-# T-12 on analysis B2:               freeform_opt.optimise(vp, scens, popsize=12, maxiter=15 or 45)
+# T-12 on analysis B2 (about 5 min): freeform_opt.optimise(vp, scens, popsize=12, maxiter=15,
+#                                      init_params=freeform_opt.init_from_collocation(prob, sol),
+#                                      sigma0=0.1)   -> .search.spread   (A start: omit init_params)
 # B1 Pareto points:                  collocation.make_problem(vp, sc, 22.0, CollocationOptions(n=40,
 #                                      max_iter=800)); solve_refined(prob, eps_h, 300.0, ns=(20,))
 # Sensitivity (about 70 s):          S.run_sensitivity(S.HeadlineModel(vp, sc, S.default_inputs(vp, sc)),
@@ -450,11 +525,13 @@ vp, sc = placeholder_vehicle(), Scenario(100.0)
 3. **Confirm the corrected bus-current model** (section 5.4) — or tell me to revert it.
 4. **Start M8 data collection:** rotor thrust against throttle and pack voltage, spool-up steps, ESC dead
    zone, battery pulses; they replace the highest-ranked placeholders.
-5. **Revisit B2 with B1's solution as the start**, and a larger budget, to meet T-12.
+5. **Make B2 repeatable.** The B1 start was tried and is not enough (section 4a). Options: a much
+   larger budget, fewer free knots, a cheaper evaluation so more seeds fit, or a different optimiser.
+   Until the spread is at most 1 %, the gate blocks any record that includes B2.
 6. **Close the ArduPilot source questions** (firmware version, switch-test speed, ramp shapes), starting
    with O-08 and O-01.
-7. Add the JUnit step and the gate to CI, then the remaining layout items (`scenarios.py`, named scenario
-   YAML, `cli.py`), and update the proposal's milestone sections.
+7. Add the remaining layout items (`scenarios.py`, named scenario YAML, `cli.py`) and update the
+   proposal's milestone sections. (The JUnit step in CI is done.)
 
 ---
 

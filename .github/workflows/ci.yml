@@ -17,4 +17,11 @@ jobs:
       - run: ruff check .
       - run: mypy
       - run: lint-imports
-      - run: pytest
+      - run: pytest --junitxml=junit.xml
+      # every verification test T-01..T-15 must be present and passing (feeds the release gate)
+      - run: python -m sagetrans.io.ci_check junit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-py${{ matrix.python-version }}
+          path: junit.xml

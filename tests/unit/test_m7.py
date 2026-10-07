@@ -131,8 +131,10 @@ def _complete_config():
 
 def test_record_is_draft_for_tbd_config_and_placeholder_analyses():
     cfg, rec = _draft_record()
-    assert rec.label == "DRAFT" and len(rec.reasons) == 3
+    # TBD parameters, files the register points at that do not exist, and two placeholder analyses
+    assert rec.label == "DRAFT" and len(rec.reasons) == 4
     assert any("TBD parameters" in r and "mass.m_kg" in r for r in rec.reasons)
+    assert any("do not exist" in r and "rotors.ct_map" in r for r in rec.reasons)
     assert rec.config_hash == cfg.config_hash() and rec.seeds == (1, 2, 3)
     assert sum(rec.evidence_counts.values()) == len(list(cfg))
     assert rec.git_commit and rec.date and rec.code_version
@@ -313,3 +315,61 @@ def test_failed_runs_are_filled_with_the_worst_value_for_the_outputs_direction()
     ys, _ = S._evaluate(gain, x)
     assert ys["y"][1] == pytest.approx(min(ys["y"][0], ys["y"][2]))
     assert S.HeadlineModel(VP, SC, S.default_inputs(VP, SC)).higher_is_better == {"max_range_km"}
+
+
+def _record_with(analyses, spreads=None):
+    recs = {n: RunRecord("0" * 64, "0.0.1", "d", label="RELEASED") for n in analyses}
+    return build_record(_complete_config(), recs, search_spreads=spreads)
+
+
+def test_gate_checks_t12_on_the_real_problem_not_only_the_analytic_unit_test():
+    sens = _sens(["measured"] * 4)
+    # the unit-test T-12 passes (ALL_PASS) but analysis B2 was never shown repeatable
+    no_evidence = gate.release_gate(_record_with(["B2"]), ALL_PASS, sens, [])
+    assert not no_evidence.passed
+    assert any("'B2'" in r and "no three-seed spread" in r for r in no_evidence.reasons)
+    # the real result from this project: B2's seeds disagree by 4-9 %
+    bad = gate.release_gate(_record_with(["B2"], {"B2": 0.09}), ALL_PASS, sens, [])
+    assert not bad.passed and any("'B2'" in r and "9.0%" in r for r in bad.reasons)
+    nan = gate.release_gate(_record_with(["B2"], {"B2": float("nan")}), ALL_PASS, sens, [])
+    assert not nan.passed
+    # analysis C was repeatable (spread 2e-5), so it passes the same check
+    ok = gate.release_gate(_record_with(["C"], {"C": 2e-5}), ALL_PASS, sens, [])
+    assert ok.passed
+    # one repeatable and one not: still blocked, and only the bad one is named
+    both = _record_with(["B2", "C"], {"B2": 0.044, "C": 2e-5})
+    mixed = gate.release_gate(both, ALL_PASS, sens, [])
+    assert not mixed.passed
+    assert [r for r in mixed.reasons if "T-12" in r] == [
+        r for r in mixed.reasons if "'B2'" in r
+    ]
+    # analyses that use no search are not asked for a spread
+    assert gate.release_gate(_record_with(["E", "D"]), ALL_PASS, sens, []).passed
+
+
+def test_ci_check_fails_on_a_missing_or_failing_verification_id(tmp_path):
+    from sagetrans.io import ci_check
+
+    def junit(ids, failing=()):
+        cases = "".join(
+            f'<testcase name="test_t{i:02d}_x">{"<failure/>" if i in failing else ""}</testcase>'
+            for i in ids
+        )
+        p = tmp_path / f"j{len(cases)}{len(failing)}.xml"
+        p.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>", encoding="utf-8")
+        return p
+
+    ok, lines = ci_check.check(junit(range(1, 16)))
+    assert ok and lines[0] == "T-01: pass" and len(lines) == 15
+    ok, lines = ci_check.check(junit([i for i in range(1, 16) if i != 12]))
+    assert not ok and "T-12: MISSING" in lines
+    ok, lines = ci_check.check(junit(range(1, 16), failing=(7,)))
+    assert not ok and "T-07: FAILED" in lines
+    assert ci_check.main([str(junit(range(1, 16)))]) == 0
+    assert ci_check.main([str(junit(range(1, 16), failing=(3,)))]) == 1
+    assert ci_check.main([]) == 2
+
+
+def test_search_spread_travels_in_the_run_record_json():
+    rec = _record_with(["C"], {"C": 2e-5})
+    assert json.loads(rec.to_json())["search_spreads"] == {"C": 2e-5}

@@ -3,8 +3,10 @@
 `sagetrans` is a Python toolkit that turns Sage's airframe, propulsion and battery data into
 numbers for the VTOL **transition** and **landing approach**: how much altitude is lost or gained,
 how far the back-transition needs, what `Q_TRANS_DECEL` to configure, and whether the mission
-energy fits in the pack. It runs without the autopilot. The design is in `proposal.md` at the
-repository root; the history of building it is in `PROJECT_REPORT.md`.
+energy fits in the pack. It runs without the autopilot. The design is `proposal.md`, which is kept
+**locally and is not tracked in git** (it is listed in `.gitignore`), so a fresh clone does not
+contain it and the equation and section numbers cited in these READMEs refer to your local copy.
+The history of building the toolkit is in `PROJECT_REPORT.md`.
 
 > **Everything the toolkit currently computes rests on placeholder physics.** The vehicle numbers
 > in `physics/params.py` are illustrative, not Sage's. Every output is labelled `DRAFT` and the
@@ -92,7 +94,7 @@ Design points:
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 130 tests, about two minutes
+pytest                 # 144 tests, about three minutes
 ruff check . && mypy && lint-imports
 ```
 
