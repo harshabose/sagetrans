@@ -370,6 +370,25 @@ it goes, and it is not sufficient at this budget.
 
 ---
 
+## 4b. First CI run — one failure, a speed test on a slower machine
+
+The first GitHub Actions run of the pushed commit (Python 3.13, ubuntu) passed 143 of 144 tests. The
+one failure was `test_vehicle_finite_and_60s_speed_check`: *"60 s segment took 1.37 s (NFR-03)"*
+against a limit of 1.0 s. Nothing in the model was wrong. NFR-03 is "under 1 s on a laptop"; the same
+segment takes 0.63 s on the development machine (five repeats: 0.62–0.63 s), and a shared CI virtual
+CPU is about 2.2× slower. An absolute wall-clock assertion cannot tell a slow runner from a
+regression, and it should not have been written as one — this was a weakness in my test, and I had
+not run the suite on a second machine before pushing.
+
+Fix (`tests/unit/test_physics.py`): the test takes the **best of three repeats** (so a single noisy
+run cannot fail it), keeps the strict 1.0 s limit everywhere by default, and multiplies the limit by
+3 only when the `CI` environment variable is set (GitHub Actions sets it). The requirement itself is
+unchanged. I confirmed the assertion still fails when it should (with the limit forced to 0.1 s the
+test fails at 0.59 s) and that the suite passes both with and without `CI` set. I have **not** been
+able to run it on the GitHub runner itself; the next CI run is the real confirmation.
+
+---
+
 ## 5. Cross-cutting design decisions and corrections
 
 ### 5.1 One vehicle model, written once, in CasADi
@@ -449,7 +468,7 @@ The proposal's eq. (6.11) took `I_bus = Σ I_m`. The corrected model uses `I_bus
 | Release gate | implemented and tested, including the real-problem T-12 rule; blocks every current result (DRAFT) |
 | NFR-01 (determinism) | met (seeded searches, byte-identical outputs) |
 | NFR-02 (SI units) | met at the input boundary |
-| NFR-03 (speed) | 60 s segment under 1 s; 100-scenario ensemble not timed |
+| NFR-03 (speed) | 60 s segment: 0.63 s on the development laptop (limit 1 s); 1.37 s on a shared GitHub runner, so the test allows 3× only when `CI` is set (see section 4b). The 100-scenario ensemble is not timed |
 | NFR-05 (layering) | enforced by `import-linter` |
 | NFR-08 (one vehicle definition) | met |
 
