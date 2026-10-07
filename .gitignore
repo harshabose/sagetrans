@@ -1,0 +1,27 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+results/
+build/
+dist/
+/proposal.md
+
+# IDE and editor files
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# test and coverage output
+.coverage
+coverage.xml
+htmlcov/
+junit.xml
+*.log

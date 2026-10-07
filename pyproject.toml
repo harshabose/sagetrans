@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sagetrans"
+version = "0.0.1"
+description = "Sage VTOL transition and landing-approach simulation toolkit"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "casadi",
+    "pydantic>=2",
+    "pyyaml",
+    "cma",
+    "SALib",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "hypothesis",
+    "ruff",
+    "mypy",
+    "import-linter",
+    "types-PyYAML",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["casadi.*", "scipy.*", "cma.*", "SALib.*", "matplotlib.*"]
+ignore_missing_imports = true
+
+# NFR-05: physics knows nothing of controllers; controllers know nothing of analyses.
+# Contracts are extended as the layers are added in later milestones.
+[tool.importlinter]
+root_package = "sagetrans"
+
+[[tool.importlinter.contracts]]
+name = "Layering: analysis > control > dynamics > physics > atmosphere > config"
+type = "layers"
+layers = [
+    "sagetrans.io",
+    "(sagetrans.analysis)",
+    "(sagetrans.control)",
+    "(sagetrans.dynamics)",
+    "(sagetrans.physics)",
+    "sagetrans.atmosphere",
+    "sagetrans.config",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# physics symbols (T_r, Vc, J, ...) follow the proposal's notation
+"src/sagetrans/*" = ["N802", "N803", "N806", "N815", "N816"]
+"tests/*" = ["N802", "N803", "N806", "N815", "N816"]

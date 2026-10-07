@@ -1,0 +1,24 @@
+# Parameter register (design proposal, section 9). Every entry: value|file, unit, source, status.
+# Placeholders are TBD until supplied; a config containing any TBD is labelled DRAFT.
+# Values marked 'stated' are taken from the proposal's section 2 facts.
+
+mass:
+  m_kg:            {value: null, unit: kg, source: "CAD and weighing; meaning of '5 kg' open (O-12)", status: TBD}
+
+wing:
+  S_m2:            {value: null, unit: m^2, source: "CAD or flight-mechanics sheet", status: TBD}
+  C_N:             {value: null, unit: "-", source: "Cory and Tedrake (flat plate) or wind tunnel", status: TBD, uncertainty: 0.3}
+
+rotors:
+  n_lift:          {value: 4, unit: "-", source: "4+1 configuration", status: stated}
+  ct_map:          {file: ../maps/ct_lift.csv, source: "bench static plus BEMT", status: assumed}
+
+battery:
+  packs_parallel:        {value: 2, unit: "-", source: "Y-connector to PDB", status: stated}
+  v_nominal_V:           {value: 43.2, unit: V, source: "MPower 12S", status: datasheet}
+  capacity_Ah_per_pack:  {value: 25, unit: Ah, source: "MPower datasheet", status: datasheet}
+  ecm_file:              {file: ../maps/ecm_fit_v1.npz, source: "HPPC and GITT fit", status: TBD}
+
+ardupilot:
+  AIRSPEED_MIN:    {value: null, unit: m/s, source: "analysis output", status: TBD}
+  Q_TRANSITION_MS: {value: 5000, unit: ms, source: "Plane docs default", status: documented}
