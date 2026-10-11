@@ -58,12 +58,37 @@ def _rel(
     return UncertainInput(name, kind, path, nominal, lo, hi, status, note)
 
 
-def default_inputs(vp: VehicleParams, scen: Scenario, v: float = 0.2) -> list[UncertainInput]:
-    """The uncertain inputs of the uncertainty register (section 13), with placeholder ranges.
+def default_inputs(
+    vp: VehicleParams,
+    scen: Scenario,
+    v: float = 0.2,
+    statuses: Mapping[str, str] | None = None,
+    fractions: Mapping[str, float] | None = None,
+    controller_nominals: Mapping[str, float] | None = None,
+) -> list[UncertainInput]:
+    """The uncertain inputs of the uncertainty register (section 13).
 
-    Relative ranges default to +-20 %; scenario axes use absolute ranges. Statuses reflect the
-    parameter register: the physics values are placeholders until the bench data arrive.
+    Relative ranges default to +-20 %; scenario axes use absolute ranges. The evidence grade of
+    each input defaults to a built-in label; `statuses` replaces it by name (the study runner
+    passes the grades from the register, so they reflect the data actually entered).
+    `fractions` replaces an input's relative half-range (a register `uncertainty`), and
+    `controller_nominals` the nominal altitude-hold gains.
     """
+    inputs = _builtin_inputs(vp, scen, v, controller_nominals or {})
+    out = []
+    for inp in inputs:
+        if statuses and inp.name in statuses:
+            inp = replace(inp, status=statuses[inp.name])
+        if fractions and inp.name in fractions and inp.kind != "scenario":
+            f = fractions[inp.name]
+            inp = replace(inp, lo=inp.nominal * (1 - f), hi=inp.nominal * (1 + f))
+        out.append(inp)
+    return out
+
+
+def _builtin_inputs(
+    vp: VehicleParams, scen: Scenario, v: float, ctl: Mapping[str, float]
+) -> list[UncertainInput]:
     w, r, mr, b, a = vp.wing, vp.rotor, vp.motor_r, vp.battery, vp.attitude
     return [
         _rel("mass", "vehicle", "m", vp.m, v, "TBD", "meaning of '5 kg' open (O-12)"),
@@ -82,8 +107,10 @@ def default_inputs(vp: VehicleParams, scen: Scenario, v: float = 0.2) -> list[Un
         _rel("battery_R0", "vehicle", "battery.R0_pack", b.R0_pack, 0.5, "TBD", "ECM fit pending"),
         _rel("att_omega_n", "vehicle", "attitude.omega_n", a.omega_n, 0.3, "assumed", "pitch lag"),
         _rel("att_zeta", "vehicle", "attitude.zeta", a.zeta, v, "assumed"),
-        _rel("alt_hold_Kvh", "control", "K_vh", 0.02, 0.5, "assumed", "altitude-hold gain"),
-        _rel("alt_hold_Ki", "control", "K_i", 0.01, 0.5, "assumed", "altitude-hold gain"),
+        _rel("alt_hold_Kvh", "control", "K_vh", ctl.get("alt_hold_Kvh", 0.02), 0.5, "assumed",
+             "altitude-hold gain"),
+        _rel("alt_hold_Ki", "control", "K_i", ctl.get("alt_hold_Ki", 0.01), 0.5, "assumed",
+             "altitude-hold gain"),
         UncertainInput("headwind", "scenario", "headwind_ms", scen.headwind_ms,
                        scen.headwind_ms - 5.0, scen.headwind_ms + 5.0, "assumed", "wind (O-14)"),
         UncertainInput("isa_offset", "scenario", "isa_offset_k", scen.isa_offset_k,
@@ -130,6 +157,12 @@ class HeadlineModel:
     v0_air: float = 22.0
     prm: Mapping[str, float] = field(default_factory=lambda: dict(restricted.DEFAULT_PARAMS))
     budget: tuple[energy.MissionProfile, energy.BatteryWindow, DescentLimits] | None = None
+    # register-driven options: the nominal controller gains, the fixed PTCH_LIM_MAX_DEG, how
+    # Q_TRANS_DECEL is set, and the entry speed as an equivalent airspeed (None = v0_air)
+    controller: Mapping[str, float] = field(default_factory=dict)
+    theta_p: float = restricted.THETA_P
+    a_plan_source: str = "simulated"
+    v0_eas: float | None = None
 
     @property
     def outputs(self) -> tuple[str, ...]:
@@ -143,8 +176,11 @@ class HeadlineModel:
     def __call__(self, values: Mapping[str, float]) -> dict[str, float]:
         vp, scen, ctl = apply_inputs(self.vp, self.scen, self.inputs, values)
         try:
-            m = restricted.evaluate_back(vp, scen, dict(self.prm), self.v0_air,
-                                         controller_overrides=ctl or None)  # fmt: skip
+            m = restricted.evaluate_back(
+                vp, scen, dict(self.prm), self.v0_air,
+                controller_overrides={**self.controller, **ctl} or None,
+                a_plan_source=self.a_plan_source, theta_p=self.theta_p, v0_eas=self.v0_eas,
+            )
             stopped = "not_stopped" not in m.failures and "touchdown" not in m.failures
             out = {
                 "excursion_m": m.excursion,

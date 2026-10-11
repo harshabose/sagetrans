@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -66,7 +67,7 @@ def _plan_decel(v_ground: float, theta_a: float, t_bt: float, v_f: float) -> flo
 def plan_decel(
     vps: VehicleParams, scen: Scenario, prm: dict[str, float], x0: np.ndarray, v_f: float,
     source: str = "simulated", agl0: float = 100.0,
-    controller_overrides: dict[str, float] | None = None,
+    controller_overrides: dict[str, float] | None = None, theta_p: float = THETA_P,
 ) -> float:  # fmt: skip
     """Q_TRANS_DECEL for one evaluation, from analysis D.
 
@@ -81,7 +82,7 @@ def plan_decel(
         raise ValueError(f"unknown a_plan_source {source!r}")
     bp = BackTransitionParams.for_vehicle(
         vps, scen.rho, scen.soc, scen.altitude_amsl_m, T_bt=prm["T_bt"],
-        theta_A=prm["theta_A"], theta_P=THETA_P, delta_min=prm["spin_min"],
+        theta_A=prm["theta_A"], theta_P=theta_p, delta_min=prm["spin_min"],
         **(controller_overrides or {}),
     )  # fmt: skip
     r = braking.measure_a_eq(vps, scen, float(x0[2]), bp, v_f=v_f, agl0=agl0, x0=x0)
@@ -91,19 +92,25 @@ def plan_decel(
 def evaluate_back(
     vp: VehicleParams, scen: Scenario, prm: dict[str, float], v0_air: float = 22.0,
     v_f: float = 1.0, agl0: float = 100.0, controller_overrides: dict[str, float] | None = None,
-    a_plan_source: str = "simulated",
+    a_plan_source: str = "simulated", theta_p: float = THETA_P, v0_eas: float | None = None,
 ) -> RunMetrics:  # fmt: skip
     """One back-transition from level cruise with the position cascade toward the planned point.
 
     `controller_overrides` replaces fields of BackTransitionParams (e.g. altitude-hold gains).
-    `a_plan_source` selects how Q_TRANS_DECEL is set (see `plan_decel`).
+    `a_plan_source` selects how Q_TRANS_DECEL is set (see `plan_decel`). `theta_p` is the fixed
+    PTCH_LIM_MAX_DEG. If `v0_eas` is given the entry speed is that EQUIVALENT airspeed converted
+    to true airspeed at the scenario's density (so it means the same thing at every altitude).
     """
     vps = scen.vehicle_for(vp)
+    if v0_eas is not None:
+        v0_air = v0_eas * math.sqrt(1.225 / scen.rho)
     x0 = runs.cruise_entry_state(vps, scen, v0_air)
-    a_plan = plan_decel(vps, scen, prm, x0, v_f, a_plan_source, agl0, controller_overrides)
+    a_plan = plan_decel(
+        vps, scen, prm, x0, v_f, a_plan_source, agl0, controller_overrides, theta_p
+    )
     bp = BackTransitionParams.for_vehicle(
         vps, scen.rho, scen.soc, scen.altitude_amsl_m,
-        T_bt=prm["T_bt"], theta_A=prm["theta_A"], theta_P=THETA_P, delta_min=prm["spin_min"],
+        T_bt=prm["T_bt"], theta_A=prm["theta_A"], theta_P=theta_p, delta_min=prm["spin_min"],
         x_tgt=float(x0[2]) ** 2 / (2.0 * a_plan),
         **(controller_overrides or {}),
     )  # fmt: skip
@@ -117,22 +124,32 @@ def evaluate_back(
 def evaluate_full(
     vp: VehicleParams, scen: Scenario, prm: dict[str, float], v_cruise: float = 22.0,
     v_f: float = 1.0, agl0: float = 100.0, x_tgt: float = 800.0, t_end: float = 90.0,
-    a_plan_source: str = "simulated",
+    a_plan_source: str = "simulated", theta_p: float = THETA_P,
+    controller_overrides: dict[str, float] | None = None,
+    baseline_overrides: dict[str, Any] | None = None,
 ) -> RunMetrics:  # fmt: skip
-    """Hover -> forward transition -> cruise stub -> back-transition."""
+    """Hover -> forward transition -> cruise stub -> back-transition.
+
+    `baseline_overrides` sets the BaselineParams fields the search does not decide (stub gains,
+    Q_TRANS_FAIL, switch test); a `v_cruise` entry in it replaces the `v_cruise` argument.
+    """
+    bl_kw = dict(baseline_overrides or {})
+    v_cruise = float(bl_kw.pop("v_cruise", v_cruise))
     vps = scen.vehicle_for(vp)
     h0 = scen.altitude_amsl_m
     tr = trim.steady_trim(vps, scen.rho, v_cruise, 0.0, scen.soc)
     entry = runs.cruise_entry_state(vps, scen, v_cruise)  # where the back-transition starts
-    a_plan = plan_decel(vps, scen, prm, entry, v_f, a_plan_source, agl0)
+    a_plan = plan_decel(
+        vps, scen, prm, entry, v_f, a_plan_source, agl0, controller_overrides, theta_p
+    )
     back = BackTransitionParams.for_vehicle(
-        vps, scen.rho, scen.soc, h0, T_bt=prm["T_bt"], theta_A=prm["theta_A"], theta_P=THETA_P,
-        delta_min=prm["spin_min"], x_tgt=x_tgt,
+        vps, scen.rho, scen.soc, h0, T_bt=prm["T_bt"], theta_A=prm["theta_A"], theta_P=theta_p,
+        delta_min=prm["spin_min"], x_tgt=x_tgt, **(controller_overrides or {}),
     )  # fmt: skip
     bp = BaselineParams(
         back=back, airspeed_min=prm["airspeed_min"], q_transition_s=prm["q_transition"],
         tkoff_thr_max=prm["tkoff_thr_max"], a_plan=a_plan, v_cruise=v_cruise,
-        delta_p_trim=tr.elec.delta_p_cmd, theta_trim=tr.theta,
+        delta_p_trim=tr.elec.delta_p_cmd, theta_trim=tr.theta, **bl_kw,
     )  # fmt: skip
     x0 = np.array([0.0, h0, 0.0, 0.0, 0.0, 0.0, trim.hover_omega(vps, scen.rho), 0.0, 0.0])
     sim = simulate(
@@ -170,9 +187,17 @@ def optimise(
     popsize: int = 8,
     maxiter: int = 15,
     a_plan_source: str = "simulated",
+    *,
+    theta_p: float = THETA_P,
+    controller_overrides: dict[str, float] | None = None,
+    baseline_overrides: dict[str, Any] | None = None,
+    start: dict[str, float] | None = None,
+    v0_eas: float | None = None,
 ) -> RestrictedResult:
     """CMA-ES over the decision vector, scored with (10.1) over the ensemble.
 
+    `start` is the search's starting point (default `DEFAULT_PARAMS`); the shipped config passes the
+    register's own values. `v0_eas` sets the back-transition entry speed as an equivalent airspeed.
     `result.search.spread` is the real-problem T-12 figure; pass it to
     `io.record.build_record(..., search_spreads={"C": result.search.spread})` so the release
     gate can check it.
@@ -180,18 +205,28 @@ def optimise(
     bounds = BACK_BOUNDS if scope == "back" else FULL_BOUNDS
     ev = evaluate_back if scope == "back" else evaluate_full
 
+    common: dict[str, Any] = {
+        "a_plan_source": a_plan_source, "theta_p": theta_p,
+        "controller_overrides": controller_overrides,
+    }
+    if scope == "back":
+        common["v0_eas"] = v0_eas
+    else:
+        common["baseline_overrides"] = baseline_overrides
+
     def metrics(prm: dict[str, float]) -> list[RunMetrics]:
-        return [ev(vp, s, prm, a_plan_source=a_plan_source) for s in scens]
+        return [ev(vp, s, prm, **common) for s in scens]
 
     def cost(u: np.ndarray) -> float:
         return ensemble_cost(metrics(bounds.to_physical(u)), weights)
 
-    u0 = bounds.to_unit(DEFAULT_PARAMS)
+    u0 = bounds.to_unit({**DEFAULT_PARAMS, **(start or {})})
     res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter)
     best = bounds.to_physical(res.best_x)
     return RestrictedResult(
         scope, best, res.best_f, res.f_start, metrics(best), res,
-        make_record(vp, scens, scope, weights, seeds, popsize, maxiter, a_plan_source),
+        make_record(vp, scens, scope, weights, seeds, popsize, maxiter, a_plan_source, start,
+                    theta_p, controller_overrides, baseline_overrides, v0_eas),
     )  # fmt: skip
 
 

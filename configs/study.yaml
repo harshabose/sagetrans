@@ -1,0 +1,74 @@
+# What to run and how much effort to spend. EDIT THIS FILE.
+# Plain settings: no evidence grades. Everything here changes results, so this file is hashed
+# into the run record.
+
+run_name: study            # output goes to <output_dir>/<run_name>/
+output_dir: results        # git-ignored
+mode: draft                # draft: placeholders allowed, results labelled DRAFT (default)
+                           # release: refuse to run while anything is TBD or missing
+
+parallel:
+  enabled: true
+  max_workers: 0           # 0 = one per CPU core (capped by the number of tasks)
+
+# Which analyses to run. Names: A D F E Q2 C B2 B1 sensitivity
+analyses: [A, D, F, E, Q2, C, B2, B1, sensitivity]
+
+switch_test: ground        # speed used in the Position1 switch test: ground | air  (O-02)
+
+# ---- analysis settings -------------------------------------------------------------------------
+A:                         # zero-altitude-loss feasibility
+  scenarios: [S-01, S-02]
+  v0_eas_ms: [10, 12, 14, 16, 18, 20]
+  decel_ms2: [0.5, 1.0, 1.5, 2.0, 3.0]
+  max_decel_v0_eas_ms: [10, 12, 14, 16]
+  samples: 60
+
+D:                         # braking and Q_TRANS_DECEL
+  scenarios: [S-01, S-02]
+  mass_factors: [0.85, 1.0, 1.15]
+  v0_eas_ms: [16, 22]
+  recommendation: {ensemble_n: 8, ensemble_seed: 3, v0_ground_ms: [18, 22], percentile: 5}
+  trade: {a_plan_ms2: [1.5, 2.0, 2.5, 3.0, 3.5], headwinds_ms: [0, 5]}
+
+F:                         # landing descent profile
+  scenarios: [S-01, S-02]
+
+E:                         # energy budget
+  cruise_amsl_m: [1000, 5000]      # one budget per cruise altitude
+  ranges_km: [50, 100, 113, 150]   # ranges shorter than the climb+descent distance are skipped
+
+Q2:                        # pusher thrust margin at AIRSPEED_MIN
+  altitudes_m: [0, 1000, 2500, 5000]
+  mass_factors: [0.85, 1.0, 1.15]
+
+C:                         # ArduPilot-parameter optimisation (back-transition)
+  ensemble_n: 4
+  ensemble_seed: 1
+  seeds: [1, 2, 3]
+  popsize: 8
+  maxiter: 15
+  a_plan_source: simulated         # simulated | ideal
+
+B2:                        # speed-scheduled law, started from a B1 solution
+  ensemble_n: 4
+  ensemble_seed: 1
+  seeds: [1, 2, 3]
+  popsize: 12
+  maxiter: 15
+  sigma0: 0.1
+  start: {scenario_index: 0, eps_h_m: 10, eps_x_m: 300}
+
+B1:                        # open-loop optimum by direct collocation
+  scenarios: [S-01, S-02]
+  eps_h_m: [20, 10, 6, 3]
+  eps_x_m: 300
+  intervals: 40
+  refine_from: [20]
+  max_iter: 800
+
+sensitivity:
+  scenario: S-01                   # the scenario the sensitivity is run in
+  r_small: 6
+  r_large: 12
+  include_budget: true             # adds maximum range as an output

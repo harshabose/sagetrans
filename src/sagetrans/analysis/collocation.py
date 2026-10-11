@@ -120,6 +120,9 @@ class Problem:
     scen: Scenario
     x0: np.ndarray
     opt: CollocationOptions
+    # register values for the baseline controller used as initial guess and comparison
+    controller: dict[str, float] = field(default_factory=dict)  # gains for BackTransitionParams
+    theta_p: float = 0.0  # PTCH_LIM_MAX_DEG in rad; 0 = the analysis default
     vehicle: CasadiVehicle = field(init=False)
 
     def __post_init__(self) -> None:
@@ -139,11 +142,21 @@ class Problem:
 
 
 def make_problem(
-    vp: VehicleParams, scen: Scenario, v0_air: float = 22.0, opt: CollocationOptions | None = None
+    vp: VehicleParams,
+    scen: Scenario,
+    v0_air: float = 22.0,
+    opt: CollocationOptions | None = None,
+    controller: dict[str, float] | None = None,
+    theta_p: float = 0.0,
 ) -> Problem:
+    """Build a collocation problem from the cruise entry state at true airspeed `v0_air`.
+
+    `controller` (BackTransitionParams gains) and `theta_p` (PTCH_LIM_MAX_DEG) configure the
+    baseline controller that supplies the initial guess and the comparison.
+    """
     vps = scen.vehicle_for(vp)
     x0 = runs.cruise_entry_state(vps, scen, v0_air)
-    return Problem(vps, scen, x0, opt or CollocationOptions())
+    return Problem(vps, scen, x0, opt or CollocationOptions(), dict(controller or {}), theta_p)
 
 
 # ---- initial guesses ---------------------------------------------------------------------------
@@ -158,9 +171,11 @@ def baseline_run(
     vps, scen, opt = prob.vp, prob.scen, prob.opt
     v_g = float(prob.x0[2])
     a_plan = restricted._plan_decel(v_g, theta_a, t_bt, opt.v_f)
+    theta_p = prob.theta_p or restricted.THETA_P
+    gains = {k: v for k, v in prob.controller.items() if k not in ("delta_min",)}
     bp = BackTransitionParams.for_vehicle(
         vps, scen.rho, scen.soc, scen.altitude_amsl_m, T_bt=t_bt, theta_A=theta_a,
-        theta_P=restricted.THETA_P, delta_min=0.1, x_tgt=v_g**2 / (2.0 * a_plan),
+        theta_P=theta_p, delta_min=0.1, x_tgt=v_g**2 / (2.0 * a_plan), **gains,
     )  # fmt: skip
     return simulate(
         runs.vehicle_for(vps), Position1Controller(bp), scen.environment(), prob.x0, 60.0,
@@ -389,7 +404,9 @@ def solve_refined(
     """
     g = guess or baseline_guess(prob)
     for n in [*ns, prob.opt.n]:
-        sub = Problem(prob.vp, prob.scen, prob.x0, replace(prob.opt, n=n))
+        sub = Problem(
+            prob.vp, prob.scen, prob.x0, replace(prob.opt, n=n), prob.controller, prob.theta_p
+        )
         sol = solve(sub, eps_h, eps_x, objective, g)
         if not sol.ok:
             return sol
@@ -521,7 +538,9 @@ def min_excursion(prob: Problem, eps_x: float) -> Verified:
 def with_options(prob: Problem, **kw: float | None) -> Problem:
     """The same problem with some options changed."""
     return make_problem(
-        prob.vp, prob.scen, float(prob.x0[2] + prob.scen.headwind_ms), replace(prob.opt, **kw)  # type: ignore[arg-type]
+        prob.vp, prob.scen, float(prob.x0[2] + prob.scen.headwind_ms),
+        replace(prob.opt, **kw),  # type: ignore[arg-type]
+        prob.controller, prob.theta_p,
     )
 
 

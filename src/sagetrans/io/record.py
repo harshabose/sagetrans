@@ -54,6 +54,12 @@ class FullRunRecord:
     # real-problem T-12 evidence, which the release gate checks (the unit test of T-12 only
     # exercises the search machinery on an analytic cost)
     search_spreads: dict[str, float] = field(default_factory=dict)
+    # how the run was configured: draft or release, the hash of the plain settings files
+    # (scenarios.yaml and the result-relevant part of study.yaml), and the register paths that fell
+    # back to a built-in placeholder. With config_hash these make the run reproducible.
+    mode: str = ""
+    settings_hash: str = ""
+    fallbacks: tuple[str, ...] = ()
     override: bool = False  # the DRAFT refusal was explicitly overridden
     outputs: dict[str, str] = field(default_factory=dict)  # file name -> sha256
 
@@ -74,6 +80,11 @@ def build_record(
     seeds: tuple[int, ...] = (),
     override: bool = False,
     search_spreads: Mapping[str, float] | None = None,
+    *,
+    mode: str = "",
+    settings_hash: str = "",
+    fallbacks: tuple[str, ...] = (),
+    extra_reasons: tuple[str, ...] = (),
 ) -> FullRunRecord:
     """Combine the configuration state with the records of the analyses that fed an output.
 
@@ -83,12 +94,13 @@ def build_record(
     `search_spreads` maps an analysis that used a stochastic search ("B2" or "C") to the
     three-seed cost spread of that search (`SearchResult.spread`).
     """
-    reasons: list[str] = []
-    if config.is_draft:
+    reasons: list[str] = list(extra_reasons)
+    if config.is_draft and not extra_reasons:
         tbd = sorted(p for p in config if config.record(p).status.value == "TBD")
-        reasons.append("configuration has TBD parameters: " + ", ".join(tbd))
+        shown = ", ".join(tbd[:8]) + (f", ... ({len(tbd)} in all)" if len(tbd) > 8 else "")
+        reasons.append("configuration has TBD parameters: " + shown)
     missing = config.missing_files()
-    if missing:
+    if missing and not extra_reasons:
         reasons.append("register references files that do not exist: " + ", ".join(missing))
     for name, rec in analyses.items():
         if rec.label == "DRAFT":
@@ -106,6 +118,9 @@ def build_record(
         analyses={k: v.input_hash for k, v in analyses.items()},
         seeds=seeds,
         search_spreads=dict(search_spreads or {}),
+        mode=mode,
+        settings_hash=settings_hash,
+        fallbacks=fallbacks,
         override=override,
     )
 

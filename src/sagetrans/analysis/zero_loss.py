@@ -291,18 +291,32 @@ def max_feasible_decel(
     jerk: float | None = None,
     n: int = 60,
     iterations: int = 9,
+    scan_points: int = 24,
 ) -> float:
-    """Largest constant deceleration with a feasible zero-loss schedule (0 if none)."""
+    """Largest constant deceleration with a feasible zero-loss schedule (0 if none).
+
+    Feasibility is **not monotone** in the deceleration. With the placeholder aircraft at
+    12 m/s it is feasible up to about 1 m/s², infeasible from 1.0 to 1.4 (the rotors would need
+    negative thrust), feasible again from 1.6 to 2.0 (more braking pitch adds drag, which removes
+    that need), and infeasible above about 2.1 (stall). A plain bisection would return whichever
+    boundary it happens to land on. So the range is first scanned on `scan_points` values, the
+    highest feasible one is taken, and only then bisected against the next (infeasible) point.
+    A feasible island narrower than the scan spacing (about 0.34 m/s² for the defaults) can be
+    missed; `feasibility_map` is the authoritative picture.
+    """
 
     def ok(a: float) -> bool:
         r = analyse(vp, scen, v0, DecelProfile(a, jerk), limits, n=n)
         return r.feasible_pre_spun if pre_spun else r.feasible_whole
 
-    if not ok(a_lo):
+    grid = np.linspace(a_lo, a_hi, scan_points)
+    feasible = [i for i, a in enumerate(grid) if ok(float(a))]
+    if not feasible:
         return 0.0
-    if ok(a_hi):
-        return a_hi
-    lo, hi = a_lo, a_hi
+    top = feasible[-1]
+    if top == len(grid) - 1:
+        return float(grid[-1])
+    lo, hi = float(grid[top]), float(grid[top + 1])
     for _ in range(iterations):
         mid = 0.5 * (lo + hi)
         lo, hi = (mid, hi) if ok(mid) else (lo, mid)

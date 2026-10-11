@@ -75,11 +75,17 @@ def release_gate(
     warnings: list[str] = []
     if record.label == "DRAFT":
         reasons += [f"run record is DRAFT: {r}" for r in record.reasons] or ["run record is DRAFT"]
-    for tid in required_tests:
-        if tid not in verification:
-            reasons.append(f"{tid}: no verification result")
-        elif not verification[tid]:
-            reasons.append(f"{tid}: verification failed")
+    if not verification:
+        reasons.append(
+            "no verification results supplied (run with --verify, or --junit FILE from "
+            "`pytest --junitxml`)"
+        )
+    else:
+        for tid in required_tests:
+            if tid not in verification:
+                reasons.append(f"{tid}: no verification result")
+            elif not verification[tid]:
+                reasons.append(f"{tid}: verification failed")
     for name in SEARCH_ANALYSES:
         if name not in record.analyses:
             continue

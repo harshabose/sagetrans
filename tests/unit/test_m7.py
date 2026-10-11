@@ -131,10 +131,9 @@ def _complete_config():
 
 def test_record_is_draft_for_tbd_config_and_placeholder_analyses():
     cfg, rec = _draft_record()
-    # TBD parameters, files the register points at that do not exist, and two placeholder analyses
-    assert rec.label == "DRAFT" and len(rec.reasons) == 4
-    assert any("TBD parameters" in r and "mass.m_kg" in r for r in rec.reasons)
-    assert any("do not exist" in r and "rotors.ct_map" in r for r in rec.reasons)
+    # the TBD parameters of the register (listed in short form) and two placeholder analyses
+    assert rec.label == "DRAFT" and len(rec.reasons) == 3
+    assert any("TBD parameters" in r and "54 in all" in r for r in rec.reasons)
     assert rec.config_hash == cfg.config_hash() and rec.seeds == (1, 2, 3)
     assert sum(rec.evidence_counts.values()) == len(list(cfg))
     assert rec.git_commit and rec.date and rec.code_version
@@ -277,7 +276,7 @@ def test_report_has_the_five_sections_the_grade_next_to_each_number_and_the_draf
     assert "| y | 12.34 " in text and "| assumed |" in text  # weakest of the dominating grades
     assert "Recommended Q_TRANS_DECEL (analysis D): 2.50" in text
     assert "Flagged as assumptions with their range: a, b" in text
-    assert "`mass.m_kg`" in text  # assumed or TBD parameters are listed
+    assert "`mass.m`" in text  # assumed or TBD parameters are listed
 
 
 def test_end_to_end_bundle_on_the_real_model_writes_a_report_and_a_record(tmp_path):

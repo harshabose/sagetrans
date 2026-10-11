@@ -21,10 +21,12 @@ def rec(**kw):
 
 def test_vehicle_yaml_loads_and_is_draft():
     cfg = Config.from_yaml(VEHICLE_YAML)
-    assert cfg.get("battery.v_nominal_V") == 43.2
-    assert cfg.get("battery.capacity_Ah_per_pack") == 90_000.0  # coulombs
-    assert cfg.get("ardupilot.Q_TRANSITION_MS") == 5.0  # seconds
-    assert cfg.label == "DRAFT"
+    assert cfg.get("battery.v_nominal") == 43.2
+    assert cfg.get("battery.capacity_Ah_pack") == 90_000.0  # 25 Ah in coulombs, converted once
+    assert cfg.get("wing.alpha_s") == 0.35  # rad
+    assert cfg.record("rotor.n_r").status is Status.STATED
+    assert cfg.label == "DRAFT"  # the placeholder entries are TBD
+    assert cfg.evidence_counts()["TBD"] == 54
 
 
 @pytest.mark.parametrize("missing", ["source", "status", "unit"])
@@ -120,3 +122,18 @@ def test_hash_tracks_file_contents(tmp_path):
     assert h1 != h2
     f.unlink()
     assert Config.from_dict(data, root=tmp_path).config_hash() not in (h1, h2)
+
+
+def test_missing_files_are_reported(tmp_path):
+    (tmp_path / "present.csv").write_text("J,CT\n0,0.1\n", encoding="utf-8")
+    cfg = Config.from_dict(
+        {
+            "maps": {
+                "here": {"file": "present.csv", "source": "bench", "status": "measured"},
+                "gone": {"file": "absent.csv", "source": "bench", "status": "assumed"},
+            }
+        },
+        root=tmp_path,
+    )
+    assert cfg.missing_files() == ["maps.gone"]
+    assert Config.from_dict({"g": {"p": rec()}}).missing_files() == []

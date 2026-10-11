@@ -125,7 +125,7 @@ constraint and its time are reported.
 | `EntryState(omega_r=0, theta=None, v1=0)` | the state before the first sample (`theta=None` = level trim) |
 | `solve_point(vp, rho, V, a, ...)` | one pointwise solution: `theta`, `T_r`, `H_r`, `omega`, `L`, `D`, `ok` |
 | `analyse(vp, scen, v0, profile, limits, entry, t_p, n=120)` | the full result (`ZeroLossResult`) |
-| `max_feasible_decel(...)` | bisection on `a` for the largest feasible constant deceleration (0 if none) |
+| `max_feasible_decel(...)` | the largest feasible constant deceleration (0 if none): a coarse scan over `a`, then bisection at the top of the highest feasible region (feasibility is **not monotone** in `a`, see below) |
 | `feasibility_map(...)` | both verdicts and the first binding constraint over a grid of `(V0, a)` |
 
 **What it found (placeholder).** At 12 m/s and 1.5 m/s² the pre-spun schedule is feasible while the
@@ -133,6 +133,16 @@ whole segment is not. At higher speed the first binding constraint is *thrust si
 the pitch needed to brake pushes the wing's lift above the weight, so the rotors would have to push
 down. That limit depends only on `V/V_s`, so it is the same at sea level and 5,000 m at equal
 equivalent airspeed (tested); the throttle demand, in contrast, rises in thin air.
+
+**Feasibility is not monotone in the deceleration.** At 12 m/s the placeholder aircraft is feasible up
+to about 1 m/s², infeasible from 1.0 to 1.4 (thrust sign), feasible again from 1.6 to 2.0, and
+infeasible above about 2.1 (stall); the pattern is the same at 60 and 120 samples, so it is not a mesh
+artefact. A higher braking pitch adds drag, which removes the need for negative rotor thrust until the
+wing stalls. `max_feasible_decel` was originally a plain bisection that assumed monotonicity: it
+returned 0.98 m/s² at 12 m/s, missing the 1.6–2.0 region. It now scans 24 values of `a` first
+(spacing about 0.34 m/s², so a feasible island narrower than that can still be missed) and bisects only
+at the top of the highest feasible region; it returns 2.43, 2.02, 0.82 and 0.76 m/s² at 10, 12, 14 and
+16 m/s. `feasibility_map` remains the authoritative picture. A regression test covers it.
 
 **Tests** (`test_analyses.py`): closed forms (`theta = atan(a/g)`, `T_r = m sqrt(a^2+g^2)`), coast
 bound (`C_L = 0`, `a = D/m` gives level pitch and `T_r = W`), eq. (10.3) self-consistency with the

@@ -46,8 +46,10 @@ class Scenario:
 class RunRecord:
     """Traceability for an output. The hash covers the vehicle parameters, scenario and options.
 
-    NOTE: until `VehicleParams` is built from the YAML register this is not the register's
-    config hash, and every record is DRAFT (the physics inputs are placeholders).
+    The label is DRAFT unless every `VehicleParams` among the inputs was built from a complete
+    parameter register (`VehicleParams.released`). A record with no vehicle in it is DRAFT. This
+    is the analysis-level label; the run-level record (`io.record`) also looks at the whole
+    register (mission, controller) and at the search repeatability.
     """
 
     input_hash: str
@@ -56,14 +58,25 @@ class RunRecord:
     label: str = "DRAFT"
 
 
+def _vehicles(parts: Any) -> list[VehicleParams]:
+    if isinstance(parts, VehicleParams):
+        return [parts]
+    if isinstance(parts, list | tuple):
+        return [v for p in parts for v in _vehicles(p)]
+    return []
+
+
 def make_record(*parts: Any) -> RunRecord:
     def conv(o: Any) -> Any:
         is_dc = dataclasses.is_dataclass(o) and not isinstance(o, type)
         return dataclasses.asdict(o) if is_dc else o
 
+    vehicles = _vehicles(list(parts))
+    released = bool(vehicles) and all(v.released for v in vehicles)
     blob = json.dumps([conv(p) for p in parts], sort_keys=True, default=str)
     return RunRecord(
         input_hash=hashlib.sha256(blob.encode()).hexdigest(),
         code_version=sagetrans.__version__,
         date=dt.date.today().isoformat(),
+        label="RELEASED" if released else "DRAFT",
     )

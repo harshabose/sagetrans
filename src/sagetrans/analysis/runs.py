@@ -29,6 +29,11 @@ def _cl_max(w: WingParams) -> float:
     return aero.cl_max(w)
 
 
+def cl_max(w: WingParams) -> float:
+    """Peak lift coefficient of the wing model (cached)."""
+    return _cl_max(w)
+
+
 def stall_speed(vp: VehicleParams, rho: float) -> float:
     return math.sqrt(2.0 * vp.m * 9.80665 / (rho * vp.wing.S * _cl_max(vp.wing)))
 

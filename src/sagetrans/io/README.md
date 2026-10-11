@@ -11,7 +11,24 @@ absolute imports mean it does not shadow the standard library.)
 | `figures.py` | tornado, range-margin, Pareto and feasibility figures; `save_figure` |
 | `report.py` | `ReportInputs`, `build_report`, `flagged_assumptions` |
 | `gate.py` | `release_gate`, `GateResult`, `verification_from_junit`, `REQUIRED_TESTS`, `SEARCH_ANALYSES` |
+| `settings.py` | strict pydantic models for the plain files `study.yaml` and `scenarios.yaml` |
+| `inputs.py` | `load_inputs`: reads the five config files, converts units once, builds `VehicleParams` and friends from the register, records fallbacks, reports every problem (`InputError`); `StudyInputs` |
+| `stages.py` | the study as independent tasks (`basics`, `C`, `B2`, `B1:<scenario>`, `sensitivity`): `plan_tasks`, `run_task` |
+| `assemble.py` | turns task results into tables, figures, `report.md`, `inputs_used.md`, the run record and the gate verdict |
+| `study.py` | `run_study`: load, check, run tasks in a spawn process pool with a per-task disk cache, assemble |
+| `cli.py` | `python run.py` / `python -m sagetrans`: `--check --mode --only --force --serial --verify` |
 | `ci_check.py` | `python -m sagetrans.io.ci_check junit.xml`: fails CI if any of T-01…T-15 is missing or failing |
+
+## One command: configs in, results out
+
+`python run.py` (see the root `README.md` and `configs/README.md`) reads `configs/*.yaml` through
+`inputs.load_inputs`, runs the planned tasks in parallel worker processes (CasADi objects cannot be
+shared, so each worker reloads the config folder itself), caches every task result under
+`<output>/<run_name>/_work/` keyed by `StudyInputs.inputs_hash` (register hash plus every
+result-relevant setting, but not run name, mode or parallelism), and hands everything to
+`assemble.assemble`. Exit codes: 0 ok, 1 a task failed, 2 unusable inputs or release mode refused,
+3 release-mode result blocked by the gate. `VehicleParams.released` is true only when the vehicle was
+built from a complete register (nothing TBD, nothing missing); only then can a run record say RELEASED.
 
 ## The run record (`record.py`)
 

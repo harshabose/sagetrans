@@ -79,6 +79,21 @@ def test_a_max_feasible_decel_is_consistent_with_analyse():
     assert not analyse(VP, SC, 12.0, DecelProfile(1.3 * a_max), n=60).feasible_pre_spun
 
 
+def test_a_feasibility_is_not_monotone_in_deceleration_and_max_finds_the_top_region():
+    # regression: bisection assumed monotonicity and reported the first boundary it hit (0.98)
+    # although the schedule is feasible again between about 1.6 and 2.0 m/s^2 at 12 m/s
+    v0 = 12.0
+    verdict = {
+        a: analyse(VP, SC, v0, DecelProfile(a), n=60).feasible_pre_spun
+        for a in (0.8, 1.2, 1.8, 2.6)
+    }
+    assert verdict == {0.8: True, 1.2: False, 1.8: True, 2.6: False}
+    a_max = zero_loss.max_feasible_decel(VP, SC, v0)
+    assert a_max >= 1.8 > 0.98  # the old answer was about 0.98
+    assert analyse(VP, SC, v0, DecelProfile(0.97 * a_max), n=60).feasible_pre_spun
+    assert not analyse(VP, SC, v0, DecelProfile(1.3 * a_max), n=60).feasible_pre_spun
+
+
 def test_a_feasibility_map_whole_implies_pre_spun():
     m = zero_loss.feasibility_map(VP, SC, [10.0, 14.0], [0.5, 1.5, 3.0], n=40)
     assert m["whole"].shape == (2, 3)

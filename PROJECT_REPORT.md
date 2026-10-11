@@ -511,9 +511,40 @@ the mass range of the ensemble now that mass is applied.
 
 ```bash
 pip install -e ".[dev]"
-pytest                               # 144 tests, about 3 minutes
+python run.py --check                # validate configs/, show the plan
+python run.py                        # the whole study, about 10 minutes, results in results/study/
+pytest                               # 153 tests, about 3 minutes
 ruff check . && mypy && lint-imports
 ```
+
+### 10a. One command from config files (added after section 4b)
+
+The data now enters through five YAML files in `configs/` (`vehicle`, `mission`, `controller`,
+`scenarios`, `study`); `configs/README.md` is the field reference. Decisions taken with the user:
+polynomial rotor/pusher maps first (table and B-spline maps and a measured open-circuit-voltage table
+are deferred); several files for organisation; draft mode by default and release mode on request;
+heavy analyses run in parallel.
+
+* **The register is now connected to the physics.** `load_inputs` builds `VehicleParams` from the
+  register (units converted once; an unknown name is an error with a suggestion; a missing entry falls
+  back to the placeholder in draft and is recorded). The shipped `vehicle.yaml` reproduces
+  `placeholder_vehicle()` exactly (tested), so the earlier drift guard (`test_register_drift.py`) is
+  replaced by that round-trip test. This closes next step 1 of section 11.
+* **Draft and release.** Draft labels results DRAFT. Release refuses to start while anything is TBD,
+  missing, or points at a file that does not exist (exit 2). A run record says RELEASED only if the
+  vehicle was built from a complete register, and in release mode the gate verdict sets the exit code.
+* **Everything that was hard-wired is now an input:** the controller gains and ArduPilot parameter
+  starting values (analysis C starts from them), the pitch limit, entry airspeed, scenario list and
+  ensemble ranges, descent limits, requirements, grids and optimiser effort.
+* **Parallel and cached.** Tasks `basics` (A, D, F, E, Q2), `C`, `B2`, `B1:<scenario>` and
+  `sensitivity` run in separate processes; results are cached per task by input hash. Full run on a
+  multi-core Windows laptop: 9.6 minutes (longest task, C, 571 s).
+* **Found on the way:** `--only` changed the task list but not the cache key, so a partial run could
+  have been served as a full one; the cache key now includes the selected analyses. The controller
+  gain units in the YAML were corrected (they are per second, not per radian).
+* **Limits:** table-driven maps are not read yet (the register accepts `file:` entries, nothing uses
+  them); only mass can vary per scenario.
+
 
 Reproducing the headline numbers uses only public APIs (scripts were run from a scratch directory):
 
@@ -537,8 +568,8 @@ vp, sc = placeholder_vehicle(), Scenario(100.0)
 
 ## 11. Recommended next steps, in order
 
-1. **Connect the register to the physics.** Build `VehicleParams` from a `Config`, so a result's grade,
-   hash and DRAFT status reflect real inputs. This is what lets the gate ever pass.
+1. ~~Connect the register to the physics.~~ Done (section 10a). Next in that line: table-driven rotor
+   and pusher maps and a measured open-circuit-voltage curve.
 2. **Fill the TBDs the sensitivity analysis flags:** mass (and the meaning of "5 kg", O-12), wing area,
    the wing's lift-curve slope and drag, then the rotor thrust and torque coefficients.
 3. **Confirm the corrected bus-current model** (section 5.4) — or tell me to revert it.
@@ -549,8 +580,8 @@ vp, sc = placeholder_vehicle(), Scenario(100.0)
    Until the spread is at most 1 %, the gate blocks any record that includes B2.
 6. **Close the ArduPilot source questions** (firmware version, switch-test speed, ramp shapes), starting
    with O-08 and O-01.
-7. Add the remaining layout items (`scenarios.py`, named scenario YAML, `cli.py`) and update the
-   proposal's milestone sections. (The JUnit step in CI is done.)
+7. Update the proposal's milestone sections. (The JUnit step in CI, the scenario YAML and the CLI are
+   done.)
 
 ---
 

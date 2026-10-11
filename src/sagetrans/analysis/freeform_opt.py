@@ -13,6 +13,7 @@ B1 start fixes it is not yet shown. Record the spread (`result.search.spread`) i
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -96,9 +97,12 @@ def init_from_collocation(
 
 def evaluate(
     vp: VehicleParams, scen: Scenario, p: FreeFormParams, v0_air: float = 22.0,
-    v_f: float = 1.0, agl0: float = 100.0,
+    v_f: float = 1.0, agl0: float = 100.0, v0_eas: float | None = None,
 ) -> RunMetrics:  # fmt: skip
+    """One back-transition under the free-form law. `v0_eas` (if given) overrides `v0_air`."""
     vps = scen.vehicle_for(vp)
+    if v0_eas is not None:
+        v0_air = v0_eas * math.sqrt(1.225 / scen.rho)
     x0 = runs.cruise_entry_state(vps, scen, v0_air)
     ctrl = FreeFormController(p, runs.stall_speed(vps, scen.rho))
     sim = simulate(
@@ -129,6 +133,7 @@ def optimise(
     maxiter: int = 15,
     init_params: dict[str, float] | None = None,
     sigma0: float = 0.25,
+    v0_eas: float | None = None,
 ) -> FreeFormResult:
     """Tune the knots of (8.1) over the ensemble; no altitude feedback.
 
@@ -136,11 +141,13 @@ def optimise(
     A's pre-spun schedule. `sigma0` is CMA-ES's initial step size on the unit cube; a start that is
     already good (B1) wants a smaller one than a poor start.
     """
-    init = init_params or init_from_zero_loss(vp, init_scen or scens[0], v0_air)
+    s0 = init_scen or scens[0]
+    v0_start = v0_eas * math.sqrt(1.225 / s0.rho) if v0_eas is not None else v0_air
+    init = init_params or init_from_zero_loss(vp, s0, v0_start)
 
     def metrics(prm: dict[str, float]) -> list[RunMetrics]:
         fp = decode(prm)
-        return [evaluate(vp, s, fp, v0_air) for s in scens]
+        return [evaluate(vp, s, fp, v0_air, v0_eas=v0_eas) for s in scens]
 
     def cost(u: np.ndarray) -> float:
         return ensemble_cost(metrics(BOUNDS.to_physical(u)), weights)
@@ -151,7 +158,7 @@ def optimise(
     best = BOUNDS.to_physical(res.best_x)
     return FreeFormResult(
         decode(best), res.best_f, res.f_start, metrics(best), res,
-        make_record(vp, scens, weights, v0_air, seeds, popsize, maxiter),
+        make_record(vp, scens, weights, v0_air, seeds, popsize, maxiter, v0_eas, sigma0),
     )  # fmt: skip
 
 

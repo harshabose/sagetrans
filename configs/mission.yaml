@@ -1,0 +1,41 @@
+# Mission, usable-energy window, reserves and descent limits. EDIT THIS FILE.
+# Same format and status words as vehicle.yaml. TBD = placeholder (draft only).
+
+profile:        # the idealised flight used by the energy budget (analysis E)
+  cruise_amsl_m: {value: 1000.0, unit: "m", source: "cruise altitude above mean sea level; mission set (O-14)", status: TBD}
+  ground_amsl_m: {value: 0.0, unit: "m", source: "take-off and landing elevation; mission set (O-14)", status: TBD}
+  isa_offset_k: {value: 0.0, unit: "K", source: "ISA temperature offset for the budget", status: TBD}
+  clearance_agl_m: {value: 30.0, unit: "m", source: "hover climb before the forward transition", status: TBD}
+  vz_takeoff: {value: 2.0, unit: "m/s", source: "vertical climb rate in take-off", status: TBD}
+  t_hover_pre: {value: 10.0, unit: "s", source: "hover on the pad before lift-off", status: TBD}
+  a_fwd: {value: 1.5, unit: "m/s^2", source: "forward-transition acceleration; ASSUMED until analysis C", status: TBD}
+  v_climb: {value: 18.0, unit: "m/s", source: "climb true airspeed", status: TBD}
+  roc: {value: 2.5, unit: "m/s", source: "rate of climb", status: TBD}
+  # v_cruise: omit to use the best-range speed, or add {value, unit, source, status}
+  v_glide: {value: 16.0, unit: "m/s", source: "pusher-off glide true airspeed in descent", status: TBD}
+  h_bt_agl_m: {value: 30.0, unit: "m", source: "height above ground where the back-transition starts", status: TBD}
+  soc_mean: {value: 0.6, unit: "-", source: "one mean state of charge used for all segment powers", status: TBD}
+  t_go_around: {value: 60.0, unit: "s", source: "go-around hover time (reserve)", status: TBD}
+  t_hold: {value: 0.0, unit: "s", source: "hold at the landing zone (reserve)", status: TBD}
+  d_diversion_m: {value: 5000.0, unit: "m", source: "diversion distance (reserve)", status: TBD}
+  n_diversion_transitions: {value: 0, unit: "-", source: "extra forward+back transition pairs", status: TBD}
+
+battery_window:  # usable energy = eta_usable * soh * temp_factor * nominal energy (O-15)
+  eta_usable: {value: 0.8, unit: "-", source: "usable fraction of nominal energy; BMS and cut-off limits", status: TBD}
+  soh: {value: 1.0, unit: "-", source: "state of health (1 = new)", status: TBD}
+  temp_factor: {value: 1.0, unit: "-", source: "temperature derating (1 = 25 degC)", status: TBD}
+  soc_eod: {value: 0.1, unit: "-", source: "state of charge at end of discharge, for the hover power check", status: TBD}
+
+descent:         # analysis F
+  kappa: {value: 0.25, unit: "-", source: "UNSOURCED placeholder. Must come from a sourced vortex-ring-state boundary (Johnson, NASA). Do not quote results until replaced.", status: TBD}
+  v_fragility: {value: 3.0, unit: "m/s", source: "payload-fragility descent-rate limit", status: TBD}
+  # v_sensor: omit for none, or add {value, unit, source, status} (rangefinder limit)
+  h_slow: {value: 5.0, unit: "m", source: "below this height the descent slows to v_final", status: TBD}
+  v_final: {value: 0.5, unit: "m/s", source: "final descent rate; rangefinder and ground effect", status: TBD}
+
+requirements:    # the range requirements the budget is checked against
+  range_primary_km: {value: 100.0, unit: "km", source: "specified range requirement", status: stated}
+  range_p95_km: {value: 113.0, unit: "km", source: "about 113 km needed for the 95th-percentile mission", status: stated}
+
+speeds:          # entry and transition speeds used by the studies
+  entry_eas_ms: {value: 22.0, unit: "m/s", source: "equivalent airspeed at the start of the back-transition (cruise speed)", status: assumed}

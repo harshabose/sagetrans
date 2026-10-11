@@ -133,6 +133,10 @@ class VehicleParams:
     )
     battery: BatteryParams = field(default_factory=BatteryParams)
     attitude: AttitudeParams = field(default_factory=AttitudeParams)
+    # True only when the vehicle was built from a parameter register in which nothing is TBD and
+    # nothing fell back to a placeholder (see `io.inputs`). It does not change any physics; it is
+    # what lets an analysis's run record say RELEASED instead of DRAFT.
+    released: bool = False
 
 
 def placeholder_vehicle() -> VehicleParams:
