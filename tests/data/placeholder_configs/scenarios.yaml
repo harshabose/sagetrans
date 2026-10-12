@@ -1,0 +1,23 @@
+# Scenarios (proposal section 9). EDIT THIS FILE. Plain settings: no evidence grades.
+# Units are fixed by the key suffix: _m metres, _k kelvin, _ms metres/second, soc is 0..1,
+# mass_factor multiplies the vehicle mass. Headwind is positive AGAINST the aircraft.
+#
+# These are the named core scenarios that appear in every report. The values are placeholders
+# (mission set O-14); S-05's elevation is "to set".
+
+core:
+  - {name: S-01, altitude_amsl_m: 0,    isa_offset_k: 0,  soc: 0.8, headwind_ms: 0,  mass_factor: 1.0,  note: "sea level, nominal"}
+  - {name: S-02, altitude_amsl_m: 5000, isa_offset_k: 0,  soc: 0.8, headwind_ms: 0,  mass_factor: 1.0,  note: "5,000 m design point, nominal"}
+  - {name: S-03, altitude_amsl_m: 5000, isa_offset_k: 10, soc: 0.5, headwind_ms: 0,  mass_factor: 1.15, note: "high, hot, heavy, low pack"}
+  - {name: S-04, altitude_amsl_m: 0,    isa_offset_k: 20, soc: 0.8, headwind_ms: -5, mass_factor: 1.15, note: "hot, heavy, 5 m/s tailwind"}
+  - {name: S-05, altitude_amsl_m: 500,  isa_offset_k: 0,  soc: 0.8, headwind_ms: 5,  mass_factor: 1.0,  note: "landing elevation to be set; 5 m/s headwind"}
+  - {name: S-06, altitude_amsl_m: 5000, isa_offset_k: 0,  soc: 0.3, headwind_ms: 0,  mass_factor: 0.85, note: "payload delivered, low pack"}
+
+# Latin-hypercube ensemble used by the robust optimisations and the recommendation.
+ensemble:
+  axes:
+    altitude_m: [0, 5000]
+    isa_offset_k: [-10, 20]
+    mass_factor: [0.85, 1.15]
+    headwind_ms: [-5, 10]
+    soc: [0.2, 1.0]

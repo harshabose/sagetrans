@@ -11,13 +11,13 @@ core:
   - {name: S-03, altitude_amsl_m: 5000, isa_offset_k: 10, soc: 0.5, headwind_ms: 0,  mass_factor: 1.15, note: "high, hot, heavy, low pack"}
   - {name: S-04, altitude_amsl_m: 0,    isa_offset_k: 20, soc: 0.8, headwind_ms: -5, mass_factor: 1.15, note: "hot, heavy, 5 m/s tailwind"}
   - {name: S-05, altitude_amsl_m: 500,  isa_offset_k: 0,  soc: 0.8, headwind_ms: 5,  mass_factor: 1.0,  note: "landing elevation to be set; 5 m/s headwind"}
-  - {name: S-06, altitude_amsl_m: 5000, isa_offset_k: 0,  soc: 0.3, headwind_ms: 0,  mass_factor: 0.85, note: "payload delivered, low pack"}
+  - {name: S-06, altitude_amsl_m: 5000, isa_offset_k: 0,  soc: 0.3, headwind_ms: 0,  mass_factor: 0.80, note: "payload (5 kg of 24.61 kg) delivered, low pack"}
 
 # Latin-hypercube ensemble used by the robust optimisations and the recommendation.
 ensemble:
   axes:
     altitude_m: [0, 5000]
     isa_offset_k: [-10, 20]
-    mass_factor: [0.85, 1.15]
+    mass_factor: [0.80, 1.0]
     headwind_ms: [-5, 10]
     soc: [0.2, 1.0]

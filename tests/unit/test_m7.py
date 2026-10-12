@@ -118,7 +118,7 @@ def test_fr08_global_ranking_is_stable_across_two_sample_sizes_on_the_real_model
 
 # ---- run record and results folder ---------------------------------------------------------------
 def _draft_record():
-    cfg = Config.from_yaml(ROOT / "configs" / "vehicle.yaml")
+    cfg = Config.from_yaml(ROOT / "tests" / "data" / "placeholder_configs" / "vehicle.yaml")
     ana = {"B": RunRecord("0" * 64, "0.0.1", "2026-10-07"), "E": RunRecord("1" * 64, "0.0.1", "d")}
     return cfg, build_record(cfg, ana, seeds=(1, 2, 3))
 

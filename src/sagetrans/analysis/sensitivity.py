@@ -72,7 +72,8 @@ def default_inputs(
     each input defaults to a built-in label; `statuses` replaces it by name (the study runner
     passes the grades from the register, so they reflect the data actually entered).
     `fractions` replaces an input's relative half-range (a register `uncertainty`), and
-    `controller_nominals` the nominal altitude-hold gains.
+    `controller_nominals` the nominal altitude-hold gains. An input whose nominal is zero has a
+    zero-width relative range and is dropped.
     """
     inputs = _builtin_inputs(vp, scen, v, controller_nominals or {})
     out = []
@@ -83,7 +84,9 @@ def default_inputs(
             f = fractions[inp.name]
             inp = replace(inp, lo=inp.nominal * (1 - f), hi=inp.nominal * (1 + f))
         out.append(inp)
-    return out
+    # a relative range around zero has no width (a term switched off by decision, such as
+    # k_mu = 0): it cannot be sampled and cannot matter, so it is left out
+    return [i for i in out if i.hi > i.lo]
 
 
 def _builtin_inputs(

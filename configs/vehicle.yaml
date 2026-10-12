@@ -13,77 +13,82 @@
 
 # Total take-off mass. What does '5 kg' mean (payload or MTOW)? Open question O-12.
 mass:
-  m: {value: 8.0, unit: "kg", source: "CAD and weighing; define mass case (nominal / max / min)", status: TBD}
+  m: {value: 26.664, unit: "kg", source: "from sage excel sheet", status: derived}
 
 # Wing: area, linear lift, stall and drag. Flat-plate post-stall model.
 wing:
-  S: {value: 0.6, unit: "m^2", source: "CAD or flight-mechanics sheet", status: TBD}
-  CL0: {value: 0.25, unit: "-", source: "lift coefficient at zero wing angle of attack (incl. incidence effects)", status: TBD}
-  CL_alpha: {value: 5.0, unit: "rad^-1", source: "lift-curve slope; flight-mechanics sheet or wind tunnel", status: TBD}
-  alpha_s: {value: 0.35, unit: "rad", source: "stall angle of attack", status: TBD}
-  CD0: {value: 0.03, unit: "-", source: "zero-lift drag coefficient", status: TBD}
-  k: {value: 0.05, unit: "-", source: "induced-drag factor, CD = CD0 + k CL^2", status: TBD}
+  S: {value: 1.617, unit: "m^2", source: "aircraft parameter sheet (note: b x MAC = 1.605 m^2, 0.7% off)", status: stated}
+  CL0: {value: 0.4, unit: "-", source: "CFD (half-model, doubled): linear fit CL vs alpha, 0-10 deg; raw 0.376 at 0 deg; AoA reference to confirm", status: derived}
+  CL_alpha: {value: 4.75, unit: "rad^-1", source: "CFD linear fit 0-10 deg (lifting-line estimate 5.0-5.2)", status: derived}
+  alpha_s: {value: 0.274, unit: "rad", source: "PROVISIONAL: set so the model CL_max is about 1.5 (parameter sheet, not supported by CFD, which has no peak up to 15 deg); needs CFD at 16-24 deg", status: assumed}
+  CD0: {value: 0.033, unit: "-", source: "CFD symmetric fit CD = CD0 + k CL^2, 0-10 deg; WING ONLY, whole-aircraft CD0 will be higher", status: derived}
+  k: {value: 0.042, unit: "-", source: "CFD fit 0-10 deg; agrees with Raymer straight-wing K = 0.0405 (not the swept-wing 0.0631)", status: derived}
   CN: {value: 1.5, unit: "-", source: "flat-plate normal-force coefficient (Cory and Tedrake 1.2 to 2); sourced or measured value needed", status: TBD}
-  i_w: {value: 0.03, unit: "rad", source: "wing incidence relative to the body x-axis", status: TBD}
+  i_w: {value: 0.0, unit: "rad", source: "wing incidence relative to the body x-axis", status: derived}
   M: {value: 100.0, unit: "rad^-1", source: "stall-blend sharpness: a NUMERICAL parameter, not physical; 100 needed for T-02", status: TBD}
+
 
 # Four lift rotors (identical in the point-mass model), polynomial maps.
 rotor:
   n_r: {value: 4, unit: "-", source: "4+1 configuration (stated)", status: stated}
-  D: {value: 0.457, unit: "m", source: "propeller diameter; propulsion trade study (O-13)", status: TBD}
+  D: {value: 762, unit: "mm", source: "VT 3010 CFRP_FP propeller (30 in)", status: datasheet}
   I_rot: {value: 0.0015, unit: "kg*m^2", source: "rotor + motor inertia; sets spool-up", status: TBD}
-  CT0: {value: 0.1, unit: "-", source: "static thrust coefficient T = CT rho n^2 D^4; thrust bench", status: TBD}
-  CT1: {value: -0.1, unit: "-", source: "thrust-coefficient slope in axial advance ratio J; BEMT or published data", status: TBD}
-  CT2: {value: 0.0, unit: "-", source: "quadratic term in J", status: TBD}
-  CQ0: {value: 0.006692816882590485, unit: "-", source: "static torque coefficient Q = CQ rho n^2 D^5; thrust bench", status: TBD}
-  CQ1: {value: -0.0033464084412952425, unit: "-", source: "torque-coefficient slope in J", status: TBD}
-  CQ2: {value: 0.0, unit: "-", source: "quadratic term in J", status: TBD}
-  CH1: {value: 0.01, unit: "-", source: "in-plane force coefficient per unit edgewise ratio mu", status: TBD}
-  k_mu: {value: 1.0, unit: "-", source: "edgewise-flow factor (1 + k_mu mu^2) on CT and CQ", status: TBD}
-  J_min: {value: -0.5, unit: "-", source: "map validity: lowest axial advance ratio (negative = descent)", status: TBD}
-  J_max: {value: 1.0, unit: "-", source: "map validity: highest axial advance ratio", status: TBD}
-  mu_max: {value: 1.0, unit: "-", source: "map validity: highest edgewise advance ratio", status: TBD}
-  omega_floor: {value: 1.0, unit: "rad/s", source: "NUMERICAL guard keeping J and mu finite at standstill", status: TBD}
+  CT0: {value: 0.0928, unit: "-", source: "constant CT = T/(rho n^2 D^4), VT3010 CFRP_FP on 8020 PRO, mean of 50-80% throttle rows (2343-3475 rpm), rho = 1.225 assumed; spread 0.0896-0.0951; 0.0855 at 95%", status: derived}
+  CT1: {value: 0.0, unit: "-", source: "J dependence removed by decision (no data); constant-CT idealisation", status: assumed}
+  CT2: {value: 0.0, unit: "-", source: "J dependence removed by decision", status: assumed}
+  CQ0: {value: 0.005, unit: "-", source: "constant CQ = Q/(rho n^2 D^5), same rows and density; spread 0.00476-0.00521", status: derived}
+  CQ1: {value: 0.0, unit: "-", source: "J dependence removed by decision", status: assumed}
+  CQ2: {value: 0.0, unit: "-", source: "J dependence removed by decision", status: assumed}
+  CH1: {value: 0.0, unit: "-", source: "in-plane (H) force removed by decision", status: assumed}
+  k_mu: {value: 0.0, unit: "-", source: "edgewise-flow thrust/torque factor removed by decision", status: assumed}
+  J_min: {value: -0.5, unit: "-", source: "INERT while CT1=CT2=CQ1=CQ2=0 (J removed); kept so the map stays valid if J is restored", status: assumed}
+  J_max: {value: 1.0, unit: "-", source: "INERT while CT1=CT2=CQ1=CQ2=0 (J removed)", status: assumed}
+  mu_max: {value: 1.0, unit: "-", source: "INERT while k_mu=CH1=0 (edgewise terms removed)", status: assumed}
+  omega_floor: {value: 1.0, unit: "rad/s", source: "NUMERICAL guard, keep > 0: it stops 0/0 in J and mu at standstill even though they are multiplied by zero", status: assumed}
+
 
 # Pusher propeller, polynomial maps in J_p = V cos(alpha) / (n D).
 pusher:
-  D: {value: 0.4, unit: "m", source: "propeller diameter", status: TBD}
+  D: {value: 457.2, unit: "mm", source: "APC 18x8E (assumed pusher propeller; 18 in, 8 in pitch)", status: assumed}
   I_p: {value: 0.0002, unit: "kg*m^2", source: "propeller + motor inertia", status: TBD}
-  CT0: {value: 0.05, unit: "-", source: "thrust coefficient at J_p = 0", status: TBD}
-  CT1: {value: -0.03, unit: "-", source: "slope in J_p (goes negative at high J_p: windmilling drag)", status: TBD}
-  CT2: {value: 0.0, unit: "-", source: "quadratic term in J_p", status: TBD}
-  CQ0: {value: 0.0055, unit: "-", source: "torque coefficient at J_p = 0", status: TBD}
-  CQ1: {value: -0.0018, unit: "-", source: "slope in J_p", status: TBD}
-  J_min: {value: -0.5, unit: "-", source: "map validity", status: TBD}
-  J_max: {value: 2.0, unit: "-", source: "map validity", status: TBD}
-  omega_floor: {value: 1.0, unit: "rad/s", source: "NUMERICAL guard", status: TBD}
+  CT0: {value: 0.0826, unit: "-", source: "quadratic fit of APC 18x8E Ct(J), J 0-0.58, tables 6000-11000 rpm (APC computed prediction, ISA sea level); within 2% for J<=0.5", status: derived}
+  CT1: {value: -0.0787, unit: "-", source: "same fit", status: derived}
+  CT2: {value: -0.1112, unit: "-", source: "same fit", status: derived}
+  CQ0: {value: 0.0052, unit: "-", source: "linear fit of APC Cp/(2 pi) vs J, J 0.1-0.55, tables 6000-11000 rpm; error about 8% at J 0.2-0.45, +13% at J 0.1; the model has no CQ2 term (Cp is concave in J)", status: derived}
+  CQ1: {value: -0.00626, unit: "-", source: "same fit", status: derived}
+  J_min: {value: 0.0, unit: "-", source: "APC tables start at J = 0 (no reverse-flow data)", status: derived}
+  J_max: {value: 0.585, unit: "-", source: "end of the APC 18x8E tables (Ct crosses zero near J = 0.58); beyond this the coefficients are held", status: derived}
+  omega_floor: {value: 1.0, unit: "rad/s", source: "NUMERICAL guard", status: assumed}
+
 
 # Lift motor and ESC (one motor; all four assumed identical).
 motor_lift:
-  Ke: {value: 0.03, unit: "V*s/rad", source: "back-EMF constant (Kv-derived or bench)", status: TBD}
-  Kt: {value: 0.03, unit: "N*m/A", source: "torque constant (equals Ke in SI)", status: TBD}
-  Rm: {value: 0.08, unit: "ohm", source: "winding resistance; datasheet or bench", status: TBD}
-  I0: {value: 1.5, unit: "A", source: "no-load current", status: TBD}
-  I_lim: {value: 60.0, unit: "A", source: "motor/ESC current limit", status: TBD}
+  Ke: {value: 0.0796, unit: "V*s/rad", source: "60/(2 pi KV), KV = 120 (Vector Technics 8020 PRO datasheet); load-test regression 50-100% throttle gives 0.0795", status: datasheet}
+  Kt: {value: 0.0796, unit: "N*m/A", source: "equals Ke in SI; torque vs current in the datasheet sweep gives 0.075-0.080 (the datasheet's Kt = 0.108 @ 3200 rpm does not match its own data)", status: derived}
+  Rm: {value: 0.14, unit: "ohm", source: "2 x Rph (0.06) = 0.12 at 25 degC, x1.2 hot copper, plus ESC/wiring; sweep fit (Ke fixed) gives 0.13-0.15 over 50-100% throttle", status: derived}
+  I0: {value: 3.0, unit: "A", source: "datasheet no-load current at 48 V (the sweep cannot resolve it: torque vs current gives 0 +/- a few A)", status: datasheet}
+  I_lim: {value: 75, unit: "A", source: "datasheet maximum continuous current (180 s); 75 A was reached at 100% throttle in the VT3010 sweep (burst, not rated)", status: datasheet}
   dead_zone: {value: 0.05, unit: "-", source: "ESC dead-zone fraction of throttle; bench motor test", status: TBD}
+
 
 # Pusher motor and ESC.
 motor_pusher:
-  Ke: {value: 0.04, unit: "V*s/rad", source: "back-EMF constant (Kv-derived or bench)", status: TBD}
-  Kt: {value: 0.04, unit: "N*m/A", source: "torque constant (equals Ke in SI)", status: TBD}
-  Rm: {value: 0.05, unit: "ohm", source: "winding resistance; datasheet or bench", status: TBD}
-  I0: {value: 1.0, unit: "A", source: "no-load current", status: TBD}
-  I_lim: {value: 80.0, unit: "A", source: "motor/ESC current limit", status: TBD}
+  Ke: {value: 0.0341, unit: "V*s/rad", source: "60/(2 pi KV), KV = 280 (Nipple 6220 spec sheet)", status: datasheet}
+  Kt: {value: 0.0341, unit: "N*m/A", source: "equals Ke in SI (no torque measurement on the sheet)", status: derived}
+  Rm: {value: 0.09, unit: "ohm", source: "EFFECTIVE series resistance fitted to the 48 V bench sweep (60-100% throttle, GF 18X8E); the sheet's internal resistance is 0.0192 ohm; includes ESC, wiring and duty compression; under-predicts current at 30-50% throttle", status: derived}
+  I0: {value: 2.31, unit: "A", source: "sheet idle current at 10 V (about 2800 rpm); no-load current rises with rpm, so this is a lower bound at operating speed", status: datasheet}
+  I_lim: {value: 107.9, unit: "A", source: "sheet max current at 100% throttle, 48 V, 2 min (copper 98 degC); ESC rated 120 A", status: datasheet}
   dead_zone: {value: 0.05, unit: "-", source: "ESC dead-zone fraction of throttle; bench motor test", status: TBD}
+
 
 # Two packs in parallel through a PDB; equivalent-circuit model.
 battery:
   n_parallel: {value: 2, unit: "-", source: "Y-connector to PDB (stated)", status: stated}
   cells_series: {value: 12, unit: "-", source: "MPower 12S (stated)", status: stated}
-  R0_pack: {value: 0.03, unit: "ohm", source: "series resistance of ONE pack; HPPC/GITT fit", status: TBD}
-  R1_pack: {value: 0.02, unit: "ohm", source: "RC-branch resistance of ONE pack; HPPC/GITT fit", status: TBD}
-  C1_pack: {value: 2000.0, unit: "F", source: "RC-branch capacitance of ONE pack; HPPC/GITT fit", status: TBD}
-  I_av: {value: 2.0, unit: "A", source: "avionics current drawn from the bus", status: TBD}
+  R0_pack: {value: 12.0, unit: "mohm", source: "ONE pack, fresh, 25 degC, SoC>=30%: n_s*R0_cell/k = 12*5mohm/5 (placeholder LiPo preset scaled to 25 Ah; replace with HPPC)", status: assumed}
+  R1_pack: {value: 7.2, unit: "mohm", source: "ONE pack: n_s*R1_cell/k = 12*3mohm/5 (placeholder preset; HPPC/GITT fit)", status: assumed}
+  C1_pack: {value: 250.0, unit: "F", source: "ONE pack: k*C1_cell/n_s = 5*600F/12; tau = 1.8 s (placeholder preset; HPPC/GITT fit)", status: assumed}
+  I_av: {value: 3.0, unit: "A", source: "120 W rated (5 V: 15+25 W, 12 V: 80 W) / (0.9 x 44 V); excludes servos and RF air unit", status: derived}
   V_min: {value: 33.0, unit: "V", source: "bus cut-off; battery-management limit (O-15)", status: TBD}
   capacity_Ah_pack: {value: 25.0, unit: "Ah", source: "MPower datasheet, per pack", status: datasheet}
   v_nominal: {value: 43.2, unit: "V", source: "MPower 12S datasheet", status: datasheet}

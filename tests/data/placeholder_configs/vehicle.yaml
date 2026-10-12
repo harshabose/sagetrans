@@ -1,0 +1,95 @@
+# Vehicle parameter register. EDIT THIS FILE with real data.
+#
+# Every entry: value, unit, source, status. Units are converted to SI once, on load, so
+# write them in whatever unit is natural (kg, mm, deg, rpm, Ah ...).
+# status is one of: measured | datasheet | derived | documented | stated | assumed | TBD
+#
+# The values below are PLACEHOLDERS: illustrative numbers for a notional 8 kg 4+1 VTOL,
+# not Sage's data, and so every one is marked TBD. In 'draft' mode (the default) a TBD
+# entry is used as written and the whole run is labelled DRAFT; in 'release' mode any TBD
+# entry is refused. Replace a value, set its unit/source, and change TBD to measured,
+# datasheet, ... once it is real. An entry left out (or with no value) falls back to the
+# built-in placeholder in draft mode and is refused in release mode.
+
+# Total take-off mass. What does '5 kg' mean (payload or MTOW)? Open question O-12.
+mass:
+  m: {value: 8.0, unit: "kg", source: "CAD and weighing; define mass case (nominal / max / min)", status: TBD}
+
+# Wing: area, linear lift, stall and drag. Flat-plate post-stall model.
+wing:
+  S: {value: 0.6, unit: "m^2", source: "CAD or flight-mechanics sheet", status: TBD}
+  CL0: {value: 0.25, unit: "-", source: "lift coefficient at zero wing angle of attack (incl. incidence effects)", status: TBD}
+  CL_alpha: {value: 5.0, unit: "rad^-1", source: "lift-curve slope; flight-mechanics sheet or wind tunnel", status: TBD}
+  alpha_s: {value: 0.35, unit: "rad", source: "stall angle of attack", status: TBD}
+  CD0: {value: 0.03, unit: "-", source: "zero-lift drag coefficient", status: TBD}
+  k: {value: 0.05, unit: "-", source: "induced-drag factor, CD = CD0 + k CL^2", status: TBD}
+  CN: {value: 1.5, unit: "-", source: "flat-plate normal-force coefficient (Cory and Tedrake 1.2 to 2); sourced or measured value needed", status: TBD}
+  i_w: {value: 0.03, unit: "rad", source: "wing incidence relative to the body x-axis", status: TBD}
+  M: {value: 100.0, unit: "rad^-1", source: "stall-blend sharpness: a NUMERICAL parameter, not physical; 100 needed for T-02", status: TBD}
+
+# Four lift rotors (identical in the point-mass model), polynomial maps.
+rotor:
+  n_r: {value: 4, unit: "-", source: "4+1 configuration (stated)", status: stated}
+  D: {value: 0.457, unit: "m", source: "propeller diameter; propulsion trade study (O-13)", status: TBD}
+  I_rot: {value: 0.0015, unit: "kg*m^2", source: "rotor + motor inertia; sets spool-up", status: TBD}
+  CT0: {value: 0.1, unit: "-", source: "static thrust coefficient T = CT rho n^2 D^4; thrust bench", status: TBD}
+  CT1: {value: -0.1, unit: "-", source: "thrust-coefficient slope in axial advance ratio J; BEMT or published data", status: TBD}
+  CT2: {value: 0.0, unit: "-", source: "quadratic term in J", status: TBD}
+  CQ0: {value: 0.006692816882590485, unit: "-", source: "static torque coefficient Q = CQ rho n^2 D^5; thrust bench", status: TBD}
+  CQ1: {value: -0.0033464084412952425, unit: "-", source: "torque-coefficient slope in J", status: TBD}
+  CQ2: {value: 0.0, unit: "-", source: "quadratic term in J", status: TBD}
+  CH1: {value: 0.01, unit: "-", source: "in-plane force coefficient per unit edgewise ratio mu", status: TBD}
+  k_mu: {value: 1.0, unit: "-", source: "edgewise-flow factor (1 + k_mu mu^2) on CT and CQ", status: TBD}
+  J_min: {value: -0.5, unit: "-", source: "map validity: lowest axial advance ratio (negative = descent)", status: TBD}
+  J_max: {value: 1.0, unit: "-", source: "map validity: highest axial advance ratio", status: TBD}
+  mu_max: {value: 1.0, unit: "-", source: "map validity: highest edgewise advance ratio", status: TBD}
+  omega_floor: {value: 1.0, unit: "rad/s", source: "NUMERICAL guard keeping J and mu finite at standstill", status: TBD}
+
+# Pusher propeller, polynomial maps in J_p = V cos(alpha) / (n D).
+pusher:
+  D: {value: 0.4, unit: "m", source: "propeller diameter", status: TBD}
+  I_p: {value: 0.0002, unit: "kg*m^2", source: "propeller + motor inertia", status: TBD}
+  CT0: {value: 0.05, unit: "-", source: "thrust coefficient at J_p = 0", status: TBD}
+  CT1: {value: -0.03, unit: "-", source: "slope in J_p (goes negative at high J_p: windmilling drag)", status: TBD}
+  CT2: {value: 0.0, unit: "-", source: "quadratic term in J_p", status: TBD}
+  CQ0: {value: 0.0055, unit: "-", source: "torque coefficient at J_p = 0", status: TBD}
+  CQ1: {value: -0.0018, unit: "-", source: "slope in J_p", status: TBD}
+  J_min: {value: -0.5, unit: "-", source: "map validity", status: TBD}
+  J_max: {value: 2.0, unit: "-", source: "map validity", status: TBD}
+  omega_floor: {value: 1.0, unit: "rad/s", source: "NUMERICAL guard", status: TBD}
+
+# Lift motor and ESC (one motor; all four assumed identical).
+motor_lift:
+  Ke: {value: 0.03, unit: "V*s/rad", source: "back-EMF constant (Kv-derived or bench)", status: TBD}
+  Kt: {value: 0.03, unit: "N*m/A", source: "torque constant (equals Ke in SI)", status: TBD}
+  Rm: {value: 0.08, unit: "ohm", source: "winding resistance; datasheet or bench", status: TBD}
+  I0: {value: 1.5, unit: "A", source: "no-load current", status: TBD}
+  I_lim: {value: 60.0, unit: "A", source: "motor/ESC current limit", status: TBD}
+  dead_zone: {value: 0.05, unit: "-", source: "ESC dead-zone fraction of throttle; bench motor test", status: TBD}
+
+# Pusher motor and ESC.
+motor_pusher:
+  Ke: {value: 0.04, unit: "V*s/rad", source: "back-EMF constant (Kv-derived or bench)", status: TBD}
+  Kt: {value: 0.04, unit: "N*m/A", source: "torque constant (equals Ke in SI)", status: TBD}
+  Rm: {value: 0.05, unit: "ohm", source: "winding resistance; datasheet or bench", status: TBD}
+  I0: {value: 1.0, unit: "A", source: "no-load current", status: TBD}
+  I_lim: {value: 80.0, unit: "A", source: "motor/ESC current limit", status: TBD}
+  dead_zone: {value: 0.05, unit: "-", source: "ESC dead-zone fraction of throttle; bench motor test", status: TBD}
+
+# Two packs in parallel through a PDB; equivalent-circuit model.
+battery:
+  n_parallel: {value: 2, unit: "-", source: "Y-connector to PDB (stated)", status: stated}
+  cells_series: {value: 12, unit: "-", source: "MPower 12S (stated)", status: stated}
+  R0_pack: {value: 0.03, unit: "ohm", source: "series resistance of ONE pack; HPPC/GITT fit", status: TBD}
+  R1_pack: {value: 0.02, unit: "ohm", source: "RC-branch resistance of ONE pack; HPPC/GITT fit", status: TBD}
+  C1_pack: {value: 2000.0, unit: "F", source: "RC-branch capacitance of ONE pack; HPPC/GITT fit", status: TBD}
+  I_av: {value: 2.0, unit: "A", source: "avionics current drawn from the bus", status: TBD}
+  V_min: {value: 33.0, unit: "V", source: "bus cut-off; battery-management limit (O-15)", status: TBD}
+  capacity_Ah_pack: {value: 25.0, unit: "Ah", source: "MPower datasheet, per pack", status: datasheet}
+  v_nominal: {value: 43.2, unit: "V", source: "MPower 12S datasheet", status: datasheet}
+
+# Pitch-tracking surrogate (full rotational dynamics are out of scope).
+attitude:
+  omega_n: {value: 8.0, unit: "rad/s", source: "pitch-loop natural frequency; SITL or flight logs", status: TBD}
+  zeta: {value: 0.8, unit: "-", source: "pitch-loop damping ratio", status: TBD}
+  q_max: {value: 1.5, unit: "rad/s", source: "pitch-rate limit", status: TBD}

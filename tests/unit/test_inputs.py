@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import math
+import re
 import shutil
 from pathlib import Path
 
@@ -18,7 +19,9 @@ from sagetrans.io.settings import ALL_ANALYSES
 from sagetrans.physics.params import placeholder_vehicle
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIGS = ROOT / "configs"
+# frozen placeholders: the live configs/ folder holds the user's real data and changes over time
+CONFIGS = ROOT / "tests" / "data" / "placeholder_configs"
+LIVE_CONFIGS = ROOT / "configs"
 
 
 @pytest.fixture()
@@ -283,3 +286,21 @@ def test_release_mode_run_on_a_complete_register_labels_the_record_released(cfgd
     assert out.exit_code == study.EXIT_GATE
     rec = json.loads((out.folder / "run_record.json").read_text(encoding="utf-8"))
     assert rec["label"] == "RELEASED" and rec["override"] is False and rec["mode"] == "release"
+
+
+def test_an_input_switched_off_by_decision_is_dropped_from_the_sensitivity(cfgdir):
+    text = (cfgdir / "vehicle.yaml").read_text(encoding="utf-8")
+    (cfgdir / "vehicle.yaml").write_text(
+        re.sub(r"(  k_mu: \{value: )[^,]+,", r"\g<1>0.0,", text), encoding="utf-8")
+    model = stages.sensitivity_model(load_inputs(cfgdir))
+    names = {i.name for i in model.inputs}
+    assert "rotor_kmu" not in names and "mass" in names
+    assert all(i.hi > i.lo for i in model.inputs)  # every remaining range can be sampled
+
+
+def test_the_live_configs_folder_loads_and_passes_the_preflight():
+    """Whatever real data is in configs/, it must stay loadable."""
+    inp = load_inputs(LIVE_CONFIGS)
+    assert inp.vehicle.m > 0 and inp.scenarios and inp.study.analyses
+    assert all(i.hi > i.lo for i in stages.sensitivity_model(inp).inputs)
+    assert stages.plan_tasks(inp)

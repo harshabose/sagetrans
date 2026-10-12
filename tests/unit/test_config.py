@@ -10,7 +10,10 @@ from sagetrans.config import (
     Status,
 )
 
-VEHICLE_YAML = Path(__file__).resolve().parents[2] / "configs" / "vehicle.yaml"
+# a frozen copy of the placeholders: editing configs/ with real data must not break the tests
+VEHICLE_YAML = (
+    Path(__file__).resolve().parents[2] / "tests" / "data" / "placeholder_configs" / "vehicle.yaml"
+)
 
 
 def rec(**kw):
