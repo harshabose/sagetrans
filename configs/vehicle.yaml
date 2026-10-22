@@ -21,11 +21,13 @@ wing:
   CL0: {value: 0.4, unit: "-", source: "CFD (half-model, doubled): linear fit CL vs alpha, 0-10 deg; raw 0.376 at 0 deg; AoA reference to confirm", status: derived}
   CL_alpha: {value: 4.75, unit: "rad^-1", source: "CFD linear fit 0-10 deg (lifting-line estimate 5.0-5.2)", status: derived}
   alpha_s: {value: 0.274, unit: "rad", source: "PROVISIONAL: set so the model CL_max is about 1.5 (parameter sheet, not supported by CFD, which has no peak up to 15 deg); needs CFD at 16-24 deg", status: assumed}
-  CD0: {value: 0.033, unit: "-", source: "CFD symmetric fit CD = CD0 + k CL^2, 0-10 deg; WING ONLY, whole-aircraft CD0 will be higher", status: derived}
+  # CD0 PLACEHOLDER (2026-10-14): doubled from the wing-only CFD value 0.033 to stand in for
+  # whole-aircraft drag (fuselage, booms, rotors, gear). REPLACE with the CFD value when available; re-run A and D afterwards.
+  CD0: {value: 0.066, unit: "-", source: "ASSUMED: 2 x 0.033 (wing-only CFD symmetric fit CD = CD0 + k CL^2, 0-10 deg) as a stand-in for whole-aircraft CD0; replace with whole-aircraft CFD", status: assumed}
   k: {value: 0.042, unit: "-", source: "CFD fit 0-10 deg; agrees with Raymer straight-wing K = 0.0405 (not the swept-wing 0.0631)", status: derived}
   CN: {value: 1.5, unit: "-", source: "flat-plate normal-force coefficient (Cory and Tedrake 1.2 to 2); sourced or measured value needed", status: TBD}
   i_w: {value: 0.0, unit: "rad", source: "wing incidence relative to the body x-axis", status: derived}
-  M: {value: 100.0, unit: "rad^-1", source: "stall-blend sharpness: a NUMERICAL parameter, not physical; 100 needed for T-02", status: TBD}
+  M: {value: 70.0, unit: "rad^-1", source: "stall-blend sharpness: a NUMERICAL parameter, not physical; was 100 (needed for T-02), set to 70 on 2026-10-14; re-check T-02 and the A thrust_sign window", status: TBD}
 
 
 # Four lift rotors (identical in the point-mass model), polynomial maps.
@@ -91,7 +93,7 @@ battery:
   I_av: {value: 3.0, unit: "A", source: "120 W rated (5 V: 15+25 W, 12 V: 80 W) / (0.9 x 44 V); excludes servos and RF air unit", status: derived}
   V_min: {value: 33.0, unit: "V", source: "bus cut-off; battery-management limit (O-15)", status: TBD}
   capacity_Ah_pack: {value: 25.0, unit: "Ah", source: "MPower datasheet, per pack", status: datasheet}
-  v_nominal: {value: 43.2, unit: "V", source: "MPower 12S datasheet", status: datasheet}
+  v_nominal: {value: 44.4, unit: "V", source: "MPower 12S datasheet", status: datasheet}
 
 # Pitch-tracking surrogate (full rotational dynamics are out of scope).
 attitude:

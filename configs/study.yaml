@@ -20,27 +20,28 @@ switch_test: ground        # speed used in the Position1 switch test: ground | a
 # which is 20.9 m/s EQUIVALENT airspeed (rho = 1.058 kg/m^3, sqrt(rho/rho0) = 0.929).
 # Every *_eas_ms list below is equivalent airspeed; every *_ground_ms list is ground speed
 # (= true airspeed in still air).
+# Stall (C_L,max 1.5, S 1.617 m^2): 11.9 / 13.3 / 14.2 m/s EAS at mass x0.80 / 1.0 / 1.15.
 
 # ---- analysis settings -------------------------------------------------------------------------
 A:                         # zero-altitude-loss feasibility
-  scenarios: [S-01, S-02]
+  scenarios: [S-01, S-03, S-06, S-07]       # altitude does not change A (S-01 = S-02); mass and SOC do
   v0_eas_ms: [10, 12, 14, 16, 18, 20.9]     # top point = cruise (20.9 EAS = 22.5 TAS at 1500 m)
-  decel_ms2: [0.5, 1.0, 1.5, 2.0, 3.0]
-  max_decel_v0_eas_ms: [10, 12, 14, 16]
-  samples: 60
+  decel_ms2: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0]
+  max_decel_v0_eas_ms: [10, 12, 14, 16, 18, 20.9]
+  samples: 120
 
 D:                         # braking and Q_TRANS_DECEL
-  scenarios: [S-01, S-02]
+  scenarios: [S-01, S-02, S-03, S-05, S-06, S-07]   # S-01 first: it sets the trade curve
   mass_factors: [0.80, 1.0, 1.15]
-  v0_eas_ms: [16, 20.9]                     # 20.9 = cruise
-  recommendation: {ensemble_n: 8, ensemble_seed: 3, v0_ground_ms: [18, 22.5], percentile: 5}
-  trade: {a_plan_ms2: [1.5, 2.0, 2.5, 3.0, 3.5], headwinds_ms: [0, 5]}
+  v0_eas_ms: [16, 17.1, 20.9]               # 1.2 Vs at nominal, 1.2 Vs at 1.15x mass, cruise
+  recommendation: {ensemble_n: 32, ensemble_seed: 8, v0_ground_ms: [16, 20.9], percentile: 5}
+  trade: {a_plan_ms2: [1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0, 2.1, 2.25, 2.5, 3.0, 3.5], headwinds_ms: [-5, 0, 5]}
 
 F:                         # landing descent profile
-  scenarios: [S-01, S-02]
+  scenarios: [S-01, S-02, S-03, S-05, S-06]
 
 E:                         # energy budget
-  cruise_amsl_m: [1500, 5000]      # one budget per cruise altitude (1500 m = reference)
+  cruise_amsl_m: [0, 1500, 2500, 5000]      # one budget per cruise altitude (1500 m = reference)
   ranges_km: [50, 100, 150]   # ranges shorter than the climb+descent distance are skipped
 
 Q2:                        # pusher thrust margin at AIRSPEED_MIN
@@ -48,24 +49,24 @@ Q2:                        # pusher thrust margin at AIRSPEED_MIN
   mass_factors: [0.80, 1.0, 1.15]
 
 C:                         # ArduPilot-parameter optimisation (back-transition)
-  ensemble_n: 4
-  ensemble_seed: 1
-  seeds: [1, 2, 3]
+  ensemble_n: 32
+  ensemble_seed: 8         # same ensemble as B2 so the two can be compared
+  seeds: [1, 2, 3, 4, 5, 6, 7, 8]
   popsize: 8
-  maxiter: 15
+  maxiter: 20
   a_plan_source: simulated         # simulated | ideal
 
 B2:                        # speed-scheduled law, started from a B1 solution
-  ensemble_n: 4
-  ensemble_seed: 1
-  seeds: [1, 2, 3]
+  ensemble_n: 32
+  ensemble_seed: 8
+  seeds: [1, 2, 3, 4, 5, 6, 7, 8]
   popsize: 12
-  maxiter: 15
+  maxiter: 20
   sigma0: 0.1
   start: {scenario_index: 0, eps_h_m: 10, eps_x_m: 300}
 
 B1:                        # open-loop optimum by direct collocation
-  scenarios: [S-01, S-02]
+  scenarios: [S-01, S-02, S-03, S-04, S-05, S-06]
   eps_h_m: [20, 10, 6, 3]
   eps_x_m: 300
   intervals: 40

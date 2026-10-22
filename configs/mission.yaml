@@ -9,10 +9,10 @@ profile:        # the idealised flight used by the energy budget (analysis E)
   vz_takeoff: {value: 2.0, unit: "m/s", source: "vertical climb rate in take-off", status: TBD}
   t_hover_pre: {value: 10.0, unit: "s", source: "hover on the pad before lift-off", status: TBD}
   a_fwd: {value: 1.5, unit: "m/s^2", source: "forward-transition acceleration; ASSUMED until analysis C", status: TBD}
-  v_climb: {value: 20.0, unit: "m/s", source: "climb true airspeed; 18 gave no steady trim at 5000 m (trim solver reaches only CL ~1.05), 20 trims at 0, 1500 and 5000 m", status: TBD}
+  v_climb: {value: 20.0, unit: "m/s", source: "climb true airspeed", status: TBD}
   roc: {value: 2.5, unit: "m/s", source: "rate of climb", status: TBD}
   v_cruise: {value: 22.5, unit: "m/s", source: "cruise true airspeed; 22.5 TAS at the 1500 m reference altitude = 20.9 EAS (same as controller.cruise_stub.v_cruise)", status: TBD}
-  v_glide: {value: 20.0, unit: "m/s", source: "pusher-off glide true airspeed in descent; 16 gave no glide trim at 1500 and 5000 m (trim solver reaches only CL ~1.05), 20 trims at 0, 1500 and 5000 m (L/D 12.5 to 13.3, wing-only polar so optimistic)", status: TBD}
+  v_glide: {value: 20.0, unit: "m/s", source: "pusher-off glide true airspeed in descent", status: TBD}
   h_bt_agl_m: {value: 30.0, unit: "m", source: "height above ground where the back-transition starts", status: TBD}
   soc_mean: {value: 0.6, unit: "-", source: "one mean state of charge used for all segment powers", status: TBD}
   t_go_around: {value: 60.0, unit: "s", source: "go-around hover time (reserve)", status: TBD}
@@ -35,7 +35,7 @@ descent:         # analysis F
 
 requirements:    # the range requirements the budget is checked against
   range_primary_km: {value: 100.0, unit: "km", source: "specified range requirement", status: stated}
-  range_p95_km: {value: 113.0, unit: "km", source: "about 113 km needed for the 95th-percentile mission", status: stated}
+  range_p95_km: {value: 120.0, unit: "km", source: "about 113 km needed for the 95th-percentile mission", status: stated}
 
 speeds:          # entry and transition speeds used by the studies
-  entry_eas_ms: {value: 20.9, unit: "m/s", source: "equivalent airspeed at the start of the back-transition = cruise 22.5 m/s true airspeed at the 1500 m reference altitude (ISA)", status: derived}
+  entry_eas_ms: {value: 20.9, unit: "m/s", source: "equivalent airspeed at the start of the back-transition", status: derived}
