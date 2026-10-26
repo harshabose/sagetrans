@@ -2,17 +2,18 @@
 # Same format and status words as vehicle.yaml. TBD = placeholder (draft only).
 
 profile:        # the idealised flight used by the energy budget (analysis E)
-  cruise_amsl_m: {value: 1000.0, unit: "m", source: "cruise altitude above mean sea level; mission set (O-14)", status: TBD}
-  ground_amsl_m: {value: 0.0, unit: "m", source: "take-off and landing elevation; mission set (O-14)", status: TBD}
+  climb_height_m: {value: 200.0, unit: "m", source: "climb above the airfield; cruise altitude = site + this", status: TBD}
   isa_offset_k: {value: 0.0, unit: "K", source: "ISA temperature offset for the budget", status: TBD}
   clearance_agl_m: {value: 30.0, unit: "m", source: "hover climb before the forward transition", status: TBD}
   vz_takeoff: {value: 2.0, unit: "m/s", source: "vertical climb rate in take-off", status: TBD}
   t_hover_pre: {value: 10.0, unit: "s", source: "hover on the pad before lift-off", status: TBD}
   a_fwd: {value: 1.5, unit: "m/s^2", source: "forward-transition acceleration; ASSUMED until analysis C", status: TBD}
-  v_climb: {value: 18.0, unit: "m/s", source: "climb true airspeed", status: TBD}
   roc: {value: 2.5, unit: "m/s", source: "rate of climb", status: TBD}
   # v_cruise: omit to use the best-range speed, or add {value, unit, source, status}
-  v_glide: {value: 16.0, unit: "m/s", source: "pusher-off glide true airspeed in descent", status: TBD}
+  v_cruise_ref_amsl_m: {value: 1500.0, unit: "m", source: "altitude where the design speeds hold", status: TBD}
+  payload_kg: {value: 5.0, unit: "kg", source: "mass delivered at the destination; the return leg is lighter", status: TBD}
+  t_drop_s: {value: 0.0, unit: "s", source: "hover at the destination for the drop, at the loaded mass", status: TBD}
+  # v_climb, v_glide: omit to use the cruise speed, or add {value, unit, source, status}
   h_bt_agl_m: {value: 30.0, unit: "m", source: "height above ground where the back-transition starts", status: TBD}
   soc_mean: {value: 0.6, unit: "-", source: "one mean state of charge used for all segment powers", status: TBD}
   t_go_around: {value: 60.0, unit: "s", source: "go-around hover time (reserve)", status: TBD}
@@ -24,6 +25,7 @@ battery_window:  # usable energy = eta_usable * soh * temp_factor * nominal ener
   eta_usable: {value: 0.8, unit: "-", source: "usable fraction of nominal energy; BMS and cut-off limits", status: TBD}
   soh: {value: 1.0, unit: "-", source: "state of health (1 = new)", status: TBD}
   temp_factor: {value: 1.0, unit: "-", source: "temperature derating (1 = 25 degC)", status: TBD}
+  soc_start: {value: 1.0, unit: "-", source: "state of charge at take-off (a full pack)", status: TBD}
   soc_eod: {value: 0.1, unit: "-", source: "state of charge at end of discharge, for the hover power check", status: TBD}
 
 descent:         # analysis F

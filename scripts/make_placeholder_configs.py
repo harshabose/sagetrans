@@ -157,17 +157,18 @@ def mission_yaml() -> str:
         "# Same format and status words as vehicle.yaml. TBD = placeholder (draft only).",
         "",
         "profile:        # the idealised flight used by the energy budget (analysis E)",
-        f"  cruise_amsl_m: {r(mp.cruise_amsl_m, 'm', 'cruise altitude above mean sea level; mission set (O-14)')}",
-        f"  ground_amsl_m: {r(mp.ground_amsl_m, 'm', 'take-off and landing elevation; mission set (O-14)')}",
+        f"  climb_height_m: {r(mp.climb_height_m, 'm', 'climb above the airfield; cruise altitude = site + this')}",
         f"  isa_offset_k: {r(mp.isa_offset_k, 'K', 'ISA temperature offset for the budget')}",
         f"  clearance_agl_m: {r(mp.clearance_agl_m, 'm', 'hover climb before the forward transition')}",
         f"  vz_takeoff: {r(mp.vz_takeoff, 'm/s', 'vertical climb rate in take-off')}",
         f"  t_hover_pre: {r(mp.t_hover_pre, 's', 'hover on the pad before lift-off')}",
         f"  a_fwd: {r(mp.a_fwd, 'm/s^2', 'forward-transition acceleration; ASSUMED until analysis C')}",
-        f"  v_climb: {r(mp.v_climb, 'm/s', 'climb true airspeed')}",
         f"  roc: {r(mp.roc, 'm/s', 'rate of climb')}",
         "  # v_cruise: omit to use the best-range speed, or add {value, unit, source, status}",
-        f"  v_glide: {r(mp.v_glide, 'm/s', 'pusher-off glide true airspeed in descent')}",
+        f"  v_cruise_ref_amsl_m: {r(mp.v_cruise_ref_amsl_m, 'm', 'altitude where the design speeds hold')}",
+        f"  payload_kg: {r(mp.payload_kg, 'kg', 'mass delivered at the destination; the return leg is lighter')}",
+        f"  t_drop_s: {r(mp.t_drop_s, 's', 'hover at the destination for the drop, at the loaded mass')}",
+        "  # v_climb, v_glide: omit to use the cruise speed, or add {value, unit, source, status}",
         f"  h_bt_agl_m: {r(mp.h_bt_agl_m, 'm', 'height above ground where the back-transition starts')}",
         f"  soc_mean: {r(mp.soc_mean, '-', 'one mean state of charge used for all segment powers')}",
         f"  t_go_around: {r(mp.t_go_around, 's', 'go-around hover time (reserve)')}",
@@ -179,6 +180,7 @@ def mission_yaml() -> str:
         f"  eta_usable: {r(bw.eta_usable, '-', 'usable fraction of nominal energy; BMS and cut-off limits')}",
         f"  soh: {r(bw.soh, '-', 'state of health (1 = new)')}",
         f"  temp_factor: {r(bw.temp_factor, '-', 'temperature derating (1 = 25 degC)')}",
+        f"  soc_start: {r(bw.soc_start, '-', 'state of charge at take-off (a full pack)')}",
         f"  soc_eod: {r(bw.soc_eod, '-', 'state of charge at end of discharge, for the hover power check')}",
         "",
         "descent:         # analysis F",
@@ -311,7 +313,7 @@ F:                         # landing descent profile
   scenarios: [S-01, S-02]
 
 E:                         # energy budget
-  cruise_amsl_m: [1000, 5000]      # one budget per cruise altitude
+  sites_amsl_m: [0, 5000]          # airfield elevations
   ranges_km: [50, 100, 113, 150]   # ranges shorter than the climb+descent distance are skipped
 
 Q2:                        # pusher thrust margin at AIRSPEED_MIN

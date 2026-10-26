@@ -3,16 +3,18 @@
 E_total = E_to + E_ft + E_climb + E_cruise + E_desc + E_bt + E_land + E_reserve
           <= eta_usable * SoH * f(T) * E_nom
 
-`range` is the flown distance of ONE leg at the mass of the supplied `VehicleParams`; a return
-leg or a payload drop is a second call with another mass. Segment powers use one mean state of
-charge (`MissionProfile.soc_mean`) rather than tracking the open-circuit voltage along the
-mission. The forward transition is a quasi-steady ESTIMATE until analyses B/C exist (M5/M6).
+`BudgetResult` is one leg at the mass of the supplied `VehicleParams`. `MissionBudget` composes
+legs: a `round_trip` (loaded out, empty back) or a `one_way`, at a site (airfield) elevation with
+the cruise altitude a fixed climb height above it. The range is an OUTPUT: whatever energy is left
+after the fixed segments and the reserve goes to cruise. Segment powers use one mean state of
+charge (`MissionProfile.soc_mean`); `soc_trace.py` walks the SoC along the mission and checks each
+segment at both ends. The forward transition is a quasi-steady ESTIMATE until analyses B/C exist.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -36,6 +38,8 @@ class BatteryWindow:
     soh: float = 1.0
     temp_factor: float = 1.0
     soc_eod: float = 0.10  # state of charge at end of discharge, for the hover power check
+    soc_start: float = 1.0  # state of charge at take-off (a full pack; the usable energy is a
+    # fraction eta_usable of nominal, so the mission ends at 1 - eta_usable)
 
     def usable_J(self, vp: VehicleParams) -> float:
         return vp.battery.e_nominal_wh * J_PER_WH * self.eta_usable * self.soh * self.temp_factor
@@ -53,10 +57,14 @@ class MissionProfile:
     t_hover_pre: float = 10.0  # s of hover before lift-off
     v_trans: float = 14.0  # AIRSPEED_MIN
     a_fwd: float = 1.5  # forward-transition acceleration (ASSUMED until analysis C)
-    v_climb: float = 18.0
+    v_climb: float | None = None  # design TAS at `v_cruise_ref_amsl_m`; None = the cruise speed
     roc: float = 2.5
-    v_cruise: float | None = None  # None = best-range speed
-    v_glide: float = 16.0
+    v_cruise: float | None = None  # design TAS at `v_cruise_ref_amsl_m`; None = best-range speed
+    v_glide: float | None = None  # as `v_climb`
+    v_cruise_ref_amsl_m: float = 1500.0  # altitude where the design speeds hold
+    climb_height_m: float = 200.0  # cruise altitude = site elevation + this
+    payload_kg: float = 5.0  # mass delivered at the destination (the return leg is lighter)
+    t_drop_s: float = 0.0  # hover at the destination for the drop, at the loaded mass
     h_bt_agl_m: float = 30.0  # height above ground where the back-transition starts
     soc_mean: float = 0.6
     # reserve (Q7)
@@ -160,6 +168,45 @@ def wing_polar_drag(vp: VehicleParams, rho: float, V: float, lift: float) -> flo
 
 _wing_polar_drag = wing_polar_drag  # the old private name
 
+DEFAULT_V_CLIMB = 18.0  # used only when neither v_climb nor v_cruise is set (a bare profile)
+DEFAULT_V_GLIDE = 16.0
+
+
+def climb_speed(mp: MissionProfile) -> float:
+    return mp.v_climb if mp.v_climb is not None else (mp.v_cruise or DEFAULT_V_CLIMB)
+
+
+def glide_speed(mp: MissionProfile) -> float:
+    return mp.v_glide if mp.v_glide is not None else (mp.v_cruise or DEFAULT_V_GLIDE)
+
+
+def design_speeds(mp: MissionProfile, altitude_amsl_m: float) -> tuple[float, float, float]:
+    """(cruise, climb, glide) TAS at `altitude_amsl_m`: the design TAS scaled to the same
+    dynamic pressure, so the equivalent airspeed is the one the design speed has at the
+    reference altitude. A missing cruise speed (best-range) is returned as 0 and left to
+    `build_budget`; a missing climb or glide speed follows the cruise speed."""
+    k = math.sqrt(
+        float(atmosphere.density(mp.v_cruise_ref_amsl_m, mp.isa_offset_k))
+        / float(atmosphere.density(altitude_amsl_m, mp.isa_offset_k))
+    )
+    vc = mp.v_cruise * k if mp.v_cruise is not None else 0.0
+    vcl = mp.v_climb * k if mp.v_climb is not None else vc
+    vg = mp.v_glide * k if mp.v_glide is not None else vc
+    return vc, vcl, vg
+
+
+def mission_at_site(mp: MissionProfile, site_amsl_m: float) -> MissionProfile:
+    """The profile for an airfield at `site_amsl_m`: cruise at site + climb height, the design
+    speeds converted to that altitude. The segment functions then run unchanged on it."""
+    cruise = site_amsl_m + mp.climb_height_m
+    vc, vcl, vg = design_speeds(mp, cruise)
+    return replace(
+        mp, ground_amsl_m=site_amsl_m, cruise_amsl_m=cruise,
+        v_cruise=vc if mp.v_cruise is not None else None,
+        v_climb=vcl if (mp.v_climb is not None or mp.v_cruise is not None) else None,
+        v_glide=vg if (mp.v_glide is not None or mp.v_cruise is not None) else None,
+    )  # fmt: skip
+
 
 def stall_speed_1g(vp: VehicleParams, rho: float) -> float:
     return aero.stall_speed(vp.m, rho, vp.wing)
@@ -258,11 +305,12 @@ def climb_segment(vp: VehicleParams, mp: MissionProfile, soc: float) -> SegmentR
         return SegmentResult(0.0, 0.0, 0.0, "no climb")
     h_mean = 0.5 * (mp.cruise_amsl_m + mp.clearance_amsl)
     rho = float(atmosphere.density(h_mean, mp.isa_offset_k))
-    gamma = math.asin(mp.roc / mp.v_climb)
-    tr = trim.steady_trim(vp, rho, mp.v_climb, gamma, soc)
+    v_climb = climb_speed(mp)
+    gamma = math.asin(mp.roc / v_climb)
+    tr = trim.steady_trim(vp, rho, v_climb, gamma, soc)
     t = dh / mp.roc
     return SegmentResult(
-        tr.elec.power * t, t, mp.v_climb * math.cos(gamma) * t, "steady-climb trim, pusher model"
+        tr.elec.power * t, t, v_climb * math.cos(gamma) * t, "steady-climb trim, pusher model"
     )
 
 
@@ -272,22 +320,33 @@ def descent_segment(vp: VehicleParams, mp: MissionProfile, soc: float) -> Segmen
         return SegmentResult(0.0, 0.0, 0.0, "no descent")
     h_mean = 0.5 * (mp.cruise_amsl_m + mp.ground_amsl_m)
     rho = float(atmosphere.density(h_mean, mp.isa_offset_k))
-    tr = trim.glide_trim(vp, rho, mp.v_glide, soc)
-    sink = mp.v_glide * math.sin(-tr.gamma)
+    v_glide = glide_speed(mp)
+    tr = trim.glide_trim(vp, rho, v_glide, soc)
+    sink = v_glide * math.sin(-tr.gamma)
     t = dh / sink
     return SegmentResult(
-        tr.elec.power * t, t, mp.v_glide * math.cos(tr.gamma) * t, "pusher-off glide trim"
+        tr.elec.power * t, t, v_glide * math.cos(tr.gamma) * t, "pusher-off glide trim"
     )
 
 
 def back_transition_segment(
-    vp: VehicleParams, mp: MissionProfile, v0: float, soc: float, a_plan: float
+    vp: VehicleParams,
+    mp: MissionProfile,
+    v0: float,
+    soc: float,
+    a_plan: float,
+    bp: BackTransitionParams | None = None,
 ) -> SegmentResult:
-    """Energy of the Position1 braking simulation (analysis D) from ground speed v0."""
+    """Energy of the Position1 braking simulation (analysis D) from ground speed v0.
+
+    `bp` is the configured controller (as analysis D uses it; `run_braking` sets the target
+    height and the hover throttle itself). None builds one from the code defaults.
+    """
     scen = Scenario(
         mp.ground_amsl_m + mp.h_bt_agl_m, mp.isa_offset_k, soc, ground_amsl_m=mp.ground_amsl_m
     )
-    bp = BackTransitionParams.for_vehicle(vp, scen.rho, soc, scen.altitude_amsl_m)
+    if bp is None:
+        bp = BackTransitionParams.for_vehicle(vp, scen.rho, soc, scen.altitude_amsl_m)
     r = braking.landing_error(vp, scen, v0, a_plan, bp, agl0=mp.h_bt_agl_m)
     if r.sim.terminated_by != "ground_speed_reached":
         raise RuntimeError(f"back-transition did not complete ({r.sim.terminated_by})")
@@ -295,7 +354,7 @@ def back_transition_segment(
         r.sim.metrics["energy_J"],
         r.t_stop,
         r.x_actual,
-        "simulation (analysis D, placeholder gains)",
+        "simulation (analysis D)" + (", default controller" if bp is None else ""),
     )
 
 
@@ -308,11 +367,14 @@ def landing_segment(
 
 
 def hover_check(
-    vp: VehicleParams, mp: MissionProfile, window: BatteryWindow
+    vp: VehicleParams, mp: MissionProfile, window: BatteryWindow, soc: float | None = None
 ) -> dict[str, float | bool]:
-    """P_hover,req <= V_bus(end of discharge) x I_available, plus the motor-level check."""
+    """P_hover,req <= V_bus(soc) x I_available, plus the motor-level check.
+
+    `soc` defaults to the end-of-discharge stress point `window.soc_eod`; the site is
+    `mp.ground_amsl_m`."""
     rho = float(atmosphere.density(mp.ground_amsl_m, mp.isa_offset_k))
-    es = trim.hover_state(vp, rho, window.soc_eod)
+    es = trim.hover_state(vp, rho, window.soc_eod if soc is None else soc)
     # bus current at the lift-motor current limit and the throttle ceiling
     i_avail = vp.rotor.n_r * 0.95 * vp.motor_r.I_lim + vp.battery.I_av
     p_avail = es.v_bus * i_avail
@@ -354,11 +416,20 @@ def build_budget(
     limits: descent.DescentLimits,
     a_plan: float = 2.5,
     a_fwd_source: str | None = None,
+    *,
+    bp: BackTransitionParams | None = None,
+    v0_entry: float | None = None,
 ) -> BudgetResult:
-    """First-pass mission budget from the component models and analyses D and F."""
+    """First-pass budget of ONE leg from the component models and analyses D and F.
+
+    `bp` is the controller of the back transition and `v0_entry` its entry ground speed; None
+    keeps the old behaviour (code defaults, entry at the cruise speed).
+    """
     soc = mp.soc_mean
     rho_cruise = float(atmosphere.density(mp.cruise_amsl_m, mp.isa_offset_k))
     v_cruise = mp.v_cruise or best_range_speed(vp, rho_cruise, soc)
+    mp = replace(mp, v_climb=climb_speed(replace(mp, v_cruise=v_cruise)),
+                 v_glide=glide_speed(replace(mp, v_cruise=v_cruise)))  # fmt: skip
     tr = trim.steady_trim(vp, rho_cruise, v_cruise, 0.0, soc)
     e_cruise = tr.elec.power / v_cruise
     segs = {
@@ -366,7 +437,9 @@ def build_budget(
         "fwd_transition": forward_transition_estimate(vp, mp, soc, source=a_fwd_source),
         "climb": climb_segment(vp, mp, soc),
         "descent": descent_segment(vp, mp, soc),
-        "back_transition": back_transition_segment(vp, mp, v_cruise, soc, a_plan),
+        "back_transition": back_transition_segment(
+            vp, mp, v_cruise if v0_entry is None else v0_entry, soc, a_plan, bp
+        ),
         "landing": landing_segment(vp, mp, soc, limits),
     }
     res = reserve_energy(
@@ -383,13 +456,146 @@ def build_budget(
     )  # fmt: skip
 
 
+# ---- the mission: legs, reserve once ------------------------------------------------------------
+
+
+@dataclass
+class MissionBudget:
+    """One or two legs and one reserve.
+
+    `r_m` is the one-way distance every leg covers (climb and descent included); a round trip
+    flies 2 r_m. The cruise distance of a leg is `r_m` minus its fixed segments' distance, so
+    the energy is linear in `r_m` and the range is solved in closed form.
+    """
+
+    kind: str  # "round_trip" | "one_way"
+    legs: list[tuple[str, float, BudgetResult]]  # (name, mass_kg, leg budget with reserve_J = 0)
+    reserve_J: float  # counted once: the larger of the landings' reserves
+    reserve_parts: dict[str, dict[str, float]]  # per leg: reserve_energy() output
+    drop_J: float  # t_drop_s x hover power at the loaded mass (round trip only)
+    usable_J: float
+    record: RunRecord
+    notes: dict[str, float | str] = field(default_factory=dict)
+    vehicles: dict[str, VehicleParams] = field(default_factory=dict)  # leg -> vehicle at its mass
+    profiles: dict[str, MissionProfile] = field(default_factory=dict)  # leg -> profile as run
+
+    @property
+    def fixed_J(self) -> float:
+        return sum(b.fixed_J for _, _, b in self.legs)
+
+    @property
+    def fixed_distance_m(self) -> float:
+        """The shortest one-way distance that exists: the largest leg's fixed segments."""
+        return max(b.fixed_distance_m for _, _, b in self.legs)
+
+    def total_J(self, r_m: float) -> float:
+        if r_m < self.fixed_distance_m:
+            raise ValueError("range shorter than the distance covered by the fixed segments")
+        legs = sum(
+            b.fixed_J + (r_m - b.fixed_distance_m) * b.e_cruise_J_per_m for _, _, b in self.legs
+        )
+        return legs + self.drop_J + self.reserve_J
+
+    def margin_J(self, r_m: float) -> float:
+        return self.usable_J - self.total_J(r_m)
+
+    @property
+    def max_range_m(self) -> float:
+        """The one-way distance (radius for a round trip) that spends the usable energy."""
+        num = self.usable_J - self.fixed_J - self.reserve_J - self.drop_J
+        num += sum(b.fixed_distance_m * b.e_cruise_J_per_m for _, _, b in self.legs)
+        r = num / sum(b.e_cruise_J_per_m for _, _, b in self.legs)
+        return r if r >= self.fixed_distance_m else 0.0
+
+    def table(self, ranges_m: list[float]) -> list[dict[str, float | bool]]:
+        """Budget by range: leg-prefixed segments in Wh, cruise, reserve, total and margin."""
+        rows: list[dict[str, float | bool]] = []
+        for r in ranges_m:
+            row: dict[str, float | bool] = {"range_km": r / 1e3}
+            cruise = 0.0
+            for name, _, b in self.legs:
+                for seg, sr in b.segments.items():
+                    row[f"{name}_{seg}_Wh"] = sr.energy_J / J_PER_WH
+                cruise += (r - b.fixed_distance_m) * b.e_cruise_J_per_m
+            row["cruise_Wh"] = cruise / J_PER_WH
+            row["reserve_Wh"] = self.reserve_J / J_PER_WH
+            row["drop_Wh"] = self.drop_J / J_PER_WH
+            row["total_Wh"] = self.total_J(r) / J_PER_WH
+            row["usable_Wh"] = self.usable_J / J_PER_WH
+            row["margin_Wh"] = self.margin_J(r) / J_PER_WH
+            row["margin_pct"] = 100.0 * self.margin_J(r) / self.usable_J
+            row["fits"] = self.margin_J(r) >= 0.0
+            rows.append(row)
+        return rows
+
+    def conflicts(self, required_m: tuple[float, ...] = (100e3, 113e3)) -> dict[float, bool]:
+        """True where the requirement (the same one-way distance or radius) exceeds the range."""
+        return {r: self.max_range_m < r for r in required_m}
+
+
+def build_mission(
+    vp: VehicleParams,
+    mp: MissionProfile,
+    window: BatteryWindow,
+    limits: descent.DescentLimits,
+    a_plan: float,
+    kind: str,
+    a_fwd_by_leg: dict[str, float],
+    bp: BackTransitionParams | None = None,
+    v0_entry: float | None = None,
+    a_fwd_source: str | None = None,
+) -> MissionBudget:
+    """Budget of a `round_trip` (legs "out" and "ret") or a `one_way` (leg "leg").
+
+    `mp` is the profile at the site (`mission_at_site`). The loaded leg flies at `vp.m`, the
+    return leg at `vp.m - payload_kg`. Nothing is raised for an infeasible operating point: the
+    numbers are returned and `soc_trace` judges the feasibility.
+    """
+    if kind == "round_trip":
+        masses = [("out", vp.m), ("ret", vp.m - mp.payload_kg)]
+    elif kind == "one_way":
+        masses = [("leg", vp.m)]
+    else:
+        raise ValueError(f"unknown mission kind {kind!r}")
+    legs: list[tuple[str, float, BudgetResult]] = []
+    parts: dict[str, dict[str, float]] = {}
+    vehicles: dict[str, VehicleParams] = {}
+    profiles: dict[str, MissionProfile] = {}
+    for name, m in masses:
+        vpl = replace(vp, m=m)
+        mpl = replace(mp, a_fwd=a_fwd_by_leg[name])
+        b = build_budget(
+            vpl, mpl, window, limits, a_plan, a_fwd_source, bp=bp, v0_entry=v0_entry
+        )
+        parts[name] = {k.removeprefix("reserve_"): v for k, v in b.notes.items()
+                       if k.startswith("reserve_")}  # fmt: skip
+        legs.append((name, m, replace(b, reserve_J=0.0)))
+        vehicles[name] = vpl
+        profiles[name] = replace(mpl, v_cruise=float(b.notes["v_cruise"]))
+    binding = max(parts, key=lambda k: parts[k]["total"])
+    rho_site = float(atmosphere.density(mp.ground_amsl_m, mp.isa_offset_k))
+    drop = 0.0
+    if kind == "round_trip" and mp.t_drop_s > 0.0:
+        drop = mp.t_drop_s * trim.hover_power(vehicles["out"], rho_site, mp.soc_mean)
+    return MissionBudget(
+        kind, legs, parts[binding]["total"], parts, drop, window.usable_J(vp),
+        make_record(vp, mp, window, limits, a_plan, kind),
+        {"reserve_binding_leg": binding, "soc_mean": mp.soc_mean},
+        vehicles, profiles,
+    )  # fmt: skip
+
+
 __all__ = [
     "BatteryWindow",
     "BudgetResult",
+    "MissionBudget",
     "MissionProfile",
     "SegmentResult",
     "best_range_speed",
     "build_budget",
+    "build_mission",
     "cruise_sweep",
+    "design_speeds",
     "hover_check",
+    "mission_at_site",
 ]

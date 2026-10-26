@@ -141,7 +141,10 @@ class FCfg(_Strict):
 
 
 class ECfg(_Strict):
-    cruise_amsl_m: list[float] = [1000.0, 5000.0]
+    # airfield elevations; the cruise altitude is the site plus mission.profile.climb_height_m
+    sites_amsl_m: list[float] = [0.0, 1500.0, 2500.0, 5000.0]
+    missions: list[Literal["round_trip", "one_way"]] = ["round_trip", "one_way"]
+    # report points: the one-way distance, or the radius of a round trip
     ranges_km: list[float] = [50.0, 100.0, 113.0, 150.0]
     a_plan_fallback_ms2: float = Field(2.5, gt=0.0)  # used when D produced no recommendation
     # forward-transition acceleration: from Q2 at E's own site ("case"), the worst over the Q2
