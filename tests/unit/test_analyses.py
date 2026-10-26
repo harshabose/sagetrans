@@ -7,11 +7,11 @@ import pytest
 from sagetrans import atmosphere
 from sagetrans.analysis import braking, zero_loss
 from sagetrans.analysis.common import Scenario
-from sagetrans.analysis.zero_loss import DecelProfile, analyse, solve_point
+from sagetrans.analysis.zero_loss import DEFAULT_LIMITS, DecelProfile, analyse, solve_point
 from sagetrans.control.ardupilot_like import BackTransitionParams, Position1Controller
 from sagetrans.dynamics import trim
 from sagetrans.dynamics.simulate import simulate
-from sagetrans.physics import aero
+from sagetrans.physics import aero, rotor
 from sagetrans.physics.params import (
     LiftRotorParams,
     VehicleParams,
@@ -165,6 +165,58 @@ def test_a_limit_is_the_same_at_altitude_in_equivalent_airspeed_but_throttle_is_
     d_sl = analyse(VP, SC, v_eas, DecelProfile(0.8))
     d_hi = analyse(VP, hi, v_hi, DecelProfile(0.8))
     assert d_hi.delta_cmd[-1] > d_sl.delta_cmd[-1]
+
+
+def test_a_vrs_ratio_is_always_reported_and_the_default_is_report_only():
+    assert zero_loss.DEFAULT_LIMITS.vrs_limit is None and zero_loss.LEGACY_LIMITS.vrs_limit is None
+    r = analyse(VP, SC, 12.0, DecelProfile(0.8), n=60)
+    assert math.isfinite(r.vrs_min) and r.vrs_min < 0.0  # nose-up: flow comes up through the discs
+    assert 0.0 <= r.vrs_min_t <= r.t[-1]
+    assert "vrs" not in r.margins and r.feasible
+    # nose-up pitch gives a negative ratio, level flight zero, and the helper is rotor.vrs_ratio
+    rho = SC.rho
+    assert zero_loss._vrs_ratio(VP, rho, 12.0, 0.0, 100.0) == 0.0
+    assert zero_loss._vrs_ratio(VP, rho, 12.0, 0.1, 100.0) == pytest.approx(
+        float(rotor.vrs_ratio(-12.0 * math.sin(0.1), 100.0, rho, VP.rotor))
+    )
+    assert zero_loss._vrs_ratio(VP, rho, 12.0, 0.1, 100.0) < 0.0
+    assert math.isfinite(zero_loss._vrs_ratio(VP, rho, 12.0, 0.1, 0.0))  # T_r = 0: floored
+
+
+def test_a_vrs_margin_has_sign_and_scale_and_enforces_only_when_a_limit_is_set():
+    r0 = analyse(VP, SC, 12.0, DecelProfile(0.8), n=60)
+    prof = DecelProfile(0.8)
+    far = analyse(VP, SC, 12.0, prof, replace(DEFAULT_LIMITS, vrs_limit=2 * r0.vrs_min), n=60)
+    near = analyse(VP, SC, 12.0, prof, replace(DEFAULT_LIMITS, vrs_limit=0.5 * r0.vrs_min), n=60)
+    # margin = (ratio - limit) / |limit|: +0.5 where the ratio is half the limit
+    assert far.feasible and far.margins["vrs"].min() == pytest.approx(0.5)
+    assert not near.feasible and "vrs" in near.violations
+    # the margin does not change any other verdict or number
+    assert far.violations == r0.violations and np.array_equal(far.theta, r0.theta)
+    # a ratio of exactly the limit gives 0; a ratio of 0 gives +1; an unsolved sample gives -1
+    lim = replace(DEFAULT_LIMITS, vrs_limit=-0.23)
+    p = solve_point(VP, RHO, 12.0, 0.5)
+    one = np.array([True, False])
+    m, (_, _, _, ratio) = zero_loss._margins(
+        VP, SC, lim, (0.0, 0.2), np.array([0.0, 1.0]), np.full(2, 12.0), np.array([0.0, math.nan]),
+        np.array([p.T_r, math.nan]), np.full(2, p.omega), one, np.zeros(2), np.zeros(2), 0.0,
+    )  # fmt: skip
+    assert ratio[0] == 0.0 and m["vrs"][0] == pytest.approx(1.0) and m["vrs"][1] == -1.0
+    m2, _ = zero_loss._margins(
+        VP, SC, replace(lim, vrs_limit=float(ratio[0]) - 1.0), (0.0, 0.2), np.array([0.0]),
+        np.array([12.0]), np.array([0.0]), np.array([p.T_r]), np.array([p.omega]),
+        np.array([True]), np.zeros(1), np.zeros(1), 0.0,
+    )  # fmt: skip
+    assert m2["vrs"][0] == pytest.approx(1.0)
+
+
+def test_a_window_reports_vrs_at_its_edges_and_enforcing_trims_only_the_top():
+    w = zero_loss.feasible_window(VP, SC, 12.0)[0]
+    assert w.vrs_lo > w.vrs_hi and w.vrs_hi < 0.0 and math.isfinite(w.vrs_lo)
+    enforced = zero_loss.feasible_window(VP, SC, 12.0, replace(DEFAULT_LIMITS, vrs_limit=-0.23))[0]
+    assert enforced.a_lo == w.a_lo  # the lower edge is the drag floor, untouched
+    assert enforced.a_hi < w.a_hi and enforced.bind_hi == ["vrs"]
+    assert enforced.vrs_hi == pytest.approx(-0.23, abs=0.01)
 
 
 # ---- analysis D ------------------------------------------------------------------------------

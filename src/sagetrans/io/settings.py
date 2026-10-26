@@ -80,6 +80,9 @@ class ACfg(_Strict):
     # limit) to the angle where C_L = cl_frac x C_L,max (None = the old symmetric stall check)
     alpha_min_deg: float | None = 0.0
     cl_frac: float | None = Field(0.8, gt=0.0, le=1.0)
+    # False: report the rotor V_c / v_h ratio only. True: a path or point is also infeasible when
+    # the ratio is below -descent.kappa (mission.yaml)
+    vrs_enforce: bool = False
 
 
 class DRecCfg(_Strict):

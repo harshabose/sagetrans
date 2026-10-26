@@ -34,6 +34,10 @@ A:                         # zero-altitude-loss feasibility
   # C_L,max is provisional (alpha_s in vehicle.yaml), so cl_frac is a setting. 1.0 = the lift peak.
   alpha_min_deg: 0.0
   cl_frac: 0.8
+  # Vortex-ring check. false = report the rotor V_c / v_h ratio only (the vrs_* columns);
+  # true = also infeasible when the ratio is below -descent.kappa (mission.yaml). Report only by
+  # default: kappa is from near-zero-forward-speed data and A runs at 12 to 22 m/s.
+  vrs_enforce: false
 
 D:                         # braking and Q_TRANS_DECEL
   scenarios: [S-01, S-02, S-03, S-05, S-06, S-07]   # S-01 first: it sets the trade curve

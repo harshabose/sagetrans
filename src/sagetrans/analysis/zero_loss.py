@@ -47,7 +47,9 @@ TOL = 1e-9  # a margin below -TOL is a violation
 class ActuatorLimits:
     delta_r_max: float = 0.95  # Q_M_SPIN_MAX-like ceiling on the rotor throttle command
     theta_max: float = 0.6  # rad, pitch limit (never binds: theta = alpha <= alpha_hi at gamma = 0)
-    vrs_limit: float | None = None  # V_c / v_h lower bound; None = report only (unsourced)
+    # V_c / v_h onset bound (negative, e.g. -kappa); None = report only (the ratio is always
+    # reported, and enforced as the `vrs` margin only when this is set)
+    vrs_limit: float | None = None
     # rad; None = no lower band (legacy)
     alpha_min: float | None = 0.0
     # alpha_hi where C_L = cl_frac * C_L,max on the rising side; 1.0 = the lift peak;
@@ -97,6 +99,13 @@ def _alpha_band(vp: VehicleParams, limits: ActuatorLimits) -> tuple[float, float
 
 def _is_legacy(band: tuple[float, float] | None) -> bool:
     return band is None or band == (THETA_LO, THETA_HI)
+
+
+def _vrs_ratio(vp: VehicleParams, rho: float, V: float, theta: float, t_r: float) -> float:
+    """V_c / v_h at the rotors: V_c = -V sin(theta) (gamma = 0, so nose-up gives a negative
+    ratio, the flow coming up through the discs), v_h from the rotor thrust. `rotor.vrs_ratio`
+    floors T_r, so the ratio is finite (very negative) as T_r -> 0."""
+    return float(rotor.vrs_ratio(-V * math.sin(theta), t_r, rho, vp.rotor))
 
 
 class _Balance:
@@ -236,9 +245,10 @@ def _margins(
     om_dot: np.ndarray,
     th_dot: np.ndarray,
     v1_0: float,
-) -> tuple[dict[str, np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Normalised margins (>= 0 is feasible) along a profile, and the throttle, motor current and
-    bus voltage they were computed from. Shared by the path check and the window scan."""
+) -> tuple[dict[str, np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    """Normalised margins (>= 0 is feasible) along a profile, and the throttle, motor current, bus
+    voltage and V_c / v_h ratio (NaN where unsolved) they were computed from. Shared by the path
+    check and the window scan. The `vrs` margin exists only when `limits.vrs_limit` is set."""
     n = len(V)
     rho = scen.rho
     delta, i_m, vb = np.zeros(n), np.zeros(n), np.zeros(n)
@@ -267,6 +277,10 @@ def _margins(
     )  # fmt: skip
     torque_req = q_i + vp.rotor.I_rot * om_dot
     alpha = th + vp.wing.i_w
+    ratio = np.array(
+        [_vrs_ratio(vp, rho, float(V[k]), float(th[k]), float(t_r[k])) if solved[k] else math.nan
+         for k in range(n)]
+    )  # fmt: skip
     m = {
         "pitch_solution": np.where(solved, 1.0, -1.0),
         "thrust_sign": np.where(solved, t_r / (vp.m * G), -1.0),
@@ -284,8 +298,10 @@ def _margins(
         m["alpha_high"] = (a_hi - alpha) / (a_hi - a_lo)
     else:  # legacy symmetric stall check
         m["stall"] = (vp.wing.alpha_s - np.abs(alpha)) / vp.wing.alpha_s
+    if limits.vrs_limit is not None:
+        m["vrs"] = (ratio - limits.vrs_limit) / abs(limits.vrs_limit)
     out = {name: np.where(np.isnan(v), -1.0, v) for name, v in m.items()}
-    return out, (delta, i_m, vb)
+    return out, (delta, i_m, vb, ratio)
 
 
 def _violations(margins: dict[str, np.ndarray], t: np.ndarray) -> dict[str, float]:
@@ -311,6 +327,8 @@ class ZeroLossResult:
     V_bus: np.ndarray
     feasible: bool
     violations: dict[str, float]  # violated margin -> first time [s], earliest first
+    vrs_min: float  # most negative V_c / v_h on the path (reported always; nan if nothing solved)
+    vrs_min_t: float  # time [s] at which it occurs
     record: RunRecord = field(default_factory=lambda: make_record())
 
 
@@ -361,12 +379,15 @@ def analyse(
         th_dot = np.gradient(np.concatenate([[th[0]], th]), tt)[1:]
     else:
         om_dot, th_dot = np.gradient(om, t), np.gradient(th, t)
-    margins, (delta, i_m, vb) = _margins(
+    margins, (delta, i_m, vb, ratio) = _margins(
         vp, scen, limits, band_alpha, t, V, th, t_r, om, solved, om_dot, th_dot, v1_0
     )  # fmt: skip
     viol = _violations(margins, t)
+    finite = np.isfinite(ratio)
+    k_min = int(np.nanargmin(ratio)) if finite.any() else -1
+    vrs_min, vrs_t = (float(ratio[k_min]), float(t[k_min])) if k_min >= 0 else (math.nan, math.nan)
     return ZeroLossResult(
-        t, V, th, t_r, om, margins, delta, i_m, vb, not viol, viol,
+        t, V, th, t_r, om, margins, delta, i_m, vb, not viol, viol, vrs_min, vrs_t,
         make_record(vp, scen, profile, limits, v1_0, t_p, v0),
     )  # fmt: skip
 
@@ -383,6 +404,8 @@ class Window:
     T_r_hi: float
     bind_lo: list[str]  # every margin violated just below / above the window
     bind_hi: list[str]
+    vrs_lo: float = math.nan  # V_c / v_h at the feasible point on each edge (reported always)
+    vrs_hi: float = math.nan
 
 
 def _probe(
@@ -465,8 +488,12 @@ def feasible_window(
                 bisect,
             )  # fmt: skip
         windows.append(
-            Window(lo_a, hi_a, lo_pt.theta, hi_pt.theta, lo_pt.T_r, hi_pt.T_r, bind_lo, bind_hi)
-        )
+            Window(
+                lo_a, hi_a, lo_pt.theta, hi_pt.theta, lo_pt.T_r, hi_pt.T_r, bind_lo, bind_hi,
+                _vrs_ratio(vp, scen.rho, V, lo_pt.theta, lo_pt.T_r),
+                _vrs_ratio(vp, scen.rho, V, hi_pt.theta, hi_pt.T_r),
+            )
+        )  # fmt: skip
     return windows
 
 
@@ -563,15 +590,19 @@ def feasibility_map(
     limits: ActuatorLimits = DEFAULT_LIMITS,
     n: int = 60,
 ) -> dict[str, np.ndarray | list[list[dict[str, float]]]]:
-    """Feasibility over (V0, a), and for each cell every violated margin with its first time."""
+    """Feasibility over (V0, a), and for each cell every violated margin with its first time,
+    plus the most negative V_c / v_h on the path and when it occurs (`vrs_min`, `vrs_min_t`)."""
     feasible = np.zeros((len(v0_grid), len(a_grid)), dtype=bool)
+    vrs = np.full(feasible.shape, math.nan)
+    vrs_t = np.full(feasible.shape, math.nan)
     viol: list[list[dict[str, float]]] = [[{} for _ in a_grid] for _ in v0_grid]
     for i, v0 in enumerate(v0_grid):
         for j, a in enumerate(a_grid):
             r = analyse(vp, scen, v0, DecelProfile(a), limits, n=n)
             feasible[i, j] = r.feasible
             viol[i][j] = r.violations
-    return {"feasible": feasible, "violations": viol}
+            vrs[i, j], vrs_t[i, j] = r.vrs_min, r.vrs_min_t
+    return {"feasible": feasible, "violations": viol, "vrs_min": vrs, "vrs_min_t": vrs_t}
 
 
 __all__ = [

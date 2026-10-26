@@ -252,6 +252,13 @@ def test_one_command_produces_a_complete_traceable_result_and_reuses_the_cache(c
                  "A_feasibility.csv", "D_a_eq.csv", "F_descent.csv", "E_summary.csv",
                  "Q2_pusher_margin.csv"):  # fmt: skip
         assert (f / name).is_file(), name
+    # analysis A writes the VRS ratio (report only by default) and no NaN or inf anywhere
+    a_win = (f / "A_window.csv").read_text(encoding="utf-8")
+    a_feas = (f / "A_feasibility.csv").read_text(encoding="utf-8")
+    assert "vrs_lo,vrs_hi" in a_win and "vrs_min,vrs_min_t_s" in a_feas
+    for text in (a_win, a_feas):
+        assert "nan" not in text.lower() and "inf" not in text.lower()
+    assert "vrs" not in a_win.splitlines()[1].split(",")[6:8]  # report only: not in bind_lo/hi
     rec = json.loads((f / "run_record.json").read_text(encoding="utf-8"))
     assert rec["mode"] == "draft" and rec["label"] == "DRAFT" and rec["settings_hash"]
     assert rec["config_hash"] and rec["outputs"] and all(check_outputs(f).values())
@@ -304,3 +311,25 @@ def test_the_live_configs_folder_loads_and_passes_the_preflight():
     assert inp.vehicle.m > 0 and inp.scenarios and inp.study.analyses
     assert all(i.hi > i.lo for i in stages.sensitivity_model(inp).inputs)
     assert stages.plan_tasks(inp)
+
+
+def test_vrs_enforce_setting_reaches_analysis_a(cfgdir, tmp_path):
+    (cfgdir / "study.yaml").write_text(
+        SMOKE.replace("samples: 20}", "samples: 20, vrs_enforce: true}").replace(
+            "analyses: [A, D, F, E, Q2]", "analyses: [A]"
+        ),
+        encoding="utf-8",
+    )
+    out = study.run_study(cfgdir, out_dir=tmp_path / "res", workers=1, log=lambda s: None)
+    assert out.exit_code == study.EXIT_OK, out.messages
+    rows = (out.folder / "A_window.csv").read_text(encoding="utf-8").splitlines()
+    assert any("vrs" in r.split(",")[7] for r in rows[1:])  # the upper edge is now set by it
+    # enforcing needs kappa: without it the task reports an error instead of guessing
+    text = (cfgdir / "mission.yaml").read_text(encoding="utf-8")
+    (cfgdir / "mission.yaml").write_text(
+        "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("kappa:")),
+        encoding="utf-8",
+    )
+    out2 = study.run_study(cfgdir, out_dir=tmp_path / "res2", workers=1, log=lambda s: None)
+    report = (out2.folder / "report.md").read_text(encoding="utf-8") if out2.folder else ""
+    assert "vrs_enforce needs mission.descent.kappa" in report

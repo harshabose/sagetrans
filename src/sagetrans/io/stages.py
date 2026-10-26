@@ -48,6 +48,11 @@ def tas(eas: float, scen: Scenario) -> float:
     return eas * math.sqrt(RHO0 / scen.rho)
 
 
+def _num(x: float) -> float | str:
+    """A table cell: the number, or empty if it is not finite (no NaN or inf in written files)."""
+    return float(x) + 0.0 if math.isfinite(x) else ""  # + 0.0: no "-0.0" in the files
+
+
 def _attempt(label: str, fn: Callable[[], Any], errors: list[str]) -> Any:
     """Run one piece of a task; a failure is recorded in `errors` with its traceback tail."""
     t = time.time()
@@ -109,9 +114,13 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
 
     def stage_a() -> None:
         c = inp.study.A
+        kappa = inp.descent.kappa
+        if c.vrs_enforce and kappa is None:
+            raise ValueError("A.vrs_enforce needs mission.descent.kappa, which is not set")
         lim = zero_loss.ActuatorLimits(
             alpha_min=None if c.alpha_min_deg is None else math.radians(c.alpha_min_deg),
             cl_frac=c.cl_frac,
+            vrs_limit=-kappa if c.vrs_enforce and kappa is not None else None,
         )
         maps: dict[str, Any] = {}
         rows: Table = []
@@ -132,6 +141,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                         "V0_tas_ms": v_grid[i], "decel_ms2": a,
                         "feasible": bool(fm["feasible"][i, j]),
                         "violated": ";".join(f"{k}@{t:.2f}" for k, t in viol.items()),
+                        "vrs_min": _num(fm["vrs_min"][i, j]),
+                        "vrs_min_t_s": _num(fm["vrs_min_t"][i, j]),
                     })  # fmt: skip
                 base = {"scenario": name, "altitude_m": sc.altitude_amsl_m, "V0_eas_ms": ve,
                         "V0_tas_ms": v_grid[i]}  # fmt: skip
@@ -140,11 +151,13 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                     win.append({**base, "a_lo": w.a_lo, "a_hi": w.a_hi,
                                 "bind_lo": ";".join(w.bind_lo), "bind_hi": ";".join(w.bind_hi),
                                 "theta_lo_deg": math.degrees(w.theta_lo),
-                                "theta_hi_deg": math.degrees(w.theta_hi)})  # fmt: skip
+                                "theta_hi_deg": math.degrees(w.theta_hi),
+                                "vrs_lo": _num(w.vrs_lo), "vrs_hi": _num(w.vrs_hi)})  # fmt: skip
                 if not windows:  # no feasible deceleration: say what fails closest to one
                     _, names = zero_loss.closest_to_feasible(vps, sc, v_grid[i], lim)
                     win.append({**base, "a_lo": "", "a_hi": "", "bind_lo": ";".join(names),
-                                "bind_hi": "", "theta_lo_deg": "", "theta_hi_deg": ""})  # fmt: skip
+                                "bind_hi": "", "theta_lo_deg": "", "theta_hi_deg": "",
+                                "vrs_lo": "", "vrs_hi": ""})  # fmt: skip
         out["tables"]["A_feasibility"] = rows
         out["tables"]["A_window"] = win
         out["maps"] = maps

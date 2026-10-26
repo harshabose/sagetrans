@@ -67,7 +67,9 @@ def _section_a(q: dict[str, Any], figs: dict[str, Any]) -> str | None:
              "off, rotors already spinning. The wing's angle of attack must stay inside a band "
              "(see `study.yaml`, `A:`), so a profile that needs negative angle of attack or one "
              "past the lift limit is infeasible. The band's upper edge rests on a provisional "
-             "C_L,max.", ""]  # fmt: skip
+             "C_L,max. `vrs_min` / `vrs_lo` / `vrs_hi` give the rotor V_c / v_h ratio (negative = "
+             "flow up through the discs); it is reported only, unless `vrs_enforce` is set in "
+             "`study.yaml`.", ""]  # fmt: skip
     for name, m in q.get("maps", {}).items():
         f = m["feasible"]
         grid = [{"V0_eas": v, **{f"a={a:g}": ("feasible" if f[i, j] else "no")

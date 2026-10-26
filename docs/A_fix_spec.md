@@ -1,6 +1,6 @@
 # Analysis A fix specification (`zero_loss.py`): hand-off for an implementing agent
 
-Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. Nothing here has been implemented yet; every number in "Expected results" comes from scratch scripts and must be re-baselined against the real configs (section 9).
+Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: implemented** (pull request, 26 Oct 2026). Acceptance list checked against the real configs: windows within 0.02 of the numbers below (about 0.025 at V = 20, near the fold), constant-a ranges V0 = 14: 0.46 to 1.18; 16: 0.60 to 1.09; 17: 0.68 to 1.08; 20: 0.93 to 1.08; 22.5: none. Three deviations from this spec: (1) `feasible_decel_range` scans 48 points, not 24, because at 24 the V0 = 20 range (0.93 to 1.08) was found by a single grid point 0.002 below its upper edge; (2) the first-sample `np.gradient` change applies only to the banded path, because B2's start must stay bit-for-bit unchanged and uses `LEGACY_LIMITS`; (3) the existing A tests were adapted to the new API and a few were added (160 tests pass), although this spec left tests to the owner. The numbers in "Expected results" below are the original scratch-script numbers and are kept for reference. **Addendum (section 3.7, VRS check): implemented in the same PR** (report only by default; `vrs_enforce: true` enforces `-descent.kappa`). Checked against the real configs: report-only results are bit-identical to the first PR commit; ratio at `a_hi` within 0.01 of the table in 3.7 for V = 10 to 20 m/s; enforced windows within 0.02 m/s^2 of its last column; V0 = 17 / a = 1.04 becomes infeasible with `vrs`, V0 = 16 and 14 at a = 0.8 stay feasible. At V = 22.5 m/s the ratio at `a_hi` is -7.2 (T_r = 0.07 N); on infeasible paths where T_r hits the 1e-6 floor `vrs_min` can be very large and negative (about -12000 at V0 = 22.5, a = 1.4): finite, as required, but not meaningful.
 
 ## 0. Decisions already taken by the project owner (do not re-open)
 
@@ -98,6 +98,33 @@ def feasible_window(vp, scen, V, limits=DEFAULT_LIMITS, t_p=0.0,
 - `max_feasible_decel(...)` stays as a thin wrapper returning `a_max` (0.0 if none). Rewrite its docstring: the old "feasibility is not monotone / islands" paragraph is obsolete.
 - `feasibility_map(...)`: returns `{"feasible": bool[nV, na], "violations": [[dict]]}`; drop `"whole"`.
 
+### 3.7 VRS check (addendum, requested 26 Oct 2026; not in the first PR)
+
+Today the margin is declared and never checked: `ActuatorLimits.vrs_limit` exists and is unused ("None = report only (unsourced)"), and nothing in A computes the ratio. In A the rotors see `Vc = -V sin(theta)` (gamma = 0, so a nose-up pitch gives a **negative** ratio, i.e. the flow comes up through the discs), with `v_h = sqrt(T_r / (2 rho A_tot))` as in `rotor.vrs_ratio`. Two parts: always report the ratio, and optionally enforce it.
+
+1. **Helper.** Module-level `_vrs_ratio(vp, rho, V, theta, t_r) -> float` returning `float(rotor.vrs_ratio(-V * math.sin(theta), t_r, rho, vp.rotor))`; use `scen.rho`, as the rest of `_margins` does. `rotor.vrs_ratio` already floors `T_r` at 1e-6, so there is no division by zero; at `T_r = 0` the ratio is just very large and negative (about -7 in the preview below, and unbounded as `T_r -> 0`).
+2. **Always-on reporting (no change to any verdict).**
+   - `analyse`: compute the ratio on every solved sample (NaN where unsolved); add `vrs_min` and `vrs_min_t` to `ZeroLossResult` (the most negative ratio and when it occurs, `nan` if no sample solved).
+   - `feasible_window`: add `vrs_lo` and `vrs_hi` to `Window`, the ratio at the feasible point on each edge (`a_lo`, `a_hi`).
+3. **Optional margin `vrs`.** In `_margins`, only when `limits.vrs_limit is not None`:
+   `m["vrs"] = (ratio - limits.vrs_limit) / abs(limits.vrs_limit)`, with unsolved samples as NaN (-> -1 by the existing NaN rule). `vrs_limit` is negative (onset at ratio <= -kappa), so 0 ratio gives margin +1 and a ratio of `vrs_limit` gives 0. The default `vrs_limit = None` leaves every existing result **bit-identical**, and `LEGACY_LIMITS` keeps `None`. Update the field comment to "V_c / v_h onset bound (negative); None = report only".
+4. **Source of the number.** `mission.yaml` `descent.kappa` = 0.23 (Johnson, NASA/TP-2005-213477, Yeates data at near-zero forward speed; the most conservative onset, still to be confirmed against the PDF). `stage_a` takes `vrs_limit = -inp.descent.kappa` so there is one source of truth. Do not hard-code 0.23 in `zero_loss.py`.
+5. **No other consumer changes.** `dynamics/events.py` `vrs_entry` and F's `vrs_ratio_at` are untouched.
+
+**What the preview shows (scratch script, hand-copied vehicle, pusher off, grid 0.02; re-baseline).** The ratio is about 0 at the lower window edge (theta near 0, so no axial flow) and goes strongly negative toward the upper edge, because `T_r -> 0` there and `v_h -> 0`:
+
+| V (m/s) | ratio at a_lo | ratio at a_hi (theta, T_r) | window, report only | window with ratio >= -0.23 |
+| --- | --- | --- | --- | --- |
+| 22.5 | 0.00 | -7.20 (2.5 deg, 0 N) | 1.20 to 1.32 | 1.20 to 1.28 |
+| 20 | 0.00 | -0.73 (3.9 deg, 14 N) | 0.94 to 1.16 | 0.94 to 1.12 |
+| 18 | 0.00 | -0.59 (5.2 deg, 30 N) | 0.76 to 1.08 | 0.76 to 1.04 |
+| 16 | 0.00 | -0.59 (7.1 deg, 45 N) | 0.60 to 1.08 | 0.60 to 1.00 |
+| 14 | 0.00 | -0.53 (9.1 deg, 69 N) | 0.46 to 1.16 | 0.46 to 1.02 |
+| 12 | 0.00 | -0.34 (9.1 deg, 121 N) | 0.34 to 1.28 | 0.34 to 1.10 |
+| 10 | n/a | n/a | 0.24 to 1.36 | 0.24 to 1.32 |
+
+Along paths (`analyse`): V0 = 17, a = 1.04 reaches ratio -0.29 at t = 0.8 s (V = 16.2 m/s); V0 = 16, a = 0.8 reaches -0.11 at t = 3.9 s (V = 12.8); V0 = 14, a = 0.8 reaches -0.11 at t = 1.5 s (V = 12.8). So enforcing -0.23 would make the V0 = 17, a = 1.04 path infeasible and leave the two a = 0.8 paths feasible. Enforcement removes the top 0.04 to 0.18 m/s^2 of each window and does not change the lower edge.
+
 ## 4. Config
 
 `io/settings.py` `ACfg` add:
@@ -109,6 +136,8 @@ cl_frac: float | None = 0.8
 
 `configs/study.yaml` `A:` block add `alpha_min_deg: 0.0` and `cl_frac: 0.8` (with a comment: lift fit range lower end; proposal rule 8.6; C_L,max provisional). Keep `v0_eas_ms`, `decel_ms2`, `max_decel_v0_eas_ms`, `samples` as they are: `v0_eas_ms` is the free entry-speed axis.
 
+VRS addendum (3.7): also add `vrs_enforce: bool = False` to `ACfg` and `A:` in `study.yaml` (comment: false = report the V_c / v_h ratio only; true = infeasible when the ratio is below -descent.kappa).
+
 ## 5. `stage_a` in `io/stages.py`
 
 - Build `lim = ActuatorLimits(alpha_min=math.radians(c.alpha_min_deg) if c.alpha_min_deg is not None else None, cl_frac=c.cl_frac)` and pass it to `feasibility_map`, `feasible_window`, `feasible_decel_range` (today `stage_a` passes no limits).
@@ -116,6 +145,7 @@ cl_frac: float | None = 0.8
 - New table `A_window`: `scenario, altitude_m, V0_eas_ms, V0_tas_ms, a_lo, a_hi, bind_lo, bind_hi, theta_lo_deg, theta_hi_deg` (one row per window; a row with empty `a_lo`/`a_hi` and the violating names when none exists), evaluated at each `v0` in `c.v0_eas_ms`, pusher off.
 - `A_max_feasible_decel`: columns `min_feasible_decel_ms2`, `max_feasible_decel_ms2`, `islands` (rename from `max_feasible_decel_ms2_pre_spun`; no other consumer of the old name was found in `src`).
 - `out["maps"]`: keep the structure, using the new keys.
+- VRS addendum (3.7): `lim` also gets `vrs_limit=-inp.descent.kappa if c.vrs_enforce else None`. `A_feasibility` gains a `vrs_min` column (and `vrs_min_t_s`); `A_window` gains `vrs_lo` and `vrs_hi`. These columns are written whether or not `vrs_enforce` is set. When enforced, `vrs` can appear in the `violated` string and in `bind_lo`/`bind_hi` like any other margin.
 
 ## 6. `freeform_opt.py`
 
@@ -156,6 +186,14 @@ The reference numbers below come from my scratch scripts, which used a **hand-co
 9. **Violations:** for a = 1.4 at 22.5 m/s the `violated` string lists every margin that fails, with first times; the old single name is the first entry.
 10. **B2 unchanged:** `init_from_zero_loss` output identical before and after (guard in section 6).
 
+VRS addendum (3.7):
+
+11. **Report-only is bit-identical:** with `vrs_limit=None` (the default, `vrs_enforce: false`) every window, range, `violated` string and `A_max_feasible_decel` row equals the pre-addendum result exactly; only the new columns differ.
+12. **Reported ratio:** at the table in 3.7 the ratio is about 0 at `a_lo`, and at `a_hi` within about 0.05 of the listed values for V = 12 to 20 m/s (the 22.5 m/s value is not stable because `T_r -> 0`; check only that it is below -1 and finite).
+13. **Enforced:** with `vrs_enforce: true` the windows match the last column of the 3.7 table within about 0.04 m/s^2, the lower edges are unchanged, V0 = 17 / a = 1.04 becomes infeasible with `vrs` in `violated`, and V0 = 16 and 14 at a = 0.8 stay feasible.
+14. **Margin sign and scale:** a ratio of exactly `vrs_limit` gives margin 0, a ratio of 0 gives +1, an unsolved sample gives -1.
+15. **No NaN or inf** in any written column at V = 22.5 m/s, where `T_r` reaches 0 at the upper edge.
+
 ## 10. Caveats to carry into the PR description
 
 - With pusher off the headline becomes about 1.1 m/s^2 over most entry speeds, set by the 16 to 18 m/s speed range where the wing carries almost all the weight. It is a property of the idealised pusher-off, rotors-never-push-down case, not a hardware limit.
@@ -163,6 +201,7 @@ The reference numbers below come from my scratch scripts, which used a **hand-co
 - The window uses steady rotors (omega-dot = 0, v1 = 0); the constant-a verdict from `analyse` includes omega-dot, battery state and pitch rate and is the authoritative one.
 - `I_rot` (1.5e-3 kg m^2) and `q_max` are TBD in `vehicle.yaml`; throttle/current/torque margins depend on them.
 - This changes the meaning of every A table and figure; downstream reading notes will need updating separately.
+- **VRS (3.7), open decision for the owner: report only or enforce?** The default is report only, because (a) the onset value kappa = 0.23 comes from near-zero-forward-speed data, whereas A runs at 12 to 22.5 m/s, where the rotor is at several times its hover induced velocity (about 3.4 m/s at T_r = 45 N) and, to my understanding, vortex-ring onset is a low-advance-ratio phenomenon, so applying an axial-only criterion here is probably over-conservative; (b) the ratio diverges as `T_r -> 0`, so near the upper window edge it flags a rotor that is barely loaded, where the ring-state picture does not obviously apply; (c) enforcing it trims the top of every window by 0.04 to 0.18 m/s^2. If the owner wants enforcement, a thrust or advance-ratio gate on the check would be a sensible refinement; it is not specified here. Confirm kappa against the NASA/TP-2005-213477 PDF either way.
 
 ## 11. Reference script for the pointwise preview (scratch, not for the repo)
 

@@ -122,10 +122,27 @@ margin). With no band the pre-band selection is reproduced exactly (this is what
 **Checks** (each a normalised margin, feasible when `>= 0` everywhere): "pitch solution exists",
 thrust sign (`T_r >= 0`), rotor throttle ceiling (`ActuatorLimits.delta_r_max` 0.95), motor current,
 bus voltage floor, torque floor (the ESC cannot brake the rotor), pitch limit (0.6 rad, never binds),
-pitch rate against `q_max`, and the two angle margins `alpha_low` and `alpha_high` (the legacy
-symmetric `stall` margin when `cl_frac` is `None`). **Every** violated margin is reported with the
+pitch rate against `q_max`, the two angle margins `alpha_low` and `alpha_high` (the legacy
+symmetric `stall` margin when `cl_frac` is `None`), and, **only when `ActuatorLimits.vrs_limit` is
+set**, the vortex-ring margin `vrs`. **Every** violated margin is reported with the
 first time it goes negative, earliest first, as a `violations` dict (`first_binding(result)` gives the
 old single name).
+
+**Vortex-ring ratio (report only by default).** At the rotors `V_c = -V sin(theta)` (gamma = 0, so a
+nose-up pitch gives a **negative** ratio: the flow comes up through the discs) and
+`v_h = sqrt(T_r / (2 rho A_tot))`, as in `rotor.vrs_ratio`. The ratio `V_c / v_h` is always
+reported: `ZeroLossResult.vrs_min` and `vrs_min_t` (most negative value on the path and when),
+`Window.vrs_lo` / `vrs_hi` (at the feasible point on each edge), and the `vrs_min` columns of
+`A_feasibility` and `A_window`. It does not change any verdict unless enforced: with
+`vrs_limit = -kappa` (set by `stage_a` from `mission.yaml` `descent.kappa` when
+`vrs_enforce: true`) the margin is `(ratio - vrs_limit) / |vrs_limit|`, so a ratio of 0 gives +1 and
+a ratio of the limit gives 0. Enforcing trims only the **top** of each window (the ratio is about 0 at
+the lower edge and goes strongly negative toward the upper edge, where `T_r -> 0`): about 0.04 to
+0.18 m/s² on the real-data draft. It is report only by default because `kappa = 0.23` is from
+near-zero-forward-speed data whereas A runs at 12 to 22 m/s, where the rotors are at several times
+their hover induced velocity and onset is a low-advance-ratio phenomenon, so an axial-only criterion
+is probably over-conservative here; the ratio also diverges as `T_r -> 0`, so near the upper edge it
+flags a barely loaded rotor. Confirm `kappa` against NASA/TP-2005-213477 before relying on it.
 
 **The window.** At each speed the feasible deceleration forms a window `[a_lo(V), a_hi(V)]`
 (`feasible_window`). The lower edge is the wing's drag floor at `alpha_min` (below it the wing
@@ -141,14 +158,14 @@ state and pitch rate and is the authoritative one for a whole path.
 | Name | Purpose |
 | --- | --- |
 | `DecelProfile(a, v_end=1.0).sample(v0, n)` | constant deceleration; returns `t, V, a(t)` |
-| `ActuatorLimits(..., alpha_min, cl_frac)` | the limits; `LEGACY_LIMITS` (both `None`) = the pre-band behaviour |
+| `ActuatorLimits(..., alpha_min, cl_frac, vrs_limit)` | the limits; `LEGACY_LIMITS` (all `None`) = the pre-band behaviour; `vrs_limit=None` = report the vortex-ring ratio only |
 | `solve_point(vp, rho, V, a, t_p, prev_theta, bal, band)` | one pointwise solution: `theta`, `T_r`, `H_r`, `omega`, `L`, `D`, `ok` |
-| `analyse(vp, scen, v0, profile, limits, t_p, n=120, v1_0=0)` | the full result (`ZeroLossResult`: `margins`, `feasible`, `violations`, ...) |
+| `analyse(vp, scen, v0, profile, limits, t_p, n=120, v1_0=0)` | the full result (`ZeroLossResult`: `margins`, `feasible`, `violations`, `vrs_min`, `vrs_min_t`, ...) |
 | `feasible_window(vp, scen, V, limits, ...)` | windows `[a_lo, a_hi]` at one speed, with `Window.bind_lo/bind_hi` |
 | `closest_to_feasible(...)` | when there is no window: the deceleration that fails least, and what fails |
 | `feasible_decel_range(vp, scen, v0, limits, ...)` | `(a_min, a_max, islands)` for the whole path from `v0` to rest, or `None` |
 | `max_feasible_decel(...)` | `a_max` of the above (0 if none) |
-| `feasibility_map(...)` | `{"feasible": bool[nV, na], "violations": [[dict]]}` over a grid of `(V0, a)` |
+| `feasibility_map(...)` | `{"feasible": bool[nV, na], "violations": [[dict]], "vrs_min", "vrs_min_t"}` over a grid of `(V0, a)` |
 
 `feasible_decel_range` scans 48 values of `a` (spacing about 0.08 m/s²), takes the first and last
 feasible ones and bisects each edge. A feasible range narrower than the spacing can be missed;
