@@ -144,11 +144,27 @@ class ECfg(_Strict):
     cruise_amsl_m: list[float] = [1000.0, 5000.0]
     ranges_km: list[float] = [50.0, 100.0, 113.0, 150.0]
     a_plan_fallback_ms2: float = Field(2.5, gt=0.0)  # used when D produced no recommendation
+    # forward-transition acceleration: from Q2 at E's own site ("case"), the worst over the Q2
+    # grid ("worst"), or the value in mission.yaml ("mission")
+    a_fwd_mode: Literal["case", "worst", "mission"] = "case"
+    a_fwd_metric: Literal["min", "equiv"] = "min"  # worst over speed, or distance-equivalent
 
 
 class Q2Cfg(_Strict):
     altitudes_m: list[float] = [0.0, 1000.0, 2500.0, 5000.0]
     mass_factors: list[float] = [0.85, 1.0, 1.15]
+    soc: list[float] = [0.8, 0.6, 0.3]
+    conventions: list[Literal["tas", "eas"]] = ["tas", "eas"]  # AIRSPEED_MIN read as TAS or EAS
+    feed_convention: Literal["tas", "eas"] = "tas"  # the one E reads
+    isa_offset_k: float = 0.0
+    n_speed: int = Field(41, ge=11)
+    write_profile: bool = False
+
+    @model_validator(mode="after")
+    def _feed_is_computed(self) -> Q2Cfg:
+        if self.feed_convention not in self.conventions:
+            raise ValueError(f"feed_convention '{self.feed_convention}' is not in conventions")
+        return self
 
 
 class CCfg(_Strict):

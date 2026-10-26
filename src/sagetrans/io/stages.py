@@ -25,6 +25,7 @@ from sagetrans.analysis import (
     descent,
     energy,
     freeform_opt,
+    pusher,
     restricted,
     runs,
     zero_loss,
@@ -106,12 +107,62 @@ def pusher_margin(vp: VehicleParams, rho: float, v_tas: float, soc: float) -> di
     }  # fmt: skip
 
 
+# ---- Q2: forward acceleration of the pusher ------------------------------------------------------
+Q2Cell = tuple[dict[str, Any], pusher.FwdAccel]
+
+
+def q2_cells(inp: StudyInputs, conventions: list[str]) -> list[Q2Cell]:
+    """Q2's grid: altitude x mass factor x SoC for each airspeed convention.
+
+    Each cell is its table row and the full acceleration profile. `AIRSPEED_MIN` is read as a
+    true airspeed (`tas`, as the register does) or as an equivalent one (`eas`, the old Q2).
+    """
+    c = inp.study.Q2
+    vp = inp.vehicle
+    key = "controller.ardupilot.TKOFF_THR_MAX"
+    status = "fallback (placeholder)" if key in inp.fallbacks else inp.status(key)
+    cells: list[Q2Cell] = []
+    for conv in conventions:
+        for alt in c.altitudes_m:
+            sc = Scenario(alt, isa_offset_k=c.isa_offset_k)
+            v_end = inp.airspeed_min if conv == "tas" else tas(inp.airspeed_min, sc)
+            for mf in c.mass_factors:
+                vps = dataclasses.replace(vp, m=vp.m * mf)
+                for soc in c.soc:
+                    f = pusher.forward_accel(vps, sc.rho, v_end, soc, inp.tkoff_thr_max, c.n_speed)
+                    row = {
+                        "convention": conv, "altitude_m": alt, "rho_kg_m3": sc.rho,
+                        "mass_factor": mf, "mass_kg": vps.m, "soc": soc,
+                        "tkoff_thr_max": inp.tkoff_thr_max, "tkoff_status": status,
+                        "v_end_tas_ms": v_end, "a_min_ms2": _num(f.a_min),
+                        "v_at_min_ms": f.v_at_min, "a_equiv_ms2": _num(f.a_equiv),
+                        "t_s": _num(f.t_s), "x_m": _num(f.x_m), "v_reach_ms": f.v_reach,
+                        "reachable": f.reachable, "rotor_saturated": f.rotor_saturated,
+                        "current_limited": f.current_limited,
+                    }  # fmt: skip
+                    cells.append((row, f))
+    return cells
+
+
+def q2_worst(cells: list[Q2Cell], conv: str) -> Q2Cell:
+    """The cell with the smallest minimum acceleration in one convention (never clipped at 0)."""
+    return min((c for c in cells if c[0]["convention"] == conv), key=lambda c: c[1].a_min)
+
+
 # ---- task: basics (A, D, F, E, Q2) -------------------------------------------------------------
 def task_basics(inp: StudyInputs) -> dict[str, Any]:
     wanted = set(inp.study.analyses)
     errors: list[str] = []
     out: dict[str, Any] = {"tables": {}, "errors": errors}
     vp = inp.vehicle
+    q2_memo: dict[str, list[Q2Cell]] = {}
+
+    def q2_grid(conventions: list[str]) -> list[Q2Cell]:
+        """Q2's cells, computed once per convention and shared by Q2 and E."""
+        for conv in conventions:
+            if conv not in q2_memo:
+                q2_memo[conv] = q2_cells(inp, [conv])
+        return [cell for conv in conventions for cell in q2_memo[conv]]
 
     def stage_a() -> None:
         c = inp.study.A
@@ -402,13 +453,41 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
             errors.append(f"E: no recommendation from D, a_plan = {a_plan:g} m/s2 (fallback)")
         else:
             a_plan, a_source = float(a_rec), "D"
+        # forward-transition acceleration from Q2: E's own site ("case"), the worst over the Q2
+        # grid ("worst") or the mission file; all three are reported, one is used
+        ec, q2c = inp.study.E, inp.study.Q2
+        mp0 = inp.mission
+        rho_c = float(atmosphere.density(mp0.clearance_amsl, mp0.isa_offset_k))
+        feed_tas = q2c.feed_convention == "tas"
+        v_end = mp0.v_trans if feed_tas else mp0.v_trans * math.sqrt(RHO0 / rho_c)
+        case = pusher.forward_accel(vp, rho_c, v_end, mp0.soc_mean, inp.tkoff_thr_max, q2c.n_speed)
+        worst_row, worst = q2_worst(q2_grid([q2c.feed_convention]), q2c.feed_convention)
+
+        def pick(f: pusher.FwdAccel) -> float:
+            return f.a_min if ec.a_fwd_metric == "min" else f.a_equiv
+
+        a_case, a_worst = pick(case), pick(worst)
+        a_used = {"case": a_case, "worst": a_worst, "mission": mp0.a_fwd}[ec.a_fwd_mode]
+        fwd_cols = {"a_fwd_used_ms2": _num(a_used), "a_fwd_case_ms2": _num(a_case),
+                    "a_fwd_worst_ms2": _num(a_worst), "a_fwd_mode": ec.a_fwd_mode}  # fmt: skip
+        fwd_src = None if ec.a_fwd_mode == "mission" else (
+            f"quasi-steady estimate, a_fwd from Q2 ({ec.a_fwd_mode})")  # fmt: skip
         budgets: dict[str, Any] = {}
         ranges = sorted({*inp.study.E.ranges_km, *inp.requirements_km})
-        for alt in inp.study.E.cruise_amsl_m:
+        usable = math.isfinite(a_used) and a_used > 0.0
+        v_target = worst_row["v_end_tas_ms"] if ec.a_fwd_mode == "worst" else v_end
+        if not usable:  # no fallback to the mission value: that silent default is what Q2 removes
+            msg = (f"a_fwd = {a_used:.3g} m/s2 ({ec.a_fwd_mode}, {ec.a_fwd_metric}): the pusher "
+                   f"cannot reach {v_target:.1f} m/s at TKOFF_THR_MAX = {inp.tkoff_thr_max:g}")
+            errors.append(f"E forward transition: {msg}")
+            out["tables"].setdefault("E_summary", []).append(
+                {"case": "forward_transition", "error": msg, **fwd_cols}
+            )
+        for alt in inp.study.E.cruise_amsl_m if usable else []:
             name = f"cruise_{alt:.0f}m"
-            mp = dataclasses.replace(inp.mission, cruise_amsl_m=alt)
+            mp = dataclasses.replace(inp.mission, cruise_amsl_m=alt, a_fwd=a_used)
             try:
-                b = energy.build_budget(vp, mp, inp.window, inp.descent, a_plan)
+                b = energy.build_budget(vp, mp, inp.window, inp.descent, a_plan, fwd_src)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"E budget {name}: {type(exc).__name__}: {exc}")
                 out["tables"].setdefault("E_summary", []).append({"case": name, "error": str(exc)})
@@ -427,7 +506,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                 "reserve_Wh": b.reserve_J / 3600.0,
                 **{f"conflict_{r:g}km": c for r, c in zip(inp.requirements_km, conf.values(),
                                                           strict=True)},
-                "a_plan_ms2": a_plan, "a_plan_source": a_source,
+                "a_plan_ms2": a_plan, "a_plan_source": a_source, **fwd_cols,
             })  # fmt: skip
             for seg, s in b.segments.items():
                 out["tables"].setdefault("E_segments", []).append({
@@ -463,17 +542,16 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
 
     def stage_q2() -> None:
         c = inp.study.Q2
-        rows: Table = []
-        eas = inp.mission.v_trans  # AIRSPEED_MIN, read here as an equivalent airspeed (O-02)
-        for alt in c.altitudes_m:
-            for mf in c.mass_factors:
-                sc = Scenario(alt)
-                vps = dataclasses.replace(vp, m=vp.m * mf)
-                m = pusher_margin(vps, sc.rho, tas(eas, sc), 0.8)
-                rows.append({"altitude_m": alt, "rho_kg_m3": sc.rho, "mass_kg": vps.m,
-                             "V_trans_eas_ms": eas, "V_trans_tas_ms": tas(eas, sc),
-                             **m})  # fmt: skip
-        out["tables"]["Q2_pusher_margin"] = rows
+        cells = q2_grid(list(c.conventions))
+        out["tables"]["Q2_pusher_margin"] = [row for row, _ in cells]
+        out["tables"]["Q2_worst"] = [q2_worst(cells, conv)[0] for conv in c.conventions]
+        if c.write_profile:
+            out["tables"]["Q2_profile"] = [
+                {"convention": row["convention"], "altitude_m": row["altitude_m"],
+                 "mass_kg": row["mass_kg"], "soc": row["soc"], "V_tas_ms": float(v),
+                 "a_ms2": float(a)}
+                for row, f in cells for v, a in zip(f.V, f.a, strict=True)
+            ]  # fmt: skip
 
     if "A" in wanted:
         _attempt("A zero-loss feasibility", stage_a, errors)
@@ -481,10 +559,10 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         _attempt("D braking and Q_TRANS_DECEL", stage_d, errors)
     if "F" in wanted:
         _attempt("F descent", stage_f, errors)
+    if "Q2" in wanted:
+        _attempt("Q2 pusher acceleration", stage_q2, errors)
     if "E" in wanted:
         _attempt("E energy budget", stage_e, errors)
-    if "Q2" in wanted:
-        _attempt("Q2 pusher margin", stage_q2, errors)
     return out
 
 

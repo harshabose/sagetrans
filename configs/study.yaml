@@ -73,10 +73,15 @@ E:                         # energy budget
   cruise_amsl_m: [0, 1500, 2500, 5000]      # one budget per cruise altitude (1500 m = reference)
   ranges_km: [50, 100, 150]   # ranges shorter than the climb+descent distance are skipped
   a_plan_fallback_ms2: 2.5    # Q_TRANS_DECEL used when D gives no recommendation
+  a_fwd_mode: case            # forward-transition acceleration: case (Q2 at E's site) | worst (Q2 grid) | mission
+  a_fwd_metric: min           # min (worst over speed) | equiv (distance-equivalent constant a)
 
-Q2:                        # pusher thrust margin at AIRSPEED_MIN
+Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX, rest to AIRSPEED_MIN
   altitudes_m: [0, 1500, 2500, 5000]
   mass_factors: [0.80, 1.0, 1.15]
+  soc: [0.8, 0.6, 0.3]
+  conventions: [tas, eas]   # AIRSPEED_MIN read as true or equivalent airspeed (DEC-1 open): both reported
+  feed_convention: tas      # the one E reads (the register compares AIRSPEED_MIN as TAS)
 
 C:                         # ArduPilot-parameter optimisation (back-transition)
   ensemble_n: 32
