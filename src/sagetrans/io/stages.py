@@ -109,38 +109,56 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
 
     def stage_a() -> None:
         c = inp.study.A
+        lim = zero_loss.ActuatorLimits(
+            alpha_min=None if c.alpha_min_deg is None else math.radians(c.alpha_min_deg),
+            cl_frac=c.cl_frac,
+        )
         maps: dict[str, Any] = {}
         rows: Table = []
+        win: Table = []
         for name in c.scenarios:
             sc = inp.scenarios[name]
             vps = sc.vehicle_for(vp)
             v_grid = [tas(v, sc) for v in c.v0_eas_ms]
             fm: dict[str, Any] = dict(
-                zero_loss.feasibility_map(vps, sc, v_grid, c.decel_ms2, n=c.samples)
+                zero_loss.feasibility_map(vps, sc, v_grid, c.decel_ms2, lim, n=c.samples)
             )
             maps[name] = {"v_grid_eas": c.v0_eas_ms, "a_grid": c.decel_ms2, **fm}
             for i, ve in enumerate(c.v0_eas_ms):
                 for j, a in enumerate(c.decel_ms2):
-                    fb = fm["first_binding_pre_spun"][i][j]
+                    viol = fm["violations"][i][j]
                     rows.append({
                         "scenario": name, "altitude_m": sc.altitude_amsl_m, "V0_eas_ms": ve,
                         "V0_tas_ms": v_grid[i], "decel_ms2": a,
-                        "feasible_whole": bool(fm["whole"][i, j]),
-                        "feasible_pre_spun": bool(fm["pre_spun"][i, j]),
-                        "first_binding_pre_spun": fb[0] if fb else "",
-                        "first_binding_time_s": fb[1] if fb else "",
+                        "feasible": bool(fm["feasible"][i, j]),
+                        "violated": ";".join(f"{k}@{t:.2f}" for k, t in viol.items()),
                     })  # fmt: skip
+                base = {"scenario": name, "altitude_m": sc.altitude_amsl_m, "V0_eas_ms": ve,
+                        "V0_tas_ms": v_grid[i]}  # fmt: skip
+                windows = zero_loss.feasible_window(vps, sc, v_grid[i], lim)
+                for w in windows:
+                    win.append({**base, "a_lo": w.a_lo, "a_hi": w.a_hi,
+                                "bind_lo": ";".join(w.bind_lo), "bind_hi": ";".join(w.bind_hi),
+                                "theta_lo_deg": math.degrees(w.theta_lo),
+                                "theta_hi_deg": math.degrees(w.theta_hi)})  # fmt: skip
+                if not windows:  # no feasible deceleration: say what fails closest to one
+                    _, names = zero_loss.closest_to_feasible(vps, sc, v_grid[i], lim)
+                    win.append({**base, "a_lo": "", "a_hi": "", "bind_lo": ";".join(names),
+                                "bind_hi": "", "theta_lo_deg": "", "theta_hi_deg": ""})  # fmt: skip
         out["tables"]["A_feasibility"] = rows
+        out["tables"]["A_window"] = win
         out["maps"] = maps
         mx: Table = []
         for name in c.scenarios:
             sc = inp.scenarios[name]
             for ve in c.max_decel_v0_eas_ms:
-                a = zero_loss.max_feasible_decel(
-                    sc.vehicle_for(vp), sc, tas(ve, sc), pre_spun=True, n=c.samples
+                rng = zero_loss.feasible_decel_range(
+                    sc.vehicle_for(vp), sc, tas(ve, sc), lim, n=c.samples
                 )
-                mx.append({"scenario": name, "altitude_m": sc.altitude_amsl_m,
-                           "V0_eas_ms": ve, "max_feasible_decel_ms2_pre_spun": a})  # fmt: skip
+                mx.append({"scenario": name, "altitude_m": sc.altitude_amsl_m, "V0_eas_ms": ve,
+                           "min_feasible_decel_ms2": "" if rng is None else rng[0],
+                           "max_feasible_decel_ms2": 0.0 if rng is None else rng[1],
+                           "islands": "" if rng is None else rng[2]})  # fmt: skip
         out["tables"]["A_max_feasible_decel"] = mx
 
     def stage_d() -> None:

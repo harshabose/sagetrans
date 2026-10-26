@@ -76,6 +76,10 @@ class ACfg(_Strict):
     decel_ms2: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0]
     max_decel_v0_eas_ms: list[float] = [10.0, 12.0, 14.0, 16.0]
     samples: int = Field(60, ge=10)
+    # wing angle-of-attack band of the feasibility scan: from alpha_min_deg (None = no lower
+    # limit) to the angle where C_L = cl_frac x C_L,max (None = the old symmetric stall check)
+    alpha_min_deg: float | None = 0.0
+    cl_frac: float | None = Field(0.8, gt=0.0, le=1.0)
 
 
 class DRecCfg(_Strict):

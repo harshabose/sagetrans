@@ -11,6 +11,7 @@ from sagetrans.analysis.zero_loss import DecelProfile, analyse, solve_point
 from sagetrans.control.ardupilot_like import BackTransitionParams, Position1Controller
 from sagetrans.dynamics import trim
 from sagetrans.dynamics.simulate import simulate
+from sagetrans.physics import aero
 from sagetrans.physics.params import (
     LiftRotorParams,
     VehicleParams,
@@ -55,63 +56,115 @@ def test_a_wing_on_matches_eq_10_3_self_consistently():
         assert p.T_r == pytest.approx(math.hypot(vp.m * a - p.D, w - p.L), rel=1e-7)
 
 
-def test_a_profiles_constant_and_jerk_limited():
+def test_a_profile_is_a_constant_deceleration_to_the_end_speed():
     t, v, a = DecelProfile(2.0, v_end=1.0).sample(21.0, 50)
     assert v[0] == 21.0 and v[-1] == pytest.approx(1.0) and np.all(a == 2.0)
-    t, v, a = DecelProfile(2.0, jerk=4.0, v_end=1.0).sample(21.0, 400)
-    assert a[0] == 0.0 and a.max() == pytest.approx(2.0, abs=1e-12)
-    assert v[-1] == pytest.approx(1.0, abs=1e-9)
-    assert np.trapezoid(a, t) == pytest.approx(20.0, rel=1e-3)
+    assert t[-1] == pytest.approx(10.0)
 
 
-def test_a_entry_step_is_flagged_but_pre_spun_schedule_can_be_feasible():
-    r = analyse(VP, SC, 12.0, DecelProfile(1.5))
-    assert r.feasible_pre_spun
-    assert not r.feasible_whole
-    assert r.first_binding_whole is not None and r.first_binding_whole[1] == 0.0
-    assert r.record.label == "DRAFT" and len(r.record.input_hash) == 64
+def test_a_violations_name_every_failing_margin_with_its_first_time():
+    ok = analyse(VP, SC, 12.0, DecelProfile(0.8))
+    assert ok.feasible and ok.violations == {} and zero_loss.first_binding(ok) is None
+    bad = analyse(VP, SC, 12.0, DecelProfile(1.5))  # past the lift limit from the first sample
+    assert not bad.feasible and bad.violations == {"alpha_high": 0.0}
+    assert zero_loss.first_binding(bad) == ("alpha_high", 0.0)
+    assert bad.record.label == "DRAFT" and len(bad.record.input_hash) == 64
 
 
-def test_a_max_feasible_decel_is_consistent_with_analyse():
-    a_max = zero_loss.max_feasible_decel(VP, SC, 12.0)
-    assert 0.2 < a_max < 8.0
-    assert analyse(VP, SC, 12.0, DecelProfile(0.95 * a_max), n=60).feasible_pre_spun
-    assert not analyse(VP, SC, 12.0, DecelProfile(1.3 * a_max), n=60).feasible_pre_spun
+def test_a_alpha_band_is_the_lift_fit_floor_and_a_fraction_of_cl_max():
+    lo, hi = zero_loss._alpha_band(VP, zero_loss.DEFAULT_LIMITS)
+    i_w = VP.wing.i_w
+    assert lo == pytest.approx(-i_w)  # alpha_min = 0
+    cl = float(aero.coefficients(hi + i_w, VP.wing)[0])
+    assert cl == pytest.approx(0.8 * aero.cl_max(VP.wing), rel=1e-6)
+    _, hi1 = zero_loss._alpha_band(VP, zero_loss.ActuatorLimits(cl_frac=1.0))
+    assert hi1 > hi  # the lift peak is further out
 
 
-def test_a_feasibility_is_not_monotone_in_deceleration_and_max_finds_the_top_region():
-    # regression: bisection assumed monotonicity and reported the first boundary it hit (0.98)
-    # although the schedule is feasible again between about 1.6 and 2.0 m/s^2 at 12 m/s
-    v0 = 12.0
+def test_a_feasible_results_stay_inside_the_angle_band():
+    lo, hi = zero_loss._alpha_band(VP, zero_loss.DEFAULT_LIMITS)
+    for v0, a in ((8.0, 0.4), (10.0, 1.0), (12.0, 0.8), (14.0, 0.5)):
+        r = analyse(VP, SC, v0, DecelProfile(a), n=40)
+        assert r.feasible, (v0, a, r.violations)
+        assert r.theta.min() >= lo - 1e-9 and r.theta.max() <= hi + 1e-9
+
+
+def test_a_band_free_path_reproduces_the_unbanded_root_choice():
+    # with no band, or the full scan range, solve_point is the pre-band selection exactly
+    bal = zero_loss._Balance(VP)
+    full = (zero_loss.THETA_LO, zero_loss.THETA_HI)
+    for v, a in ((6.0, 0.5), (12.0, 1.0), (12.0, 1.5), (16.0, 1.2)):
+        p0 = solve_point(VP, RHO, v, a, 0.0, None, bal)
+        p1 = solve_point(VP, RHO, v, a, 0.0, None, bal, band=full)
+        assert (p0.theta, p0.T_r, p0.omega) == (p1.theta, p1.T_r, p1.omega)
+
+
+def test_a_banded_solver_prefers_in_band_roots():
+    # at 12 m/s, a = 1.5 the only roots are outside the narrow default band: it is reported
+    # (nan would hide it) but fails an angle margin; a lower deceleration has an in-band root
+    lo, hi = zero_loss._alpha_band(VP, zero_loss.DEFAULT_LIMITS)
+    p = solve_point(VP, RHO, 12.0, 0.8, 0.0, None, band=(lo, hi))
+    assert lo <= p.theta <= hi and p.T_r >= 0.0
+
+
+def test_a_feasible_decel_range_is_consistent_with_analyse():
+    a_min, a_max, islands = zero_loss.feasible_decel_range(VP, SC, 12.0)
+    assert 0.0 < a_min < a_max < 4.0 and not islands
+    assert zero_loss.max_feasible_decel(VP, SC, 12.0) == a_max
+    mid = 0.5 * (a_min + a_max)
+    for a in (a_min * 1.05, mid, a_max * 0.97):
+        assert analyse(VP, SC, 12.0, DecelProfile(a), n=60).feasible
+    for a in (a_min * 0.8, a_max * 1.1):
+        assert not analyse(VP, SC, 12.0, DecelProfile(a), n=60).feasible
+
+
+def test_a_feasible_window_agrees_with_the_path_check_and_names_its_edges():
+    w = zero_loss.feasible_window(VP, SC, 12.0)
+    assert len(w) == 1
+    a_min, a_max, _ = zero_loss.feasible_decel_range(VP, SC, 12.0)
+    # the path check also needs every slower speed, so its range lies inside the window at 12 m/s
+    # (to the resolution of the two bisections)
+    assert w[0].a_lo <= a_min + 1e-3 and w[0].a_hi >= a_max - 1e-3
+    assert w[0].bind_hi and w[0].T_r_lo > 0.0 and w[0].T_r_hi >= 0.0
+    # no feasible deceleration where the wing carries more than the weight: the rotors would
+    # have to push down, and the report then says which limit fails closest to feasible
+    assert zero_loss.feasible_window(VP, SC, 30.0) == []
+    assert zero_loss.closest_to_feasible(VP, SC, 30.0)[1] == ["thrust_sign"]
+
+
+def test_a_legacy_limits_keep_the_old_non_monotone_verdict_that_b2_relies_on():
+    # regression: with no band (the legacy path) the verdict at 12 m/s is feasible up to about
+    # 1 m/s^2, infeasible 1.0 to 1.4, feasible again 1.6 to 2.0, infeasible above
+    leg = zero_loss.LEGACY_LIMITS
     verdict = {
-        a: analyse(VP, SC, v0, DecelProfile(a), n=60).feasible_pre_spun
-        for a in (0.8, 1.2, 1.8, 2.6)
+        a: analyse(VP, SC, 12.0, DecelProfile(a), leg, n=60).feasible for a in (0.8, 1.2, 1.8, 2.6)
     }
     assert verdict == {0.8: True, 1.2: False, 1.8: True, 2.6: False}
-    a_max = zero_loss.max_feasible_decel(VP, SC, v0)
-    assert a_max >= 1.8 > 0.98  # the old answer was about 0.98
-    assert analyse(VP, SC, v0, DecelProfile(0.97 * a_max), n=60).feasible_pre_spun
-    assert not analyse(VP, SC, v0, DecelProfile(1.3 * a_max), n=60).feasible_pre_spun
+    assert zero_loss.max_feasible_decel(VP, SC, 12.0, leg) >= 1.8
 
 
-def test_a_feasibility_map_whole_implies_pre_spun():
+def test_a_feasibility_map_shape_and_violations_are_consistent():
     m = zero_loss.feasibility_map(VP, SC, [10.0, 14.0], [0.5, 1.5, 3.0], n=40)
-    assert m["whole"].shape == (2, 3)
-    assert np.all(~m["whole"] | m["pre_spun"])
+    assert m["feasible"].shape == (2, 3)
+    for i in range(2):
+        for j in range(3):
+            assert m["feasible"][i, j] == (m["violations"][i][j] == {})
+    assert m["feasible"][0, 0] and not m["feasible"][0, 2]
 
 
-def test_a_aero_limit_scales_with_equivalent_airspeed_but_throttle_does_not():
+def test_a_limit_is_the_same_at_altitude_in_equivalent_airspeed_but_throttle_is_not():
     hi = Scenario(5000.0)
     v_eas = 12.0
     v_hi = v_eas * math.sqrt(SC.rho / hi.rho)
-    # lift/weight and drag/weight depend on V / V_s, so the aerodynamic limit is the same ...
-    a_sl = zero_loss.max_feasible_decel(VP, SC, v_eas)
-    a_hi = zero_loss.max_feasible_decel(VP, hi, v_hi)
-    assert a_hi == pytest.approx(a_sl, rel=0.05)
+    # lift and drag depend on dynamic pressure, so the aerodynamic limits are the same ...
+    r_sl = zero_loss.feasible_decel_range(VP, SC, v_eas)
+    r_hi = zero_loss.feasible_decel_range(VP, hi, v_hi)
+    assert r_sl is not None and r_hi is not None
+    assert r_hi[1] == pytest.approx(r_sl[1], rel=0.01)
     # ... but the rotors need more throttle in thin air for the same hover-like thrust
-    r_sl = analyse(VP, SC, v_eas, DecelProfile(0.8))
-    r_hi = analyse(VP, hi, v_hi, DecelProfile(0.8))
-    assert r_hi.delta_cmd[-1] > r_sl.delta_cmd[-1]
+    d_sl = analyse(VP, SC, v_eas, DecelProfile(0.8))
+    d_hi = analyse(VP, hi, v_hi, DecelProfile(0.8))
+    assert d_hi.delta_cmd[-1] > d_sl.delta_cmd[-1]
 
 
 # ---- analysis D ------------------------------------------------------------------------------
