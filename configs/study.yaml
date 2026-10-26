@@ -42,8 +42,28 @@ A:                         # zero-altitude-loss feasibility
 D:                         # braking and Q_TRANS_DECEL
   scenarios: [S-01, S-02, S-03, S-05, S-06, S-07]   # S-01 first: it sets the trade curve
   mass_factors: [0.80, 1.0, 1.15]
-  v0_eas_ms: [16, 17.1, 20.9]               # 1.2 Vs at nominal, 1.2 Vs at 1.15x mass, cruise
-  recommendation: {ensemble_n: 32, ensemble_seed: 8, v0_ground_ms: [16, 20.9], percentile: 5}
+  # Entry is the AIRBRAKE exit; its air speed is max(AIRSPEED_MIN - 2, q_assist_speed_ms).
+  q_assist_speed_ms: 0              # Q_ASSIST_SPEED; 0 = assist off (ArduPilot default)
+  entry_convention: tas             # tas | eas: how AIRSPEED_MIN is read (open question RC5)
+  # Altitude hold: repo = constant hover throttle; lift_aware = throttle for W - L. At tau 0 and
+  # scale 1 lift_aware is an ORACLE (it reads the simulated lift); tau and scale stand in for an
+  # estimate.
+  ff_mode: lift_aware
+  ff_lift_tau_s: 0.0
+  ff_lift_scale: 1.0
+  theta_fw0_deg: 0.0                # last fixed-wing pitch at the AIRBRAKE exit; PLACEHOLDER (SITL/log)
+  pit_lim_mode: constant            # constant | airspeed (Q_BCK_PIT_LIM form, needs Q_BCK_PIT_LIM)
+  enforce_alpha: false              # true: hold wing alpha to the 0.8 C_L,max band top of analysis A
+  alpha_gate_ms: 5.0                # alpha is not judged below this airspeed
+  sink_tol_ms: 0.5                  # end sink rate that counts as "still sinking" (placeholder)
+  rotor_lag_s: 0.0                  # sensitivity only; not ArduPilot's spool law
+  v0_eas_ms: [16, 17.1, 20.9]       # diagnostic speed grid (D_a_eq_speed), to set beside A's windows
+  sens:
+    theta_fw0_deg_sweep: [0, 4, 8, 12]
+    lag_s_sweep: [0, 0.25, 0.5]
+    lift_tau_s_sweep: [0, 0.5]
+    lift_scale_sweep: [0.8, 1.2]
+  recommendation: {ensemble_n: 32, ensemble_seed: 8, percentile: 5, corners: true, n_boot: 1000}   # n: power of two
   trade: {a_plan_ms2: [1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0, 2.1, 2.25, 2.5, 3.0, 3.5], headwinds_ms: [-5, 0, 5]}
 
 F:                         # landing descent profile
@@ -52,6 +72,7 @@ F:                         # landing descent profile
 E:                         # energy budget
   cruise_amsl_m: [0, 1500, 2500, 5000]      # one budget per cruise altitude (1500 m = reference)
   ranges_km: [50, 100, 150]   # ranges shorter than the climb+descent distance are skipped
+  a_plan_fallback_ms2: 2.5    # Q_TRANS_DECEL used when D gives no recommendation
 
 Q2:                        # pusher thrust margin at AIRSPEED_MIN
   altitudes_m: [0, 1500, 2500, 5000]

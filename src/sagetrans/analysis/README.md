@@ -41,6 +41,11 @@ scenario and options to a results object. Analysis letters follow the proposal's
   on every axis, deterministic for a given seed. Axes (`EnsembleAxes`, placeholders pending the
   mission set, O-14): altitude 0–5000 m, ISA offset −10…+20 K, mass factor 0.85–1.15 times the
   vehicle mass, headwind −5…+10 m/s, state of charge 0.2–1.0.
+* **`braking_ensemble(n, vp, seed, axes, corners=True)`** — analysis D's ensemble: a scrambled
+  Sobol sample over the five axes (`n` a power of two) and, as a second list, the 8 corners
+  (altitude x mass x headwind, the other axes at their midpoints). `latin_hypercube` is untouched
+  (C and B2 use it). **`bootstrap_percentile(values, q, n_boot, seed, ci)`** — a percentile with a
+  bootstrap interval.
 * **`RunMetrics(excursion, energy, distance, failures)`** — one run's headline numbers and failure
   flags (`stall`, `battery_cutoff`, `touchdown`, `not_stopped`, `no_transition`).
 * **`CostWeights`** and **`ensemble_cost(runs, w)`** — eq. (10.1):
@@ -222,52 +227,144 @@ within `V^2 / (2 * Q_TRANS_DECEL)`. What value makes the aircraft stop where int
 
 ```
 x_plan = V0^2/(2 a_plan),   a_eq = (V0^2 - V_f^2)/(2 x_actual),   overshoot = x_actual - x_plan,
-a_rec = min over scenarios and V0 of a_eq                                                   (10.5)
+a_rec = a low percentile (and the minimum) of a_eq over the ensemble                       (10.5)
 ```
 
 `a_eq` uses `V0^2 - V_f^2` (with the end speed `V_f = 1 m/s`) so it equals eq. (10.5) when `V_f = 0`.
 
-**Why planner and aircraft disagree.** The planner assumes constant deceleration from the first
-instant; the pitch envelope starts at zero and ramps, so the aircraft's available deceleration
-`g tan(theta_lim(t))` is below the plan early on and it covers more distance.
+### What a run is
+
+* **Entry is the AIRBRAKE exit.** `t = 0` is when ArduPilot leaves AIRBRAKE, which is also when it
+  starts the pitch-envelope clock (`set_last_fw_pitch()`, open question O-03). The rotors are
+  already spun up and carry what the wing does not (`hold_hover(0)`; no spool dynamics), the pusher
+  is off, and the pitch is the last fixed-wing pitch `theta_fw0` (**placeholder 0**: the real value
+  is the TECS/navigation pitch demand at the AIRBRAKE exit, from a SITL run or a flight log; each
+  degree adds about 0.05 m/s² to `a_eq`). `airbrake_entry_state` builds that state.
+* **The entry speed comes from the airspeed exit rule only**: `entry_airspeed` returns
+  `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)` as a true airspeed. `entry_convention: tas` reads
+  `AIRSPEED_MIN` as a true airspeed (as the controller does today), `eas` as an equivalent one
+  (open question RC5). The ground speed is the air speed minus the headwind.
+* **The pitch limit is ArduPilot's** (O-04): it ramps from `max(theta_fw0, 0)` to
+  `min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG)` over `Q_BACKTRANS_MS`, clock from `t = 0`; the initial
+  pitch is `theta_fw0`. `Q_BCK_PIT_LIM` is a constant cap by default; `pit_lim_mode: airspeed`
+  switches to ArduPilot's airspeed-scaled form (O-05; it needs an EAS and a `V_min` in the same
+  convention as `AIRSPEED_MIN`, so it is a flag, not a result, until RC5 is settled). There is no
+  nose-down envelope.
+* **Altitude-hold feed-forward** (`ff_mode`): `repo` is the constant hover throttle of the original
+  controller, so the rotors over-thrust by about the wing lift at entry and under-thrust when the
+  wing stalls (17 m/s: the aircraft gains 6.9 m and ends sinking at 5 m/s). `lift_aware` (the
+  default here) commands the throttle for `W - L`. **At `ff_lift_tau_s = 0` and
+  `ff_lift_scale = 1` it is an oracle**: it reads the simulated lift, which the aircraft does not
+  measure. The tau and the scale stand in for an estimate. D then describes a controller with a
+  lift-aware altitude hold, not necessarily ArduPilot's; both are shown in `D_sensitivity`. The
+  altitude-hold gains are unchanged.
+* **No spool dynamics and no actuator lag** by default. `rotor_lag_s` is a first-order lag on the
+  rotor throttle, a crude stand-in for rotor/ESC lag (not `MOT_SPOOL_TIME`; the rotors are already
+  spooled), used as a sensitivity only.
+
+### The wing is stalled while braking
+
+With the altitude held, the wing angle of attack equals the pitch, so the 30° ramp is a wing angle
+of attack well beyond the stall angle for 2 to 3.5 s: the lift falls and the rotors carry the
+weight. The lift fit is valid to about 10°; beyond the stall angle the model is a flat-plate blend,
+so forces there are unvalidated. **The default `a_eq` (about 2.5 m/s² at 15 m/s) is the most the
+idealised controller can do in that state, not validated hardware performance.** If the angle of
+attack were held to the 0.8 C_L,max band top of analysis A (about 9.1°), `a_eq` would be about
+1.3 m/s², which is A's window plus a ramp. `enforce_alpha: true` shows that bound.
+
+`braking_flags` reports, per run and without changing it:
+
+| Group | Columns |
+| --- | --- |
+| Angle of attack (a) | `alpha_max_deg` (ungated), `alpha_max_gated_deg`, `t_alpha_08_first_s`, `V_at_alpha_08_first_ms`, `t_above_alpha_08_s`, `t_above_alpha_s_s` (above the stall angle), `t_below_alpha_min_s`; the integrals use samples with `V >= alpha_gate_ms` |
+| Rotor load (c) | `rotor_share_max`, `wing_share_min`, `throttle_margin_min`, `t_throttle_sat_s` |
+| Other limits | `vrs_min`, `vrs_min_t_s`, `t_vrs_onset_s` (ratio below `-kappa`; report only), `peak_motor_current_A`, `current_over`, `min_bus_voltage_V`, `voltage_under` |
+| End state | `vh_end_ms`, `dh_end_m`, `stopped`, `sinking` (`vh_end < -sink_tol_ms`, placeholder 0.5 m/s) |
+
+`enforce_alpha` is the one switch that changes the run: it limits the pitch command to
+`alpha_cap + gamma` while `V >= alpha_gate_ms`, with `alpha_cap` the top of A's band (body pitch;
+it already subtracts the wing incidence).
+
+### The ensemble and the recommendation
+
+`ensemble.braking_ensemble` draws a scrambled Sobol sample (`ensemble_n` a power of two) over the
+five axes of `scenarios.yaml`, plus 8 corners (altitude x mass x headwind, the other axes at their
+midpoints) reported separately. **Entry speed is not an axis**: every scenario enters at the rule's
+air speed and the ground speed follows from its headwind. That moves the result: the headwind
+effect changes sign. It used to add drag at a fixed ground speed and help; with the entry fixed in
+air speed, +5 m/s of headwind means a 10 m/s ground speed, a shorter run in which the fixed 3 s
+ramp is a larger share, so `a_eq` falls (Spearman −1.0 with headwind). The lowest runs are the
+low-ground-speed ones.
+
+`D_recommendation` carries three numbers: `a_rec_pct_ms2` (5th percentile over the Sobol sample
+only; the headline), its bootstrap interval (`bootstrap_percentile`) and `a_rec_min_ms2` (minimum
+over Sobol and corners; this is the `a_rec` that analysis E reads). `a_rec_pct_half_ms2` (the same
+percentile over the first half) is a convergence check. `n_below_vs` counts entries below their own
+1g stall speed (flagged, not dropped; at 1500 m with `tas` that is 17 of 32, with `eas` none).
+At the register values (32 points, seed 8, `tas`): 5th percentile 2.09 (interval 2.05 to 2.17),
+minimum 1.99 (the corner at altitude 0, mass ×0.8, headwind +5), median 2.5; with `eas`, 5th
+percentile 2.18. Before this change the ensemble gave 2.52 (minimum 2.51).
+
+### Tables
+
+| Table | Contents |
+| --- | --- |
+| `D_a_eq` | named scenarios x mass factors, entry from the rule; `a_eq`, distance, excursions, the flags |
+| `D_a_eq_speed` | diagnostic: the old speed grid `v0_eas_ms`, `V0_air_ms` = TAS of the grid EAS, `V0_ground_ms = V0_air_ms - headwind`; set it beside A's windows at the same speeds |
+| `D_recommendation_ensemble` | one row per run (Sobol and corners): inputs, `V0_air_ms`, `V0_ground_ms`, `Vs_ms`, `below_vs`, `a_eq`, the flags |
+| `D_recommendation` | the summary row above, plus the scenario that sets the minimum, the worst corner, and the Spearman correlation of `a_eq` with each axis |
+| `D_trade_curve` | first named scenario; entry is the rule's air speed, ground speed is that minus the wind |
+| `D_sensitivity` | first named scenario at nominal mass, one change at a time: `theta_fw0`, rotor lag, `ff_mode: repo`, lift filter and scale, the airspeed pitch-limit form (only if `Q_BCK_PIT_LIM` is set), `enforce_alpha`; the base, repo and enforce cases also give the ensemble 5th percentile |
+
+**Altitude excursions are lower bounds**: ideal actuators, assumed altitude-hold gains, no gusts
+(`I_rot` is TBD).
+
+### Who passes `a_plan`
+
+`D_trade_curve` loops over `D.trade.a_plan_ms2`; `landing_error` turns `a_plan` into
+`x_tgt = V_ref^2 / (2 a_plan)`. The Position1 cascade never reads `a_plan`; it brakes with `a_lim`.
+ArduPilot's `Q_TRANS_DECEL` does both jobs, this repo splits them. Analysis E takes
+`a_plan = a_rec` (the minimum), and falls back to `E.a_plan_fallback_ms2` with an error message and
+`a_plan_source = "fallback"` in `E_summary` when D gave none (whether E should read the percentile
+instead is open). Analyses C and B2 keep the old behaviour: C's `plan_decel` still calls
+`measure_a_eq` from its own entry state with the dataclass defaults (`ff_mode="repo"`), so its
+`a_plan` comes from a stalled-wing worst-case `a_eq`.
 
 **API.**
 
 | Name | Purpose |
 | --- | --- |
 | `ideal_stopping(v0, theta_max, t_bt, v_end=0, dt=1e-4)` | the planner worked example: ideal pitch, no lift/drag, braking at the limit throughout; returns `(distance, a_eq, ramp distance)` |
-| `run_braking(vp, scen, v0, bp, ...)` | simulate Position1 from ground speed `v0` to `V_f`; returns a `BrakingResult` |
+| `entry_airspeed(airspeed_min, q_assist_speed, rho, convention)` | the airspeed exit rule, as a true airspeed |
+| `airbrake_entry_state(vp, scen, bp, v_air0)` | the state at the AIRBRAKE exit and the ground speed |
+| `run_braking(vp, scen, v0, bp, ..., x0=None)` | simulate Position1 from ground speed `v0` to `V_f`; builds the `LiftFF` table when `bp.ff_mode == "lift_aware"`; returns a `BrakingResult` |
 | `measure_a_eq(...)` | the worst case: pitch at the envelope limit throughout |
-| `recommend_decel(vp, scenarios, v0_grid, bp, percentile=None)` | `a_rec` as the minimum (or a lower percentile) over the grid |
+| `braking_flags(res, vp, scen, bp, ...)` | the report-only checks above |
+| `recommend_decel(vp, scenarios, v0_grid, bp, percentile=None)` | the older recommendation over a speed grid (kept for callers and tests) |
 | `landing_error(vp, scen, v0, a_plan, bp, speed_test)` | switch at `d = V_ref^2/(2 a_plan)` and brake with the position cascade; `speed_test` is `"ground"` or `"air"` |
 
-**Scope decision.** Each run **starts at the switch point**; there is no cruise phase here (that is
-analysis C's `full` scope). The target is placed `V_ref^2/(2 a_plan)` ahead. `V_ref` is the ground
-or the air speed (open question O-02): in a headwind the air-speed test switches earlier.
+**Defaults keep the old behaviour.** `BackTransitionParams` defaults (`ff_mode="repo"`,
+`theta_fw0=0`, `pit_lim_mode="constant"`, no alpha cap, no lag) with the old `x0` (pitch 0,
+hover-speed rotors) give bit-identical results; only `stage_d` switches to the AIRBRAKE entry and
+`lift_aware`.
 
 **What it found (placeholder).** `ideal_stopping(25 m/s, 20°)` gives 87.5 m and `a_eq = 3.57 m/s²`
-without the ramp, and 124.5 m / 2.51 m/s² with a 3 s ramp (69.8 m during the ramp) — matching the
-proposal's worked example. The simulated worst-case `a_eq` was about 2.6 m/s², 3 % *above* the
-ideal figure, because wing drag helps. **The ideal figure is therefore not a bound on `a_eq` in
-either direction**: lag lowers the real `a_eq`, wing drag raises it, and which wins depends on the
-wing. (The proposal's §10D originally called it an upper bound; that sentence has been corrected.)
-The altitude excursion is a **gain** of about 18 m at 25 m/s (nose-up lift), no loss. At
-`a_plan = 2.5 m/s²` the 25 m/s case overshoots by about 22 m; switching earlier reduces it.
+without the ramp, and 124.5 m / 2.51 m/s² with a 3 s ramp (69.8 m during the ramp), matching the
+proposal's worked example. The ideal figure is not a bound on `a_eq` in either direction: lag
+lowers the real `a_eq`, wing drag raises it. Even at `a_plan = a_rec` the cascade overshoots by
+metres, because `a_rec` is a worst-case braking measure (pitch at the limit throughout); read the
+planning margin from the trade curve.
 
 **Scenario mass is applied.** `run_braking` uses `scen.vehicle_for(vp)` for the model, for the
-initial hover rotor speed, and for the hover-throttle feed-forward of the altitude hold
-(`refresh_hover=True`; set it false to keep a caller's `delta_hover`). An earlier version used the
-nominal mass everywhere, so the ensemble's 0.85–1.15 mass axis was silently inert in `a_eq` and in
-the `Q_TRANS_DECEL` recommendation; a regression test now covers it. The effect is real: at 25 m/s
-the worst-case `a_eq` is 2.70 / 2.59 / 2.50 / 2.43 m/s² at mass ×0.85 / 1.0 / 1.15 / 1.3 (stopping
-distance 115 to 128 m), so the *minimum* over an ensemble — the recommendation — is set by the heavy
-end.
+initial rotor speed, and for the hover-throttle feed-forward of the altitude hold
+(`refresh_hover=True`; set it false to keep a caller's `delta_hover`).
 
-**Tests:** the planner example (87.5/124.5/69.8 m), the simulated limit case where `a_eq` equals
-`g tan(theta)` within 0.5 % (frozen-state harness, no ramp), the signed excursion, the altitude
-hold in hover, `recommend_decel` being the minimum, earlier switching reducing overshoot, the
-air-speed test switching earlier in a headwind, and the **scenario-mass regression** (the old code
-gave a difference of exactly 0.0).
+**Tests:** the planner example, the simulated limit case where `a_eq` equals `g tan(theta)` within
+0.5 % (frozen-state harness, no ramp), the signed excursion, the altitude hold in hover,
+`recommend_decel` being the minimum, earlier switching reducing overshoot, the air-speed test
+switching earlier in a headwind, and the scenario-mass regression. New tests for this change
+(ramp start, airspeed form, feed-forward, alpha cap, entry, ensemble, the E fallback) are left to
+the owner.
 
 ---
 

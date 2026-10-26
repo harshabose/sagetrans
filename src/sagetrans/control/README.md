@@ -48,14 +48,29 @@ sensitivity analysis ranks the first two among the dominating inputs for altitud
 ### Pitch envelope (eq. 8.3)
 
 ```
-theta_lim(t) = min( min(theta_A, theta_P) * min(1, t / T_bt),  theta_B )
+ramp(t) = start + (cap - start) * min(1, t / T_bt),   cap = min(theta_A, theta_P),
+start = clip(theta_fw0, 0, cap)
+theta_lim(t) = min(ramp, theta_B)                                        pit_lim_mode "constant"
+theta_lim(t) = min(ramp, theta_A, theta_B * (V_min / EAS)^2)             pit_lim_mode "airspeed"
 ```
 
-`theta_A` is `Q_A_ANGLE_MAX` (default 20°), `theta_P` is `PTCH_LIM_MAX_DEG` (25°), `T_bt` is
-`Q_BACKTRANS_MS` (3 s), and `theta_B` is `Q_BCK_PIT_LIM` (no cap by default). The limit starts at
-**zero** and ramps linearly, so early in the back-transition the aircraft cannot pitch and brake;
-this is why the planner's constant deceleration is optimistic (analysis D). How `Q_BCK_PIT_LIM`
-blends with airspeed is not documented, so `theta_B` is applied as a constant cap.
+`theta_A` is `Q_A_ANGLE_MAX`, `theta_P` is `PTCH_LIM_MAX_DEG`, `T_bt` is `Q_BACKTRANS_MS` (3 s), and
+`theta_B` is `Q_BCK_PIT_LIM` (no cap by default). The ramp starts at the last fixed-wing pitch
+`theta_fw0` (default 0) with the clock at the AIRBRAKE exit (O-04); at 0 the limit starts at zero,
+so early in the back-transition the aircraft cannot pitch and brake, which is why the planner's
+constant deceleration is optimistic (analysis D). The airspeed form (O-05) needs `theta_B`,
+`v_min_ref` and the equivalent airspeed (the controller passes it from `aux`), and raises
+`ValueError` otherwise; `theta_B <= 0` disables it. It is off by default.
+
+### Feed-forward, alpha cap and rotor lag (analysis D)
+
+* `ff_mode="lift_aware"` (with a `LiftFF` table built from the scenario vehicle) replaces the
+  constant `delta_hover` by the throttle for `(W - L_hat) / cos(theta)`; `L_hat` is the simulated
+  lift times `ff_lift_scale`, filtered with time constant `ff_lift_tau_s`. At tau 0 and scale 1 it
+  is an oracle. The default of the dataclass stays `"repo"`, so C and B2 are unchanged.
+* `alpha_cap` limits the pitch command to `alpha_cap + gamma` while `V >= alpha_cap_vmin`.
+* `rotor_lag_s` is a first-order lag on the rotor throttle (a sensitivity, not the spool law).
+* Filter states live in `ModeState.memory` (`L_f`, `d_eff`) and are carried through each step.
 
 ### Position cascade (eqs. 8.9, 8.4, 8.10)
 

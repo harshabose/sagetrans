@@ -304,7 +304,7 @@ D:                         # braking and Q_TRANS_DECEL
   scenarios: [S-01, S-02]
   mass_factors: [0.85, 1.0, 1.15]
   v0_eas_ms: [16, 22]
-  recommendation: {ensemble_n: 8, ensemble_seed: 3, v0_ground_ms: [18, 22], percentile: 5}
+  recommendation: {ensemble_n: 8, ensemble_seed: 3, percentile: 5}
   trade: {a_plan_ms2: [1.5, 2.0, 2.5, 3.0, 3.5], headwinds_ms: [0, 5]}
 
 F:                         # landing descent profile

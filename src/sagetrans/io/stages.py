@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+from scipy import stats
 from scipy.optimize import brentq
 
 from sagetrans import atmosphere
@@ -31,9 +32,9 @@ from sagetrans.analysis import (
 from sagetrans.analysis import collocation as coll
 from sagetrans.analysis import sensitivity as sens
 from sagetrans.analysis.common import Scenario
-from sagetrans.analysis.ensemble import latin_hypercube
+from sagetrans.analysis.ensemble import bootstrap_percentile, braking_ensemble, latin_hypercube
 from sagetrans.io.inputs import StudyInputs
-from sagetrans.physics import battery, motor, rotor
+from sagetrans.physics import aero, battery, motor, rotor
 from sagetrans.physics.params import VehicleParams
 
 RHO0 = float(atmosphere.density(0.0))
@@ -176,58 +177,205 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
 
     def stage_d() -> None:
         c = inp.study.D
-        bp = inp.controller
+        rec = c.recommendation
+        if c.pit_lim_mode == "airspeed" and inp.controller.theta_B is None:
+            raise ValueError("D.pit_lim_mode 'airspeed' needs controller.ardupilot.Q_BCK_PIT_LIM")
+        # the wing-angle band of analysis A: its top is the enforcement cap and the 0.8 C_L,max flag
+        lim = zero_loss.ActuatorLimits(alpha_min=0.0 if inp.study.A.alpha_min_deg is None
+                                       else math.radians(inp.study.A.alpha_min_deg),
+                                       cl_frac=inp.study.A.cl_frac or 0.8)  # fmt: skip
+        alpha_cap = zero_loss._alpha_band(vp, lim)[1]  # body pitch; the wing angle adds i_w
+        alpha_hi = alpha_cap + vp.wing.i_w
+        kappa = inp.descent.kappa
+        base_bp = dataclasses.replace(
+            inp.controller, theta_fw0=math.radians(c.theta_fw0_deg), pit_lim_mode=c.pit_lim_mode,
+            v_min_ref=inp.airspeed_min, ff_mode=c.ff_mode, ff_lift_tau_s=c.ff_lift_tau_s,
+            ff_lift_scale=c.ff_lift_scale, rotor_lag_s=c.rotor_lag_s,
+            alpha_cap=alpha_cap if c.enforce_alpha else None, alpha_cap_vmin=c.alpha_gate_ms,
+        )  # fmt: skip
+
+        def entry(sc: Scenario) -> float:
+            return braking.entry_airspeed(inp.airspeed_min, c.q_assist_speed_ms, sc.rho,
+                                          c.entry_convention)  # fmt: skip
+
+        Run = tuple[braking.BrakingResult, dict[str, Any], float]
+
+        def run(sc: Scenario, bp: Any, v_air: float) -> Run:
+            x0, v_ground = braking.airbrake_entry_state(vp, sc, bp, v_air)
+            r = braking.measure_a_eq(vp, sc, v_ground, bp, x0=x0)
+            fl = braking.braking_flags(
+                r.sim, vp, sc, bp, alpha_hi=alpha_hi, alpha_min=lim.alpha_min, kappa=kappa,
+                gate=c.alpha_gate_ms, sink_tol=c.sink_tol_ms,
+            )  # fmt: skip
+            return r, fl, v_ground
+
+        def cells(fl: dict[str, Any], skip: tuple[str, ...] = ()) -> dict[str, Any]:
+            return {k: v if isinstance(v, bool) else _num(v)
+                    for k, v in fl.items() if k not in skip}  # fmt: skip
+
+        # -- headline table: the named scenarios x mass factors, entry from the airspeed exit rule
         rows: Table = []
         for name in c.scenarios:
             for mf in c.mass_factors:
                 sc = dataclasses.replace(inp.scenarios[name], mass_kg=vp.m * mf)
-                for ve in c.v0_eas_ms:
-                    v0 = tas(ve, sc)
-                    r = braking.measure_a_eq(vp, sc, v0, bp)
-                    m = r.sim.metrics
-                    rows.append({
-                        "scenario": name, "altitude_m": sc.altitude_amsl_m, "mass_kg": sc.mass_kg,
-                        "V0_eas_ms": ve, "V0_ground_ms": v0, "a_eq_ms2": r.a_eq,
-                        "x_actual_m": r.x_actual, "t_stop_s": r.t_stop,
-                        "altitude_excursion_m": r.altitude_excursion,
-                        "alt_gain_m": m["altitude_gain"], "alt_loss_m": m["altitude_loss"],
-                        "peak_bus_current_A": m["peak_bus_current"],
-                        "min_bus_voltage_V": m["min_bus_voltage"],
-                    })  # fmt: skip
+                v_air = entry(sc)
+                r, fl, v_ground = run(sc, base_bp, v_air)
+                m = r.sim.metrics
+                rows.append({
+                    "scenario": name, "altitude_m": sc.altitude_amsl_m, "mass_kg": sc.mass_kg,
+                    "V0_air_ms": v_air, "V0_ground_ms": v_ground, "a_eq_ms2": _num(r.a_eq),
+                    "x_actual_m": _num(r.x_actual), "t_stop_s": r.t_stop,
+                    "altitude_excursion_m": r.altitude_excursion,
+                    "alt_gain_m": m["altitude_gain"], "alt_loss_m": m["altitude_loss"],
+                    "peak_bus_current_A": m["peak_bus_current"],
+                    "min_bus_voltage_V": m["min_bus_voltage"],
+                    **cells(fl, skip=("min_bus_voltage_V",)),
+                })  # fmt: skip
         out["tables"]["D_a_eq"] = rows
-        rec = c.recommendation
-        scens = _ensemble(inp, rec.ensemble_n, rec.ensemble_seed)
-        a_rec, rec_rows = braking.recommend_decel(vp, scens, rec.v0_ground_ms, bp)
-        out["a_rec"] = a_rec
-        if rec.percentile is not None:
-            a_pct, _ = braking.recommend_decel(
-                vp, scens, rec.v0_ground_ms, bp, percentile=rec.percentile
-            )
-            out["a_rec_pct"], out["pct"] = a_pct, rec.percentile
-        out["tables"]["D_recommendation_ensemble"] = [
-            {"altitude_m": s.altitude_amsl_m, "mass_kg": s.mass_kg, "headwind_ms": s.headwind_ms,
-             "V0_ground_ms": v0, "a_eq_ms2": a}
-            for s, v0, a in rec_rows
-        ]  # fmt: skip
+
+        # -- diagnostic: the old speed grid, air speed = TAS of the grid EAS, ground = air - wind
+        grid: Table = []
+        for name in c.scenarios:
+            for mf in c.mass_factors:
+                sc = dataclasses.replace(inp.scenarios[name], mass_kg=vp.m * mf)
+                for ve in c.v0_eas_ms:
+                    v_air = tas(ve, sc)
+                    base = {"scenario": name, "altitude_m": sc.altitude_amsl_m,
+                            "mass_kg": sc.mass_kg, "V0_eas_ms": ve, "V0_air_ms": v_air,
+                            "V0_ground_ms": v_air - sc.headwind_ms}  # fmt: skip
+                    try:
+                        r, fl, _ = run(sc, base_bp, v_air)
+                    except ValueError as exc:  # entry at or below the end speed: no run
+                        grid.append({**base, "note": str(exc)})
+                        continue
+                    grid.append({**base, "a_eq_ms2": _num(r.a_eq), "x_actual_m": _num(r.x_actual),
+                                 **cells(fl)})  # fmt: skip
+        out["tables"]["D_a_eq_speed"] = grid
+
+        # -- recommendation: Sobol ensemble + corners, entry fixed in air speed per scenario
+        def ensemble(bp: Any) -> tuple[Table, list[float], list[float]]:
+            core, corners = braking_ensemble(rec.ensemble_n, vp, rec.ensemble_seed,
+                                             inp.ensemble_axes, rec.corners)  # fmt: skip
+            erows: Table = []
+            for kind, scens in (("sobol", core), ("corner", corners)):
+                for s in scens:
+                    v_air = entry(s)
+                    vs = aero.stall_speed(s.mass_kg or vp.m, s.rho, vp.wing)
+                    r, fl, v_ground = run(s, bp, v_air)
+                    erows.append({
+                        "set": kind, "altitude_m": s.altitude_amsl_m,
+                        "isa_offset_k": s.isa_offset_k, "mass_kg": s.mass_kg, "soc": s.soc,
+                        "headwind_ms": s.headwind_ms,
+                        "V0_air_ms": v_air, "V0_ground_ms": v_ground, "Vs_ms": vs,
+                        "below_vs": v_air < vs, "a_eq_ms2": _num(r.a_eq), **cells(fl),
+                    })  # fmt: skip
+            done = [x for x in erows if x["a_eq_ms2"] != ""]
+            core_a = [float(x["a_eq_ms2"]) for x in done if x["set"] == "sobol"]
+            return erows, core_a, [float(x["a_eq_ms2"]) for x in done]
+
+        erows, core_a, all_a = ensemble(base_bp)
+        out["tables"]["D_recommendation_ensemble"] = erows
+        sobol = [x for x in erows if x["set"] == "sobol"]
+        corner = [x for x in erows if x["set"] == "corner"]
+        if not core_a:
+            raise ValueError("D: no ensemble run reached the end speed")
+        a_min = min(all_a)
+        pct, lo, hi = bootstrap_percentile(core_a, rec.percentile, rec.n_boot, rec.ensemble_seed)
+        half = [float(x["a_eq_ms2"]) for x in sobol[: len(sobol) // 2] if x["a_eq_ms2"] != ""]
+
+        def where(x: dict[str, Any]) -> str:
+            return (f"alt {x['altitude_m']:.0f} m, mass {x['mass_kg']:.1f} kg, headwind "
+                    f"{x['headwind_ms']:+.1f} m/s, ISA {x['isa_offset_k']:+.1f} K, "
+                    f"SoC {x['soc']:.2f}")
+
+        def by_a(x: dict[str, Any]) -> float:
+            return float(x["a_eq_ms2"])
+
+        ok = [x for x in erows if x["a_eq_ms2"] != ""]
+        ok_corner = [x for x in corner if x["a_eq_ms2"] != ""]
+        spear: dict[str, float | str] = {}
+        for ax, key in (("altitude", "altitude_m"), ("isa", "isa_offset_k"), ("mass", "mass_kg"),
+                        ("headwind", "headwind_ms"), ("soc", "soc")):
+            xs = [float(x[key]) for x in sobol if x["a_eq_ms2"] != ""]
+            ys = [float(x["a_eq_ms2"]) for x in sobol if x["a_eq_ms2"] != ""]
+            varies = len(set(xs)) > 1 and len(set(ys)) > 1
+            rho_s = float(stats.spearmanr(xs, ys).statistic) if varies else math.nan
+            spear[f"spearman_{ax}"] = _num(rho_s)
+        out["tables"]["D_recommendation"] = [{
+            "n": rec.ensemble_n, "seed": rec.ensemble_seed, "n_corners": len(corner),
+            "convention": c.entry_convention, "percentile": rec.percentile,
+            "a_rec_min_ms2": a_min, "a_rec_pct_ms2": pct, "a_rec_pct_ci_lo_ms2": lo,
+            "a_rec_pct_ci_hi_ms2": hi,
+            "a_rec_pct_half_ms2": float(np.percentile(half, rec.percentile)) if half else "",
+            "n_below_vs": sum(1 for x in sobol if x["below_vs"]),
+            "n_nan": sum(1 for x in erows if x["a_eq_ms2"] == ""),
+            "min_set_by": where(min(ok, key=by_a)),
+            "worst_corner": where(min(ok_corner, key=by_a)) if ok_corner else "",
+            **spear,
+        }]  # fmt: skip
+        out["a_rec"], out["a_rec_pct"], out["pct"] = a_min, pct, rec.percentile
+        out["a_rec_ci"] = (lo, hi)
+
+        # -- trade curve: first named scenario, entry from the airspeed rule, ground = air - wind
         sc0 = inp.scenarios[c.scenarios[0]]
-        v0g = tas(inp.entry_eas, sc0)
+        v_air0 = entry(sc0)
         trade: Table = []
         for a_plan in c.trade.a_plan_ms2:
             for wind in c.trade.headwinds_ms:
                 for test in ("ground", "air") if wind > 0 else ("ground",):
-                    for a_lim in sorted({bp.a_lim, a_plan}):
+                    for a_lim in sorted({base_bp.a_lim, a_plan}):
                         scw = dataclasses.replace(sc0, headwind_ms=wind)
-                        bpw = dataclasses.replace(bp, a_lim=a_lim)
-                        r = braking.landing_error(vp, scw, v0g, a_plan, bpw, speed_test=test)
-                        v_ref = v0g if test == "ground" else v0g + wind
+                        bpw = dataclasses.replace(base_bp, a_lim=a_lim)
+                        x0, v0g = braking.airbrake_entry_state(vp, scw, bpw, v_air0)
+                        r = braking.landing_error(vp, scw, v0g, a_plan, bpw, speed_test=test, x0=x0)
+                        v_ref = v0g if test == "ground" else v_air0
                         trade.append({
                             "a_plan_ms2": a_plan, "a_lim_ms2": a_lim, "speed_test": test,
-                            "headwind_ms": wind, "x_plan_m": v_ref**2 / (2.0 * a_plan),
-                            "x_actual_m": r.x_actual, "overshoot_m": r.overshoot,
+                            "headwind_ms": wind, "V0_air_ms": v_air0, "V0_ground_ms": v0g,
+                            "x_plan_m": v_ref**2 / (2.0 * a_plan),
+                            "x_actual_m": _num(r.x_actual),
+                            "overshoot_m": "" if r.overshoot is None else r.overshoot,
                             "energy_J": r.sim.metrics["energy_J"],
                             "altitude_excursion_m": r.altitude_excursion,
                         })  # fmt: skip
         out["tables"]["D_trade_curve"] = trade
+
+        # -- sensitivity: first named scenario at nominal mass, one change at a time
+        scn = dataclasses.replace(sc0, mass_kg=vp.m)
+        v_air_n = entry(scn)
+        deg = math.radians
+        cases: list[tuple[str, dict[str, Any]]] = [("base", {})]
+        cases += [(f"theta_fw0_{d:g}deg", {"theta_fw0": deg(d)})
+                  for d in c.sens.theta_fw0_deg_sweep]  # fmt: skip
+        cases += [(f"rotor_lag_{s:g}s", {"ff_mode": "lift_aware", "rotor_lag_s": s})
+                  for s in c.sens.lag_s_sweep]  # fmt: skip
+        cases += [("ff_mode_repo", {"ff_mode": "repo"})]
+        cases += [(f"lift_filter_{s:g}s", {"ff_mode": "lift_aware", "ff_lift_tau_s": s})
+                  for s in c.sens.lift_tau_s_sweep]  # fmt: skip
+        cases += [(f"lift_scale_{s:g}", {"ff_mode": "lift_aware", "ff_lift_scale": s})
+                  for s in c.sens.lift_scale_sweep]  # fmt: skip
+        if inp.controller.theta_B is not None:
+            cases += [("pit_lim_airspeed", {"pit_lim_mode": "airspeed"})]
+        cases += [("enforce_alpha", {"alpha_cap": alpha_cap})]
+        with_ensemble = {"base", "ff_mode_repo", "enforce_alpha"}
+        sens_rows: Table = []
+        for case, over in cases:
+            bps = dataclasses.replace(base_bp, **over)
+            r, fl, _ = run(scn, bps, v_air_n)
+            m = r.sim.metrics
+            srow: dict[str, Any] = {
+                "case": case, "a_eq_ms2": _num(r.a_eq), "x_actual_m": _num(r.x_actual),
+                "alt_gain_m": m["altitude_gain"], "alt_loss_m": m["altitude_loss"],
+                **cells({k: fl[k] for k in ("vh_end_ms", "alpha_max_gated_deg",
+                                            "t_above_alpha_08_s", "t_above_alpha_s_s")}),
+                "a_rec_pct_ensemble_ms2": "",
+            }  # fmt: skip
+            if case in with_ensemble:
+                _, ca, _ = ensemble(bps)
+                if ca:
+                    srow["a_rec_pct_ensemble_ms2"] = float(np.percentile(ca, rec.percentile))
+            sens_rows.append(srow)
+        out["tables"]["D_sensitivity"] = sens_rows
 
     def stage_f() -> None:
         rows: Table = []
@@ -248,7 +396,12 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         out["tables"]["F_descent"] = rows
 
     def stage_e() -> None:
-        a_plan = float(out.get("a_rec", 2.5))
+        a_rec = out.get("a_rec")
+        if a_rec is None or not math.isfinite(a_rec):
+            a_plan, a_source = inp.study.E.a_plan_fallback_ms2, "fallback"
+            errors.append(f"E: no recommendation from D, a_plan = {a_plan:g} m/s2 (fallback)")
+        else:
+            a_plan, a_source = float(a_rec), "D"
         budgets: dict[str, Any] = {}
         ranges = sorted({*inp.study.E.ranges_km, *inp.requirements_km})
         for alt in inp.study.E.cruise_amsl_m:
@@ -274,7 +427,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                 "reserve_Wh": b.reserve_J / 3600.0,
                 **{f"conflict_{r:g}km": c for r, c in zip(inp.requirements_km, conf.values(),
                                                           strict=True)},
-                "a_plan_ms2": a_plan,
+                "a_plan_ms2": a_plan, "a_plan_source": a_source,
             })  # fmt: skip
             for seg, s in b.segments.items():
                 out["tables"].setdefault("E_segments", []).append({

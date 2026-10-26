@@ -86,10 +86,17 @@ class ACfg(_Strict):
 
 
 class DRecCfg(_Strict):
-    ensemble_n: int = Field(8, ge=1)
+    ensemble_n: int = Field(8, ge=1)  # a power of two: the Sobol sample keeps its balance
     ensemble_seed: int = 3
-    v0_ground_ms: list[float] = [18.0, 22.0]
-    percentile: float | None = 5.0
+    percentile: float = Field(5.0, gt=0.0, lt=100.0)
+    corners: bool = True  # also run the 8 vertices of altitude x mass x headwind
+    n_boot: int = Field(1000, ge=10)  # bootstrap resamples for the percentile's interval
+
+    @model_validator(mode="after")
+    def _power_of_two(self) -> DRecCfg:
+        if self.ensemble_n & (self.ensemble_n - 1):
+            raise ValueError(f"ensemble_n must be a power of two, not {self.ensemble_n}")
+        return self
 
 
 class DTradeCfg(_Strict):
@@ -97,10 +104,34 @@ class DTradeCfg(_Strict):
     headwinds_ms: list[float] = [0.0, 5.0]
 
 
+class DSensCfg(_Strict):
+    """Cases of `D_sensitivity`, on the first named scenario at nominal mass."""
+
+    theta_fw0_deg_sweep: list[float] = [0.0, 4.0, 8.0, 12.0]
+    lag_s_sweep: list[float] = [0.0, 0.25, 0.5]
+    lift_tau_s_sweep: list[float] = [0.0, 0.5]
+    lift_scale_sweep: list[float] = [0.8, 1.2]
+
+
 class DCfg(_Strict):
     scenarios: list[str] = ["S-01", "S-02"]
     mass_factors: list[float] = [0.85, 1.0, 1.15]
+    # altitude hold: "repo" = constant hover throttle, "lift_aware" = throttle for W - L (an ORACLE
+    # at tau 0 and scale 1: it reads the simulated lift)
+    ff_mode: Literal["repo", "lift_aware"] = "lift_aware"
+    ff_lift_tau_s: float = Field(0.0, ge=0.0)
+    ff_lift_scale: float = Field(1.0, gt=0.0)
+    theta_fw0_deg: float = 0.0  # last fixed-wing pitch at the AIRBRAKE exit (placeholder)
+    pit_lim_mode: Literal["constant", "airspeed"] = "constant"  # Q_BCK_PIT_LIM form (O-05)
+    q_assist_speed_ms: float = Field(0.0, ge=0.0)  # entry speed: max(AIRSPEED_MIN - 2, this)
+    entry_convention: Literal["tas", "eas"] = "tas"  # AIRSPEED_MIN read as true or equivalent
+    enforce_alpha: bool = False  # hold the wing angle of attack to the 0.8 C_L,max band top
+    alpha_gate_ms: float = Field(5.0, ge=0.0)  # below this airspeed alpha is not judged
+    sink_tol_ms: float = Field(0.5, ge=0.0)  # end sink rate that counts as sinking (placeholder)
+    rotor_lag_s: float = Field(0.0, ge=0.0)  # sensitivity only
+    # diagnostic speed grid (D_a_eq_speed), to set beside A's windows; not the headline
     v0_eas_ms: list[float] = [16.0, 22.0]
+    sens: DSensCfg = DSensCfg()
     recommendation: DRecCfg = DRecCfg()
     trade: DTradeCfg = DTradeCfg()
 
@@ -112,6 +143,7 @@ class FCfg(_Strict):
 class ECfg(_Strict):
     cruise_amsl_m: list[float] = [1000.0, 5000.0]
     ranges_km: list[float] = [50.0, 100.0, 113.0, 150.0]
+    a_plan_fallback_ms2: float = Field(2.5, gt=0.0)  # used when D produced no recommendation
 
 
 class Q2Cfg(_Strict):
