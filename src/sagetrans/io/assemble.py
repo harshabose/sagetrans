@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from sagetrans.io import figures, gate, report, results
+from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
 
@@ -405,6 +405,21 @@ def assemble(
             for o in s_res.large.index for i, n in enumerate(s_res.large.names)]  # fmt: skip
         for o in s_res.stability:
             figs[f"tornado_{o}"] = figures.tornado_figure(s_res.oat, o)
+
+    # the settings sheet: recommended values beside the register and the ArduPilot default
+    tables["settings_recommended"] = recommended.settings_rows(inp, tables)
+    have_defaults = any(r["default"] != "" for r in tables["settings_recommended"])
+    sections["Recommended settings"] = "\n".join([
+        "One row per ArduPilot parameter the study recommends or reads. A parameter no analysis "
+        "has decided keeps its register value (\"not yet analysed\"). "
+        + ("The ArduPilot default is read from `ardupilot_defaults.yaml` (Plane-4.7.2) and is a "
+           "reference only: it is not tuned for this airframe and is never an input."
+           if have_defaults else "No `ardupilot_defaults.yaml` in the config folder: no default "
+           "column."), "",
+        md_table(tables["settings_recommended"],
+                 ["parameter", "unit", "default_text", "register", "value", "analysis", "grade",
+                  "flags", "change_vs_default", "note"]),
+    ])  # fmt: skip
 
     # record, report, write
     rec = build_record(

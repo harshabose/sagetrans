@@ -53,7 +53,10 @@ from sagetrans.physics.params import (
     WingParams,
 )
 
-REGISTER_FILES = ("vehicle", "mission", "controller")
+REGISTER_FILES = ("vehicle", "mission", "controller", "ardupilot_defaults")
+# register files that may be absent: the study then runs without the ArduPilot-defaults comparison
+OPTIONAL_REGISTER_FILES = ("ardupilot_defaults",)
+DEFAULTS_ONLY = ("Q_ASSIST_SPEED",)  # listed in ardupilot_defaults.yaml, not a study parameter
 PLAIN_FILES = ("scenarios", "study")
 
 # VehicleParams attribute -> group name in vehicle.yaml
@@ -141,6 +144,7 @@ class StudyInputs:
     draft_reasons: tuple[str, ...]  # why this is not a release-grade input set
     settings_hash: str
     forward: ForwardParams
+    defaults: dict[str, float] = field(default_factory=dict)  # ArduPilot defaults, SI, by name
     notes: tuple[str, ...] = field(default=())
 
     @property
@@ -171,11 +175,16 @@ class StudyInputs:
     def controller_nominals(self) -> dict[str, float]:
         return {"alt_hold_Kvh": self.controller.K_vh, "alt_hold_Ki": self.controller.K_i}
 
+    def resolve_default(self, name: str) -> float | None:
+        """The ArduPilot default of a parameter in SI units, or None (see `resolve_default`)."""
+        return resolve_default(self.defaults, name)
+
 
 # ---- reading files -----------------------------------------------------------------------------
-def _read_yaml(path: Path, problems: list[str]) -> Any:
+def _read_yaml(path: Path, problems: list[str], optional: bool = False) -> Any:
     if not path.is_file():
-        problems.append(f"missing file: {path.name} (expected in {path.parent})")
+        if not optional:
+            problems.append(f"missing file: {path.name} (expected in {path.parent})")
         return None
     try:
         with path.open(encoding="utf-8") as fh:
@@ -208,6 +217,9 @@ def _known_paths() -> set[str]:
     }  # fmt: skip
     known |= {f"controller.ardupilot.{n}" for n in ARDUPILOT_PARAMS}
     known |= {f"controller.tecs.{n}" for n in TECS_PARAMS}
+    # the defaults file uses the same names (and so the same unit conversion) as the register
+    known |= {f"ardupilot_defaults.ardupilot.{n}" for n in (*ARDUPILOT_PARAMS, *DEFAULTS_ONLY)}
+    known |= {f"ardupilot_defaults.tecs.{n}" for n in TECS_PARAMS}
     for g, names in CONTROLLER_GROUPS.items():
         known |= {f"controller.{g}.{n}" for n in names}
     return known
@@ -313,7 +325,10 @@ def load_inputs(
     `only` replaces the `analyses` list of study.yaml (the command line's --only)."""
     root = Path(config_dir)
     problems: list[str] = []
-    raw = {n: _read_yaml(root / f"{n}.yaml", problems) for n in (*REGISTER_FILES, *PLAIN_FILES)}
+    raw = {
+        n: _read_yaml(root / f"{n}.yaml", problems, optional=n in OPTIONAL_REGISTER_FILES)
+        for n in (*REGISTER_FILES, *PLAIN_FILES)
+    }
     for n in REGISTER_FILES:
         if raw[n] is not None and not isinstance(raw[n], Mapping):
             problems.append(f"{n}.yaml: the top level must be a mapping of groups")
@@ -340,7 +355,7 @@ def load_inputs(
 
     # register files -> one merged Config
     try:
-        cfg = Config.from_dict({n: raw[n] for n in REGISTER_FILES}, root=root)
+        cfg = Config.from_dict({n: raw[n] for n in REGISTER_FILES if raw[n] is not None}, root=root)
     except ConfigError as exc:
         raise InputError(str(exc).split("\n  ")[1:] or [str(exc)]) from exc
     known = _known_paths()
@@ -495,8 +510,34 @@ def load_inputs(
         ensemble_axes=axes, study=study, fallbacks=tuple(rd.fallbacks),
         draft_reasons=tuple(draft_reasons),
         settings_hash=hashlib.sha256(settings_blob.encode()).hexdigest(),
-        forward=forward,
+        forward=forward, defaults=_defaults(cfg),
     )  # fmt: skip
+
+
+def _defaults(cfg: Config) -> dict[str, float]:
+    """The ArduPilot defaults by name in SI units (empty without the defaults file)."""
+    out: dict[str, float] = {}
+    for p in cfg:
+        if p.startswith("ardupilot_defaults.") and cfg.record(p).si_value is not None:
+            out[p.rsplit(".", 1)[1]] = float(cfg.record(p).si_value or 0.0)
+    return out
+
+
+def resolve_default(defaults: Mapping[str, float], name: str) -> float | None:
+    """The ArduPilot default of `name` in SI units, with "use another parameter" resolved.
+
+    `TKOFF_THR_MAX` 0 means `THR_MAX` is used (O-17); `Q_A_ANGLE_MAX` 0 means the attitude
+    controller's 30 deg. A missing entry (or a missing `THR_MAX` behind a 0) gives None: the caller
+    skips that comparison and says so, it never falls back to a made-up value.
+    """
+    v = defaults.get(name)
+    if v is None:
+        return None
+    if name == "TKOFF_THR_MAX" and v == 0.0:
+        return defaults.get("THR_MAX")
+    if name == "Q_A_ANGLE_MAX" and v == 0.0:
+        return math.radians(30.0)
+    return float(v)
 
 
 def cfg_has(cfg: Config, path: str) -> bool:
