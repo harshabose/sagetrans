@@ -21,6 +21,7 @@ them with real data as you get it.
 | `controller.yaml` | register | the ArduPilot parameters (by their real names) and the assumed controller gains |
 | `scenarios.yaml` | plain | the named scenarios (S-01…S-06) and the ensemble ranges |
 | `study.yaml` | plain | which analyses to run, how much effort, run name, draft/release mode, parallelism |
+| `ardupilot_defaults.yaml` | register (optional) | the values ArduPilot ships with (Plane-4.7.2), same names and units as `controller.yaml`; a reference only, never an input (docs/DEFAULTS_spec.md) |
 
 **Register files** are the *data*: every entry carries a value, a unit, a source and an evidence
 status, and the toolkit tracks how much of every result rests on assumptions. **Plain files** are
@@ -196,7 +197,7 @@ The `ardupilot` group uses the **real parameter names**.
 
 | Entry | Unit | Placeholder | Meaning |
 | --- | --- | --- | --- |
-| `AIRSPEED_MIN` | m/s | 14 | transition speed. The simulated controller compares *true* airspeed; whether ArduPilot compares EAS or TAS is open (O-02) |
+| `AIRSPEED_MIN` | m/s | 14 | transition speed, read as an **equivalent** airspeed by D, C, B1 and FT (`D.entry_convention: eas`; ArduPilot compares EAS, O-14 and O-23). Q2 follows its own `feed_convention` (`tas` by default, open) |
 | `Q_TRANSITION_MS` | ms | 5000 | rotor fade time after `AIRSPEED_MIN` (documented default) |
 | `Q_BACKTRANS_MS` | ms | 3000 | back-transition pitch-limit ramp |
 | `Q_A_ANGLE_MAX` | deg | 20 | maximum VTOL lean angle |
@@ -282,5 +283,6 @@ Exit codes: `0` ok, `1` a task failed, `2` the inputs are unusable (or release m
   Table-driven maps (CSV over J and μ) and a measured open-circuit-voltage / equivalent-circuit table
   need B-spline interpolants in the model and are the next step; the register already accepts `file:`
   entries, but nothing reads them.
-* **A forward-transition optimisation** and a simulated forward transition in the energy budget.
+* **A simulated forward transition in the energy budget.** E uses a quasi-steady estimate; the forward
+  transition is simulated and optimised by analysis FT, which does not feed E (E's `a_fwd` is not wired to it).
 * **Per-scenario vehicle changes** other than mass (a hot-day derating of the motors, say).

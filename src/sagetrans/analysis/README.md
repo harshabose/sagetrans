@@ -12,6 +12,7 @@ scenario and options to a results object. Analysis letters follow the proposal's
 | `zero_loss.py` | **A** — quasi-steady zero-altitude-loss feasibility | For which constant decelerations at which speeds can the hardware hold altitude, inside an angle-of-attack band? What fails at each edge? |
 | `collocation.py` | **B1** — open-loop optimum by direct collocation | What is the best trajectory under the constraints? (energy against excursion and distance) |
 | `restricted.py` | **C** — ArduPilot-parameter optimisation | What can the autopilot be *configured* to do? |
+| `forward.py` | **FT** — forward transition from hover | Which `AIRSPEED_MIN`, `Q_TRANSITION_MS`, `TKOFF_THR_MAX` and `Q_TRAN_PIT_MAX` leave the altitude and the stall margin intact? |
 | `braking.py` | **D** — Position1 braking and `Q_TRANS_DECEL` | How far does the aircraft need to brake, and what deceleration should the planner assume? |
 | `energy.py` | **E** — mission energy budget and reserve | Does the mission fit in the usable pack energy at 100 and 113 km (Q1, Q7)? |
 | `pusher.py` | **Q2** — pusher forward acceleration | What forward acceleration can the pusher deliver at `TKOFF_THR_MAX` from rest to `AIRSPEED_MIN`? |
@@ -665,6 +666,34 @@ criterion (DEC-4) and no check on position or heading at the stop. The entry sta
 placeholders (`theta_fw0_deg` = 0; `AIRSPEED_MIN` read as a true airspeed, DEC-1). `theta_A` against its
 30° bound is a stalled-wing brake as in D: read D's alpha and VRS flags next to it, and do not read the
 result as a recommendation to fly at 30°.
+
+---
+
+## FT — forward transition (`forward.py`)
+
+**Question.** Which four ArduPilot settings take the aircraft from hover at 30 m to wing-borne flight without
+losing altitude, stalling or leaving the wing unable to carry the weight? Specified in `docs/FT_spec.md`,
+with the source facts in `docs/ardupilot_open_questions.md` (O-14 to O-22).
+
+* **Model.** `control/forward.py`: the Z loop and a climb demand until the hand-over (the first step with
+  EAS above `AIRSPEED_MIN`), then a frozen-throttle linear fade over `Q_TRANSITION_MS`, then DONE. The pusher
+  and the pitch are driven by `TecsLite`, a line-by-line port of `AP_TECS.cpp` (VTOL stage in WAIT and FADE,
+  normal stage in DONE, O-21), with the pitch cap of O-16 and the throttle limits of O-17. Everything is in
+  equivalent airspeed. `TECS_THR_ERATE` decay is not modelled; whether TECS runs through the hover is the
+  `FT.tecs_start` setting (open).
+* **Cost and flags.** Cost as C's (altitude excursion and energy; distance has weight 0). A failure costs
+  the usual penalty: `no_handover`, `stall_margin` (EAS below 1.2 times the stall speed from the hand-over
+  on), `stall`, `alt_loss`, `alt_gain` (beyond `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`,
+  both `assumed`), `proj_loss` (the projected minimum altitude from the end-of-fade state and the recovery
+  acceleration), `underspeed`, `battery_cutoff`, `touchdown`.
+* **Search and tables.** CMA-ES over four variables, bounds in `study.yaml` `FT.bounds`, the same Sobol
+  ensemble as C shifted to the transition altitude (`FT.ensemble_n` 16: one evaluation of 32 runs cost 3.5
+  times C's, over the spec's 2 times). `FT_params` (the optimum, the register start and, with a defaults
+  file, the `ardupilot_default` case), `FT_search`, `FT_runs`, `FT_scan` (cost with `AIRSPEED_MIN` fixed on
+  a grid), `FT_sens`, `FT_history`.
+* **A reference, not a recommendation.** The `ardupilot_default` case sets the four searched values to what
+  ArduPilot ships with (`configs/ardupilot_defaults.yaml`, docs/DEFAULTS_spec.md) and keeps the rest of the
+  register; C has the same third case. It is simulated to show how far the default is from the optimum.
 
 ---
 
