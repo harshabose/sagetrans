@@ -323,6 +323,25 @@ At the register values (32 points, seed 8, `tas`): 5th percentile 2.09 (interval
 minimum 1.99 (the corner at altitude 0, mass ×0.8, headwind +5), median 2.5; with `eas`, 5th
 percentile 2.18. Before this change the ensemble gave 2.52 (minimum 2.51).
 
+**`a_rec` is a function of the ground speed.** In the default runs `a_eq` is set by the ground speed
+at the AIRBRAKE exit and by almost nothing else: the pitch limit ramps with time from the exit and
+the rotors carry `W - L`, so the deceleration is about `g tan(theta)` times `(1 - L/W)`; mass
+cancels and the density enters only through the small wing terms. A slow aircraft stops while the
+ramp is still low, so its distance-equivalent `a_eq` is low. With the entry air speed fixed, only the
+headwind moves the ground speed, so `a_rec_pct` is in effect a percentile of the headwind range.
+`D_a_rec_curve` therefore reports the recommendation as a curve, one row per ground speed in
+`D.curve.ground_speeds_ms`: the air speed is the rule's, the headwind is `V_air0 - V_ground` (a
+negative value is a tailwind), and every named scenario x mass factor runs at each speed.
+`a_rec_min_ms2` is the minimum over those runs and `set_by` names the run; read `Q_TRANS_DECEL` off
+the curve at the slowest ground speed that has to be covered, and look at `a_eq_median_ms2` beside
+it (the minimum can be an entry-state artefact: the 10% rotor floor in the lightest run). The single
+numbers of `D_recommendation` are valid only inside `covers` (`ground_speed_min_ms` to
+`ground_speed_max_ms`, with the headwind range). `D.recommendation.design_ground_speed_ms` gives
+`a_rec_design_ms2`, the curve value at that speed by linear interpolation; a speed outside the
+curve is an error. Analysis E keeps reading the single conservative `a_rec_min`. E enters faster
+than the curve ends (its entry EAS is 21 to 27 m/s TAS against 20 m/s), where `a_eq` is higher, so
+`a_rec_min` is conservative there; using the curve at E's entry speed is an open decision.
+
 ### Tables
 
 | Table | Contents |
@@ -330,7 +349,8 @@ percentile 2.18. Before this change the ensemble gave 2.52 (minimum 2.51).
 | `D_a_eq` | named scenarios x mass factors, entry from the rule; `a_eq`, distance, excursions, the flags |
 | `D_a_eq_speed` | diagnostic: the old speed grid `v0_eas_ms`, `V0_air_ms` = TAS of the grid EAS, `V0_ground_ms = V0_air_ms - headwind`; set it beside A's windows at the same speeds |
 | `D_recommendation_ensemble` | one row per run (Sobol and corners): inputs, `V0_air_ms`, `V0_ground_ms`, `Vs_ms`, `below_vs`, `a_eq`, the flags |
-| `D_recommendation` | the summary row above, plus the scenario that sets the minimum, the worst corner, and the Spearman correlation of `a_eq` with each axis |
+| `D_recommendation` | the summary row above, plus the scenario that sets the minimum, the worst corner, the Spearman correlation of `a_eq` with each axis, the ground-speed and headwind range it covers (`covers`) and `a_rec_design_ms2` |
+| `D_a_rec_curve` | `a_rec` as a function of the ground speed at the exit: per speed, the minimum and median over the named scenarios x mass factors, what sets the minimum, its distance and time, the largest excursion and the number of runs still sinking |
 | `D_trade_curve` | first named scenario; entry is the rule's air speed, ground speed is that minus the wind |
 | `D_sensitivity` | first named scenario at nominal mass, one change at a time: `theta_fw0`, rotor lag, `ff_mode: repo`, lift filter and scale, the airspeed pitch-limit form (only if `Q_BCK_PIT_LIM` is set), `enforce_alpha`; the base, repo and enforce cases also give the ensemble 5th percentile |
 

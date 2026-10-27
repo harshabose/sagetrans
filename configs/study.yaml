@@ -63,7 +63,10 @@ D:                         # braking and Q_TRANS_DECEL
     lag_s_sweep: [0, 0.1, 0.25, 0.5]
     lift_tau_s_sweep: [0, 0.5]
     lift_scale_sweep: [0.8, 1.2]
-  recommendation: {ensemble_n: 32, ensemble_seed: 8, percentile: 5, corners: true, n_boot: 1000}   # n: power of two
+  recommendation: {ensemble_n: 32, ensemble_seed: 8, percentile: 5, corners: true, n_boot: 1000,   # n: power of two
+                   design_ground_speed_ms: null}   # read a_rec off the curve at this ground speed (inside the curve); null = none
+  curve:                            # D_a_rec_curve: a_rec as a function of the ground speed at the AIRBRAKE exit
+    ground_speeds_ms: [5, 6, 8, 10, 12, 14, 15, 16, 18, 20]   # each above the 1 m/s end speed
   trade: {a_plan_ms2: [1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0, 2.1, 2.25, 2.5, 3.0, 3.5], headwinds_ms: [-5, 0, 5]}
 
 F:                         # landing descent profile

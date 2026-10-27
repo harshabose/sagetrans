@@ -122,6 +122,21 @@ def rotor_speed_tau(vp: VehicleParams, rho: float, soc: float) -> float:
     return -1.0 / slope
 
 
+def curve_value(ground_speeds: list[float], values: list[float], v_ground: float) -> float:
+    """Linear interpolation of the recommendation curve `a_rec(V_ground)` at `v_ground`.
+
+    `ground_speeds` need not be sorted. A speed outside the curve is an error: the curve says
+    nothing there, so there is no extrapolation.
+    """
+    if len(ground_speeds) != len(values) or not ground_speeds:
+        raise ValueError("curve_value needs equal, non-empty speed and value lists")
+    pts = sorted(zip(ground_speeds, values, strict=True))
+    lo, hi = pts[0][0], pts[-1][0]
+    if not lo <= v_ground <= hi:
+        raise ValueError(f"ground speed {v_ground:g} m/s is outside the curve ({lo:g} to {hi:g})")
+    return float(np.interp(v_ground, [p[0] for p in pts], [p[1] for p in pts]))
+
+
 def braking_flags(
     res: Result,
     vp: VehicleParams,

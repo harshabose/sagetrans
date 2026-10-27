@@ -123,7 +123,15 @@ def _section_d(q: dict[str, Any]) -> str | None:
             f"the minimum over sample and corners is **{q['a_rec']:.2f} m/s²** "
             f"(set by {r0['min_set_by']}). {r0['n_below_vs']} of {r0['n']} sample entries are "
             "below their own 1g stall speed (flagged, not dropped).", "",
-            md_table(rec), ""]  # fmt: skip
+            f"These single numbers are valid only inside the ground speeds they cover: "
+            f"{r0['covers']}. The curve below gives the recommendation at other ground speeds.",
+            "", md_table(rec), ""]  # fmt: skip
+        if t.get("D_a_rec_curve"):
+            parts += ["**`a_rec` as a function of the ground speed at the AIRBRAKE exit** (the "
+                      "minimum over the named scenarios x mass factors; the air speed is the "
+                      "entry rule's, so the headwind is the air speed minus the ground speed; "
+                      "read `Q_TRANS_DECEL` at the slowest ground speed that must be covered):",
+                      "", md_table(t["D_a_rec_curve"]), ""]  # fmt: skip
     if t.get("D_sensitivity"):
         parts += ["One change at a time, first scenario at nominal mass (excursion columns: lower "
                   "bound, ideal actuators):", "", md_table(t["D_sensitivity"]), ""]
