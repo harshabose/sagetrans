@@ -321,26 +321,28 @@ def _record_with(analyses, spreads=None):
     return build_record(_complete_config(), recs, search_spreads=spreads)
 
 
-def test_gate_checks_t12_on_the_real_problem_not_only_the_analytic_unit_test():
+def test_gate_checks_t12_on_the_real_problem_not_only_the_analytic_unit_test(monkeypatch):
     sens = _sens(["measured"] * 4)
-    # the unit-test T-12 passes (ALL_PASS) but analysis B2 was never shown repeatable
-    no_evidence = gate.release_gate(_record_with(["B2"]), ALL_PASS, sens, [])
+    # the unit-test T-12 passes (ALL_PASS) but analysis C was never shown repeatable
+    no_evidence = gate.release_gate(_record_with(["C"]), ALL_PASS, sens, [])
     assert not no_evidence.passed
-    assert any("'B2'" in r and "no three-seed spread" in r for r in no_evidence.reasons)
-    # the real result from this project: B2's seeds disagree by 4-9 %
-    bad = gate.release_gate(_record_with(["B2"], {"B2": 0.09}), ALL_PASS, sens, [])
-    assert not bad.passed and any("'B2'" in r and "9.0%" in r for r in bad.reasons)
-    nan = gate.release_gate(_record_with(["B2"], {"B2": float("nan")}), ALL_PASS, sens, [])
+    assert any("'C'" in r and "no three-seed spread" in r for r in no_evidence.reasons)
+    # seeds that disagree by 9 % against the 1 % limit
+    bad = gate.release_gate(_record_with(["C"], {"C": 0.09}), ALL_PASS, sens, [])
+    assert not bad.passed and any("'C'" in r and "9.0%" in r for r in bad.reasons)
+    nan = gate.release_gate(_record_with(["C"], {"C": float("nan")}), ALL_PASS, sens, [])
     assert not nan.passed
-    # analysis C was repeatable (spread 2e-5), so it passes the same check
+    # a spread of 2e-5 is repeatable, so it passes the same check
     ok = gate.release_gate(_record_with(["C"], {"C": 2e-5}), ALL_PASS, sens, [])
     assert ok.passed
-    # one repeatable and one not: still blocked, and only the bad one is named
-    both = _record_with(["B2", "C"], {"B2": 0.044, "C": 2e-5})
+    # one repeatable and one not: still blocked, and only the bad one is named (a second search
+    # analysis, "FWD", is registered for this check only)
+    monkeypatch.setattr(gate, "SEARCH_ANALYSES", ("C", "FWD"))
+    both = _record_with(["C", "FWD"], {"C": 2e-5, "FWD": 0.044})
     mixed = gate.release_gate(both, ALL_PASS, sens, [])
     assert not mixed.passed
     assert [r for r in mixed.reasons if "T-12" in r] == [
-        r for r in mixed.reasons if "'B2'" in r
+        r for r in mixed.reasons if "'FWD'" in r
     ]
     # analyses that use no search are not asked for a spread
     assert gate.release_gate(_record_with(["E", "D"]), ALL_PASS, sens, []).passed

@@ -11,8 +11,8 @@ parallel:
   enabled: true
   max_workers: 0           # 0 = one per CPU core (capped by the number of tasks)
 
-# Which analyses to run. Names: A D F E Q2 C B2 B1 sensitivity
-analyses: [A, D, F, E, Q2, C, B2, B1, sensitivity]
+# Which analyses to run. Names: A D F E Q2 C B1 sensitivity
+analyses: [A, D, F, E, Q2, C, B1, sensitivity]
 
 switch_test: ground        # speed used in the Position1 switch test: ground | air  (O-02)
 
@@ -91,7 +91,7 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
   # The entry (theta_fw0_deg, pit_lim_mode, q_assist_speed_ms, entry_convention) comes from the D block.
   # Four variables are searched: Q_BACKTRANS_MS, Q_A_ANGLE_MAX, Q_M_SPIN_MIN and Q_TRANS_DECEL (q).
   ensemble_n: 32
-  ensemble_seed: 8         # same ensemble as B2 so the two can be compared
+  ensemble_seed: 8         # fixed seed of the 32-member ensemble
   seeds: [1, 2, 3, 4, 5, 6, 7, 8]
   popsize: 8
   maxiter: 20
@@ -114,15 +114,6 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
     z_vel_p: [2.5, 5, 10]
     z_acc_p: [0.015, 0.03, 0.06]
     theta_fw0_deg: [0, 8]
-
-B2:                        # speed-scheduled law, started from a B1 solution
-  ensemble_n: 32
-  ensemble_seed: 8
-  seeds: [1, 2, 3, 4, 5, 6, 7, 8]
-  popsize: 12
-  maxiter: 20
-  sigma0: 0.1
-  start: {scenario_index: 0, eps_h_m: 10, eps_x_m: 300}
 
 B1:                        # open-loop least-energy back-transition from the AIRBRAKE exit (docs/B1_fix_spec.md)
   # The entry (rotor start, sink tolerance) comes from the C block, the entry speed rule from the D block.

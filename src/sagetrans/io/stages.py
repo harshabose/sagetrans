@@ -1,7 +1,7 @@
 """The analysis stages of a study, each a function of the loaded inputs.
 
 A *task* is the unit of parallel work: ``basics`` (analyses A, D, F, E and Q2, which are quick and
-share results), ``C``, ``B2``, ``B1:<scenario>`` (one per scenario) and ``sensitivity``. Every task
+share results), ``C``, ``B1:<scenario>`` (one per scenario) and ``sensitivity``. Every task
 returns a plain dict of tables and objects that can be pickled, so it can be cached and run in a
 separate process. Nothing here reads a file: all data arrives through `StudyInputs`.
 """
@@ -25,7 +25,6 @@ from sagetrans.analysis import (
     braking,
     descent,
     energy,
-    freeform_opt,
     pusher,
     restricted,
     runs,
@@ -52,7 +51,7 @@ RHO0 = float(atmosphere.density(0.0))
 Table = list[dict[str, Any]]
 
 # rough wall-clock seconds on a laptop, for scheduling and for the pre-flight estimate
-TASK_COST = {"basics": 60, "C": 330, "B2": 360, "B1": 400, "sensitivity": 220}
+TASK_COST = {"basics": 60, "C": 330, "B1": 400, "sensitivity": 220}
 
 
 def tas(eas: float, scen: Scenario) -> float:
@@ -734,7 +733,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
     return out
 
 
-# ---- tasks: C, B2, B1, sensitivity -------------------------------------------------------------
+# ---- tasks: C, B1, sensitivity -------------------------------------------------------------
 def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams, CostWeights]:
     """C's evaluation settings, base controller parameters and cost normalisers from the config.
 
@@ -879,31 +878,6 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
                    "C_q_curve": q_curve, "C_sens": sens_rows},
     }  # fmt: skip
-
-
-def _b1_problem_cruise(inp: StudyInputs, scen: Scenario) -> coll.Problem:
-    """LEGACY: the level-cruise B1 problem that B2 still starts from (B2 is not on the AIRBRAKE
-    exit yet). B1 itself starts at the exit: see `task_b1`."""
-    c = inp.study.B1
-    opts = coll.CollocationOptions(n=c.intervals, max_iter=c.max_iter)
-    return coll.make_problem(
-        inp.vehicle, scen, tas(inp.entry_eas, scen), opts, inp.controller_overrides, inp.theta_p
-    )
-
-
-def task_b2(inp: StudyInputs) -> dict[str, Any]:
-    c = inp.study.B2
-    scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
-    prob = _b1_problem_cruise(inp, scens[c.start.scenario_index % len(scens)])
-    ver = coll.solve_verified(
-        prob, c.start.eps_h_m, c.start.eps_x_m, "energy", ns=tuple(inp.study.B1.refine_from)
-    )
-    init = freeform_opt.init_from_collocation(prob, ver.sol)
-    r = freeform_opt.optimise(
-        inp.vehicle, scens, seeds=tuple(c.seeds), popsize=c.popsize, maxiter=c.maxiter,
-        init_params=init, sigma0=c.sigma0, v0_eas=inp.entry_eas,
-    )  # fmt: skip
-    return {"result": r, "scens": scens, "b1_start": (ver.sol.ok, ver.verified, ver.sol.energy)}
 
 
 def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
@@ -1149,8 +1123,6 @@ def plan_tasks(inp: StudyInputs) -> list[str]:
         tasks.append("basics")
     if "C" in wanted:
         tasks.append("C")
-    if "B2" in wanted:
-        tasks.append("B2")
     if "B1" in wanted:
         tasks += [f"B1:{n}" for n in inp.study.B1.scenarios]
     if "sensitivity" in wanted:
@@ -1171,8 +1143,6 @@ def run_task(inp: StudyInputs, task: str) -> dict[str, Any]:
         return task_basics(inp)
     if kind == "C":
         return task_c(inp)
-    if kind == "B2":
-        return task_b2(inp)
     if kind == "B1":
         return task_b1(inp, arg)
     if kind == "sensitivity":

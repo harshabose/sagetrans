@@ -1,4 +1,4 @@
-"""Shared helpers for the ensemble analyses (B2, C): vehicle cache, entry state, run metrics."""
+"""Shared helpers for the ensemble analyses (C): vehicle cache, entry state, run metrics."""
 
 from __future__ import annotations
 

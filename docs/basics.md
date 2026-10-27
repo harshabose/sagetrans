@@ -1,3 +1,5 @@
+> B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
+
 # module.physics
 ## aero.py
 

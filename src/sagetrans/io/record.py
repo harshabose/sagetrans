@@ -50,7 +50,7 @@ class FullRunRecord:
     date: str
     analyses: dict[str, str]  # analysis name -> input hash of its own record
     seeds: tuple[int, ...] = ()
-    # three-seed cost spread of each analysis that used a stochastic search ("B2", "C"): the
+    # three-seed cost spread of each analysis that used a stochastic search (today only C): the
     # real-problem T-12 evidence, which the release gate checks (the unit test of T-12 only
     # exercises the search machinery on an analytic cost)
     search_spreads: dict[str, float] = field(default_factory=dict)
@@ -91,7 +91,7 @@ def build_record(
     The record is DRAFT if the configuration has any TBD parameter, or if any contributing
     analysis ran on placeholder physics (its own record is DRAFT).
 
-    `search_spreads` maps an analysis that used a stochastic search ("B2" or "C") to the
+    `search_spreads` maps an analysis that used a stochastic search (today only "C") to the
     three-seed cost spread of that search (`SearchResult.spread`).
     """
     reasons: list[str] = list(extra_reasons)

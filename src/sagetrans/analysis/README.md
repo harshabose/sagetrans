@@ -11,7 +11,6 @@ scenario and options to a results object. Analysis letters follow the proposal's
 | --- | --- | --- |
 | `zero_loss.py` | **A** — quasi-steady zero-altitude-loss feasibility | For which constant decelerations at which speeds can the hardware hold altitude, inside an angle-of-attack band? What fails at each edge? |
 | `collocation.py` | **B1** — open-loop optimum by direct collocation | What is the best trajectory under the constraints? (energy against excursion and distance) |
-| `freeform_opt.py` | **B2** — speed-scheduled law tuned over an ensemble | What does a robust, feedback-free speed law achieve? |
 | `restricted.py` | **C** — ArduPilot-parameter optimisation | What can the autopilot be *configured* to do? |
 | `braking.py` | **D** — Position1 braking and `Q_TRANS_DECEL` | How far does the aircraft need to brake, and what deceleration should the planner assume? |
 | `energy.py` | **E** — mission energy budget and reserve | Does the mission fit in the usable pack energy at 100 and 113 km (Q1, Q7)? |
@@ -45,7 +44,7 @@ scenario and options to a results object. Analysis letters follow the proposal's
 * **`braking_ensemble(n, vp, seed, axes, corners=True)`** — analysis D's ensemble: a scrambled
   Sobol sample over the five axes (`n` a power of two) and, as a second list, the 8 corners
   (altitude x mass x headwind, the other axes at their midpoints). `latin_hypercube` is untouched
-  (C and B2 use it). **`bootstrap_percentile(values, q, n_boot, seed, ci)`** — a percentile with a
+  (C uses it). **`bootstrap_percentile(values, q, n_boot, seed, ci)`** — a percentile with a
   bootstrap interval.
 * **`RunMetrics(excursion, energy, distance, failures)`** — one run's headline numbers and failure
   flags (`stall`, `battery_cutoff`, `touchdown`, `not_stopped`, `no_transition`).
@@ -73,7 +72,7 @@ J = w_h p95(dh)/h_ref + w_E mean(E)/E_ref + w_x p95(x)/x_ref + P * (number of fa
 
 ### `runs.py`
 
-Helpers shared by B2, C and B1: a cached `vehicle_for(vp)`; `stall_speed`;
+Helpers shared by C and B1: a cached `vehicle_for(vp)`; `stall_speed`;
 `cruise_entry_state(vp, scen, v_air)` (level steady cruise from `steady_trim`, rotors stopped,
 pusher at its trim speed, ground speed `V_air − headwind`); `end_events`; `failure_flags`;
 `segment_stats`; `run_metrics`.
@@ -123,7 +122,7 @@ and 14.9 deg). Roots are found on the coarse 61-point grid over the whole range 
 a dense 121-point grid inside it, because near a fold the two low roots are less than 1 deg apart.
 The choice is: in-band roots with `T_r >= 0` (nearest the previous pitch), else in-band roots with
 `T_r < 0` (these fail `thrust_sign`), else the out-of-band root nearest the band (these fail an angle
-margin). With no band the pre-band selection is reproduced exactly (this is what B2's start uses).
+margin). With no band the pre-band selection is reproduced exactly.
 
 **Checks** (each a normalised margin, feasible when `>= 0` everywhere): "pitch solution exists",
 thrust sign (`T_r >= 0`), rotor throttle ceiling (`ActuatorLimits.delta_r_max` 0.95), motor current,
@@ -164,7 +163,7 @@ state and pitch rate and is the authoritative one for a whole path.
 | Name | Purpose |
 | --- | --- |
 | `DecelProfile(a, v_end=1.0).sample(v0, n)` | constant deceleration; returns `t, V, a(t)` |
-| `ActuatorLimits(..., alpha_min, cl_frac, vrs_limit)` | the limits; `LEGACY_LIMITS` (all `None`) = the pre-band behaviour; `vrs_limit=None` = report the vortex-ring ratio only |
+| `ActuatorLimits(..., alpha_min, cl_frac, vrs_limit)` | the limits; `alpha_min=None` and `cl_frac=None` = the pre-band behaviour; `vrs_limit=None` = report the vortex-ring ratio only |
 | `solve_point(vp, rho, V, a, t_p, prev_theta, bal, band)` | one pointwise solution: `theta`, `T_r`, `H_r`, `omega`, `L`, `D`, `ok` |
 | `analyse(vp, scen, v0, profile, limits, t_p, n=120, v1_0=0)` | the full result (`ZeroLossResult`: `margins`, `feasible`, `violations`, `vrs_min`, `vrs_min_t`, ...) |
 | `feasible_window(vp, scen, V, limits, ...)` | windows `[a_lo, a_hi]` at one speed, with `Window.bind_lo/bind_hi` |
@@ -188,7 +187,7 @@ sea level and 5,000 m at equal equivalent airspeed (tested); the throttle demand
 **Tests** (`test_analyses.py`): closed forms (`theta = atan(a/g)`, `T_r = m sqrt(a^2+g^2)`), coast
 bound, eq. (10.3) self-consistency with the wing on, the profile, the angle band, root preference
 and the unbanded selection, the violation list, the window against the path check, an empty window,
-the legacy non-monotone verdict that B2's start relies on, and the equivalent-airspeed scaling.
+and the equivalent-airspeed scaling.
 
 --- | --- |
 | `DecelProfile(a, jerk=None, v_end=1.0).sample(v0, n)` | constant or jerk-limited deceleration; returns `t, V, a(t)` |
@@ -267,7 +266,7 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
   not fixed: `D.sens.lag_s_sweep` (0, 0.1, 0.25, 0.5 s) is a sensitivity, and the altitude excursion
   stays a lower bound until a bench value is set.
   * `vehicle.rotor.I_rot` is separate and stays: the vehicle model integrates the rotor speed with it
-    and analyses A, B1 and B2 depend on it. It is a physical parameter, not a D setting, and D does
+    and analyses A and B1 depend on it. It is a physical parameter, not a D setting, and D does
     not sweep it. `braking.rotor_speed_tau` is the model's own time constant at hover (about 0.023 s
     at the placeholder, linear in `I_rot`); it adds in series with `rotor_lag_s`, so the lag
     dominates for any value worth sweeping. `D_sensitivity` shows `rotor_lag_s`,
@@ -277,7 +276,7 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
     `tau_meas`. Then `rotor_lag_s = max(0, tau_meas - tau_rotor_model_s)`, so the model's lag is not
     counted twice. If a measured `I_rot` arrives, enter it in `vehicle.yaml` and reduce `rotor_lag_s`
     by the model time constant it adds.
-  * B1 and B2 have only `I_rot`, not this lag; C uses the controller and gets it. Compare B with C
+  * B1 has only `I_rot`, not this lag; C uses the controller and gets it. Compare B1 with C
     at `rotor_lag_s = 0`.
 
 ### The wing is stalled while braking
@@ -364,7 +363,7 @@ than the curve ends (its entry EAS is 21 to 27 m/s TAS against 20 m/s), where `a
 ArduPilot's `Q_TRANS_DECEL` does both jobs, this repo splits them. Analysis E takes
 `a_plan = a_rec` (the minimum), and falls back to `E.a_plan_fallback_ms2` with an error message and
 `a_plan_source = "fallback"` in `E_summary` when D gave none (whether E should read the percentile
-instead is open). Analyses C and B2 keep the old behaviour: C's `plan_decel` still calls
+instead is open). Analysis C keeps the old behaviour: C's `plan_decel` still calls
 `measure_a_eq` from its own entry state with the dataclass defaults (`ff_mode="repo"`), so its
 `a_plan` comes from a stalled-wing worst-case `a_eq`.
 
@@ -654,9 +653,8 @@ fifth variable of this search, with the entry speed following it). Also not in t
 **Legacy.** `evaluate_back`, `plan_decel`, `evaluate_full`, `optimise`, `BACK_BOUNDS`, `FULL_BOUNDS`,
 `DEFAULT_PARAMS` and `THETA_P` are untouched and marked legacy in their docstrings.
 `analysis/sensitivity.py` and `analysis/collocation.py` still call `evaluate_back`, `plan_decel`,
-`DEFAULT_PARAMS` and `THETA_P`; their migration is a separate step. **B and C are not comparable yet**:
-the B-to-C comparison (B-9: B2 2.341 against patched C 2.256) stays on the old level-cruise entry until
-B1 and B2 start at the AIRBRAKE exit. C's `x` is the distance from the AIRBRAKE exit to the stop; it
+`DEFAULT_PARAMS` and `THETA_P`; their migration is a separate step. B-9 (B2 against C) is
+withdrawn: B2 was removed, and B1 is compared with C through `B1_gap`. C's `x` is the distance from the AIRBRAKE exit to the stop; it
 leaves out the APPROACH/AIRBRAKE leg and the `2 * V_closing` term of the switch test (O-02), which belong
 to E's budget.
 
@@ -665,43 +663,6 @@ criterion (DEC-4) and no check on position or heading at the stop. The entry sta
 placeholders (`theta_fw0_deg` = 0; `AIRSPEED_MIN` read as a true airspeed, DEC-1). `theta_A` against its
 30° bound is a stalled-wing brake as in D: read D's alpha and VRS flags next to it, and do not read the
 result as a recommendation to fly at 30°.
-
----
-
-## B2 — speed-scheduled law (`freeform_opt.py`)
-
-Tunes the 13 parameters of the free-form law (6 rotor-throttle knots, 6 pitch knots, `s_on`) over an
-ensemble with the same cost and search as C, **back-transition only**. There are two starts:
-
-* `init_from_zero_loss` (the default): analysis A's pre-spun schedule re-plotted against `V/V_s`, computed with `LEGACY_LIMITS` (no angle band) so B2's start does not depend on A's band;
-  where A is infeasible the knots fall back to fixed defaults.
-* `init_from_collocation(prob, sol)`: a B1 solution re-plotted against `V/V_s` (the proposal's
-  step 2), with the rotor throttle converted from B1's effective throttle to the ESC command and
-  `s_on` read from where B1 first switches the rotors on. Pass it as `optimise(..., init_params=…)`.
-
-`optimise` also takes `sigma0`, CMA-ES's initial step size on the unit cube (default 0.25).
-
-**What it found (placeholder, the same 4-scenario ensemble as C; 180 evaluations per seed unless
-stated).**
-
-| Start | Start cost | Best cost | Seed spread | T-12 (≤ 1 %) |
-| --- | --- | --- | --- | --- |
-| A-based, `sigma0` 0.25 | 8.68 | 1.94 | 4.4 % | fails |
-| A-based, `sigma0` 0.25, 540 evaluations | 8.68 | 1.60 | 9 % | fails |
-| B1-based, `sigma0` 0.25 | **1.90** | 1.75 | 8.7 % | fails |
-| B1-based, `sigma0` 0.10 | 1.90 | **1.69** | 5.0 % | fails |
-| B1-based, `sigma0` 0.04 | 1.90 | 1.75 | 5.3 % | fails |
-| *C for comparison* | 2.09 | 2.00 | 0.10 % | passes |
-
-The B1 start is far better as a *starting point* (cost 1.90 against 8.68 — already below C's best,
-because it begins near a good open-loop trajectory) and reaches lower costs at the same budget, but
-**B2's optimum is still not repeatable from three seeds, so T-12 is not satisfied for B2.** With the
-default step size one seed never left the start; smaller steps help (spread 8.7 % → 5 %) but not
-enough. The landscape (13 dimensions, no altitude feedback, discontinuous failure penalties) probably
-needs a much larger budget, a different search setup, or fewer free parameters. The B2 free-form law
-reached an excursion of about 8–10 m against C's 12–14 m, so the result is lower-cost than C but not
-reproducible. **The release gate blocks any run record that includes `"B2"` without a spread of at
-most 1 %** (see `io/README.md`).
 
 ---
 
@@ -716,8 +677,8 @@ distance, under a **stated wing limit**? It is the energy-against-distance front
 stays 0), at the entry speed of D's rule `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`. The rotor start
 (`carry` or `idle`) and the end sink tolerance are read from the **C block**, the entry-speed rule and
 `theta_fw0` from the **D block**; the B1 block does not repeat them. The old level-cruise problem
-(`make_problem`, 22 m/s) is kept for B2, which still starts from it (`stages._b1_problem_cruise`), so
-**B2 and B1 are not comparable yet** and B-9 stays open until B2 migrates. `with_options` now keeps the
+(`make_problem`, 22 m/s) is kept for the legacy `bound_check` and the unit tests. B-9 (B2 against C) is
+withdrawn: B2 was removed. `with_options` now keeps the
 problem's entry state (it used to rebuild a cruise problem).
 
 **The wing limit is stated, never silent.** Two variants are run and labelled in every table:
@@ -793,7 +754,7 @@ the epsilon-constraint front this way; `min_excursion` is the least reliable mod
 excursion-objective solution once reported 0.0 m at the nodes while the replay showed several metres)
 and its result must be checked via `Verified.verified`.
 
-### Comparing with C and B2
+### Comparing with C
 
 **`bound_check_c(prob, c)`** solves B1 at C's own excursion and distance (`eps_h = max(c.excursion x
 1.02, 0.3)`, `eps_x = c.distance x 1.02`, objective energy, the three starts of `solve_verified`) and
@@ -804,8 +765,8 @@ ArduPilot controller costs. It is one scenario and one variant at a time (`B1_ga
 variant). Each B1 task is an independent process, so it cannot read C's optimum from the C task: the gap
 evaluates C at `B1.gap_c` (paste the optimum from `C_params`), or, if that is null, at the register
 parameters with `q` = 2, and the table says which. `bound_check` (against the 20 deg / 3 s guess
-controller with the repo altitude hold, B-1) stays as legacy. `compare(prob, b1, c_params, b2_params)`
-tabulates B1, C (`evaluate_c`) and B2; the B2 row is at the level-cruise entry and is not comparable.
+controller with the repo altitude hold, B-1) stays as legacy. `compare(prob, b1, c_params)`
+tabulates B1 and C (`evaluate_c`).
 
 `baseline_run` and `baseline_guess` and the three `(theta_A, T_bt)` starts of `solve_verified` only
 generate initial guesses; they are not a baseline for comparison.
@@ -826,13 +787,12 @@ shipped block (2 to 3 hours on one core). B1 tasks run in parallel across scenar
 solves are memory hungry (eleven at once ran out of memory with `std::bad_alloc` on a 24-core
 workstation), so limit `parallel.max_workers` if memory is short.
 
-**B1 is *not* a strict lower bound.** It keeps limits the baseline and B2 do not respect (`|vh|`, stall
-margin, slew limits), so a controller that breaks them can be cheaper at the same excursion — and
-tuned B2 was, marginally. Relaxing the limits makes the NLP much harder (none of three retries
+**B1 is *not* a strict lower bound.** It keeps limits the baseline does not respect (`|vh|`, stall
+margin, slew limits), so a controller that breaks them can be cheaper at the same excursion. Relaxing the limits makes the NLP much harder (none of three retries
 converged). The claim that *can* be made is one-sided: if B1 under its tighter limits already beats the
 baseline, the true bound is at least that good.
 
-**What it found (placeholder, level-cruise entry at 22 m/s, sea level; the legacy problem B2 starts from).**
+**What it found (placeholder, level-cruise entry at 22 m/s, sea level; the legacy level-cruise problem).**
 
 | Case | Excursion | Energy | Distance |
 | --- | --- | --- | --- |
@@ -840,7 +800,6 @@ baseline, the true bound is at least that good.
 | B1, 10 m band | 10 m | 2.34 kJ | 129 m |
 | B1, 5 m band | 5 m | 2.56 kJ | 176 m |
 | Baseline, tuned (C) | 13.4 m | 3.21 kJ | 93 m |
-| Free-form law, tuned (B2) | 8.1 m | 2.37 kJ | 168 m |
 | Baseline, default, vs B1 at the same excursion/distance | 12.4 m | 4.53 kJ vs 2.23 kJ | 121 m vs 108 m |
 
 The cost of a tighter altitude band is visible in the first three rows. The baseline spends about twice

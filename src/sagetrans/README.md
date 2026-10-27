@@ -18,9 +18,9 @@ The history of building the toolkit is in `PROJECT_REPORT.md`.
 ```
           io                     tables, figures, report, run record, release gate
            |
-        analysis                 A, B1, B2, C, D, E, F, sensitivity, search, ensembles
+        analysis                 A, B1, C, D, E, F, sensitivity, search, ensembles
            |
-        control                  controllers (baseline, free-form), mode state
+        control                  controllers (baseline), mode state
            |
         dynamics                 simulate(), events, steady-flight and electrical helpers
            |

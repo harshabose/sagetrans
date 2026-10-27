@@ -52,7 +52,6 @@ how much of each result rests on assumptions. **`configs/README.md` documents ev
 | **Q2** | can the pusher reach the transition speed at altitude, against mass? |
 | **C** | what can the autopilot be *configured* to do? (ArduPilot-parameter optimisation) |
 | **B1** | what is the best open-loop trajectory? (direct collocation, energy against altitude excursion) |
-| **B2** | what does a speed-scheduled law without altitude feedback achieve? |
 | sensitivity | which inputs drive each result, and how firmly do we know them? |
 
 ## Command line

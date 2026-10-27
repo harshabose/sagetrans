@@ -24,8 +24,11 @@ plane and answers the seven questions of the proposal's section 1: whether the m
 (Q1, Q7), whether the pusher can reach the transition speed (Q2, partially), how much altitude is lost
 or gained and what the electrical peaks are (Q3), how far the back-transition needs (Q4), what
 `Q_TRANS_DECEL` and related autopilot parameters to set (Q5), and what descent rate vortex-ring-state
-avoidance imposes (Q6). It has seven analyses (A, B1, B2, C, D, E, F), a sensitivity analysis, a
+avoidance imposes (Q6). It has six analyses (A, B1, C, D, E, F), a sensitivity analysis, a
 report generator, run records with file hashes, and a release gate.
+
+Analysis B2 (speed-scheduled free-form law) was removed on 2026-10-27: it was not repeatable (seed
+spread 4 to 10 % against 1 %) and did not beat C. Its history below is kept as written.
 
 **The single most important caveat.** *Every number the toolkit produces is derived from placeholder
 physics.* The vehicle parameters (`physics/params.py`) are illustrative assumed values for a notional
@@ -46,8 +49,7 @@ analyses that agree with hand calculations, and a pipeline that knows what it do
   and zero-lift drag, the rotor thrust coefficient, headwind, and the altitude-hold gains. **Mass and
   wing area are still TBD** in the register — they are the first inputs to pin down.
 
-**Where it is weaker than the proposal.** Optimisation of the free-form law (B2) did **not** meet the
-three-seed repeatability test (T-12); the open-loop optimiser (B1) converges less reliably than I would
+**Where it is weaker than the proposal.** The open-loop optimiser (B1) converges less reliably than I would
 like and is not a strict lower bound; several proposal items were reduced in scope (section 6). One
 equation in the proposal was physically wrong and was corrected (section 5.4).
 
@@ -90,8 +92,8 @@ sagetrans/
     config/                parameter register, units, hashing                 (README)
     physics/               wing, rotors, motor/ESC, battery, attitude, vehicle  (README)
     dynamics/              simulate(), events, steady-flight helpers           (README)
-    control/               baseline controller, free-form law                   (README)
-    analysis/              analyses A, B1, B2, C, D, E, F, sensitivity, search   (README)
+    control/               baseline controller                                  (README)
+    analysis/              analyses A, B1, C, D, E, F, sensitivity, search       (README)
     io/                    run record, results writer, figures, report, gate    (README)
   tests/                   144 tests                                           (README)
 ```
@@ -329,6 +331,8 @@ tests) passes with it.
 
 ### B2 from the B1 solution — implemented, but did not fix repeatability
 
+(B2 was removed on 2026-10-27; this section is history.)
+
 `freeform_opt.init_from_collocation` re-plots a B1 solution against `V/V_s` as B2's starting knots, and
 `optimise` accepts it (and a step size, `sigma0`). Measured on the real problem, same ensemble:
 
@@ -463,8 +467,8 @@ The proposal's eq. (6.11) took `I_bus = Σ I_m`. The corrected model uses `I_bus
 | ID | Status |
 | --- | --- |
 | T-01 … T-11, T-13, T-14, T-15 | pass |
-| T-12 | passes on an analytic cost and on analysis C (0.10 % spread, re-measured with the simulated `Q_TRANS_DECEL`); **fails for analysis B2** (4.4–9 % from the A start; 5.0–8.7 % from the B1 start). The unit test covers only the analytic cost; the real-problem figure is enforced by the gate (`search_spreads`) |
-| FR-01…FR-09 | implemented; FR-06 (derivative-free repeatability) met by C, not by B2 |
+| T-12 | passes on an analytic cost and on analysis C (0.10 % spread, re-measured with the simulated `Q_TRANS_DECEL`); analysis B2, which failed it (4.4–9 %), was removed on 2026-10-27. The unit test covers only the analytic cost; the real-problem figure is enforced by the gate (`search_spreads`) |
+| FR-01…FR-09 | implemented; FR-06 (derivative-free repeatability) met by C |
 | Release gate | implemented and tested, including the real-problem T-12 rule; blocks every current result (DRAFT) |
 | NFR-01 (determinism) | met (seeded searches, byte-identical outputs) |
 | NFR-02 (SI units) | met at the input boundary |
@@ -497,8 +501,7 @@ with an assumed acceleration); `kappa` for the vortex-ring limit (unsourced).
 * Revising the proposal's milestone sections to match the code.
 * A sourced vortex-ring-state exclusion in B1, and a free rotor start that counts its pre-entry energy.
 
-**Technical risks:** B1's convergence is fragile and its results must be replay-verified; B2 is not
-repeatable (a B1 start helps but does not fix it); the stall blend's sharpness makes the lift
+**Technical risks:** B1's convergence is fragile and its results must be replay-verified; the stall blend's sharpness makes the lift
 cliff-like, which is physically questionable and must be revisited with wind-tunnel or flight data;
 `gamma = atan2(vh, va)` has no defined derivative at hover and the attitude rate limit is non-smooth
 (both documented in `physics/README.md`); the rotor torque is even in speed; sensitivity rankings
@@ -536,7 +539,7 @@ heavy analyses run in parallel.
 * **Everything that was hard-wired is now an input:** the controller gains and ArduPilot parameter
   starting values (analysis C starts from them), the pitch limit, entry airspeed, scenario list and
   ensemble ranges, descent limits, requirements, grids and optimiser effort.
-* **Parallel and cached.** Tasks `basics` (A, D, F, E, Q2), `C`, `B2`, `B1:<scenario>` and
+* **Parallel and cached.** Tasks `basics` (A, D, F, E, Q2), `C`, `B1:<scenario>` and
   `sensitivity` run in separate processes; results are cached per task by input hash. Full run on a
   multi-core Windows laptop: 9.6 minutes (longest task, C, 571 s).
 * **Found on the way:** `--only` changed the task list but not the cache key, so a partial run could
@@ -555,9 +558,6 @@ vp, sc = placeholder_vehicle(), Scenario(100.0)
 
 # T-12 on analysis C (about 5 min):  restricted.optimise(vp, latin_hypercube(4, vp, seed=1), "back",
 #                                                          popsize=8, maxiter=15)  -> .search.spread
-# T-12 on analysis B2 (about 5 min): freeform_opt.optimise(vp, scens, popsize=12, maxiter=15,
-#                                      init_params=freeform_opt.init_from_collocation(prob, sol),
-#                                      sigma0=0.1)   -> .search.spread   (A start: omit init_params)
 # B1 Pareto points:                  collocation.make_problem(vp, sc, 22.0, CollocationOptions(n=40,
 #                                      max_iter=800)); solve_refined(prob, eps_h, 300.0, ns=(20,))
 # Sensitivity (about 70 s):          S.run_sensitivity(S.HeadlineModel(vp, sc, S.default_inputs(vp, sc)),
@@ -575,12 +575,9 @@ vp, sc = placeholder_vehicle(), Scenario(100.0)
 3. **Confirm the corrected bus-current model** (section 5.4) — or tell me to revert it.
 4. **Start M8 data collection:** rotor thrust against throttle and pack voltage, spool-up steps, ESC dead
    zone, battery pulses; they replace the highest-ranked placeholders.
-5. **Make B2 repeatable.** The B1 start was tried and is not enough (section 4a). Options: a much
-   larger budget, fewer free knots, a cheaper evaluation so more seeds fit, or a different optimiser.
-   Until the spread is at most 1 %, the gate blocks any record that includes B2.
-6. **Close the ArduPilot source questions** (firmware version, switch-test speed, ramp shapes), starting
+5. **Close the ArduPilot source questions** (firmware version, switch-test speed, ramp shapes), starting
    with O-08 and O-01.
-7. Update the proposal's milestone sections. (The JUnit step in CI, the scenario YAML and the CLI are
+6. Update the proposal's milestone sections. (The JUnit step in CI, the scenario YAML and the CLI are
    done.)
 
 ---
@@ -603,7 +600,6 @@ vp, sc = placeholder_vehicle(), Scenario(100.0)
 | `physics/vehicle.py` | 129 | the vehicle |
 | `config/units.py` | 125 | units |
 | `io/report.py` | 124 | report |
-| `analysis/freeform_opt.py` | 119 | B2 |
 | `io/record.py` | 111 | run record |
 | `io/figures.py` | 102 | figures |
 | `io/gate.py` | 101 | release gate |
@@ -619,6 +615,5 @@ vp, sc = placeholder_vehicle(), Scenario(100.0)
 | `atmosphere.py` | 53 | ISA |
 | `physics/aero.py` | 47 | wing |
 | `dynamics/events.py` | 47 | events |
-| `control/freeform.py` | 40 | free-form law |
 | `control/base.py` | 25 | controller interface |
 | `physics/attitude.py` | 23 | pitch surrogate |

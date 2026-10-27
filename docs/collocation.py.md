@@ -1,3 +1,5 @@
+> B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
+
 > [!abstract] What these files are
 > Analysis B: **how good can the back transition be if the controller is not restricted to ArduPilot's structure?** It has two stages.
 > - **B1 (`collocation.py`)** is the open-loop optimum for one known scenario, by direct collocation (Hermite-Simpson) and IPOPT. Unknowns: rotor-throttle and pitch-command histories and the final time. It gives the smallest energy for a given altitude band, and so the shape of the best schedule and a bound for the other analyses.

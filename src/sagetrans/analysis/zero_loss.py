@@ -70,7 +70,6 @@ class DecelProfile:
 
 
 DEFAULT_LIMITS = ActuatorLimits()
-LEGACY_LIMITS = ActuatorLimits(alpha_min=None, cl_frac=None)  # the pre-band behaviour, for B2
 
 
 @lru_cache(maxsize=64)
@@ -371,14 +370,7 @@ def analyse(
     t_r = np.array([p.T_r for p in pts])
     om = np.array([p.omega for p in pts])
     solved = np.array([not math.isnan(p.theta) for p in pts])
-    if legacy:
-        # B2's start is built from this path and must not move: keep the old rate construction,
-        # which prepends a "previous" sample and so halves the first rate
-        tt = np.concatenate([[t[0] - (t[1] - t[0])], t])
-        om_dot = np.gradient(np.concatenate([[om[0]], om]), tt)[1:]
-        th_dot = np.gradient(np.concatenate([[th[0]], th]), tt)[1:]
-    else:
-        om_dot, th_dot = np.gradient(om, t), np.gradient(th, t)
+    om_dot, th_dot = np.gradient(om, t), np.gradient(th, t)
     margins, (delta, i_m, vb, ratio) = _margins(
         vp, scen, limits, band_alpha, t, V, th, t_r, om, solved, om_dot, th_dot, v1_0
     )  # fmt: skip
@@ -607,7 +599,6 @@ def feasibility_map(
 
 __all__ = [
     "DEFAULT_LIMITS",
-    "LEGACY_LIMITS",
     "ActuatorLimits",
     "DecelProfile",
     "Window",

@@ -1,9 +1,7 @@
-import math
-
 import numpy as np
 import pytest
 
-from sagetrans.analysis import braking, freeform_opt, restricted, runs
+from sagetrans.analysis import braking, restricted, runs
 from sagetrans.analysis.common import Scenario
 from sagetrans.analysis.ensemble import (
     CostWeights,
@@ -17,7 +15,6 @@ from sagetrans.control.ardupilot_like import (
     BaselineController,
     BaselineParams,
 )
-from sagetrans.control.freeform import FreeFormController, FreeFormParams
 from sagetrans.dynamics import events as ev
 from sagetrans.dynamics import trim
 from sagetrans.dynamics.simulate import simulate
@@ -83,22 +80,6 @@ def test_ensemble_cost_hand_calculation():
     # p95 of [2,4,6] = 5.8; mean E = 2000; p95 of [50,100,150] = 145; one failure
     expected = 1.0 * 5.8 / 10.0 + 0.3 * 2000.0 / 5000.0 + 0.5 * 145.0 / 150.0 + 10.0
     assert ensemble_cost(runs_, w) == pytest.approx(expected)
-
-
-# ---- free-form controller ------------------------------------------------------------------------
-def test_freeform_law_interpolates_in_speed_and_has_no_altitude_feedback():
-    p = FreeFormParams(
-        delta_r=(0.6, 0.5, 0.4, 0.3, 0.2, 0.1), theta=(0.3, 0.3, 0.2, 0.1, 0.0, 0.0), s_on=1.0
-    )
-    c = FreeFormController(p, v_stall=10.0)
-    x_lo = np.array([0.0, 100.0, 5, 0, 0, 0, 0, 0, 0])
-    u, _ = c.command(0.0, x_lo, {"V": 6.0}, None)  # s = 0.6, between knots 0.4 and 0.8
-    assert u[0] == pytest.approx(0.45) and u[1] == 0.0 and u[2] == pytest.approx(0.3 - 0.05)
-    u_hi, _ = c.command(0.0, x_lo, {"V": 15.0}, None)  # above s_on: rotors off
-    assert u_hi[0] == 0.0
-    x_other = x_lo.copy()
-    x_other[1], x_other[3] = 500.0, -3.0  # altitude and climb rate change nothing
-    assert np.array_equal(c.command(0.0, x_other, {"V": 6.0}, None)[0], u)
 
 
 # ---- baseline controller -------------------------------------------------------------------------
@@ -224,22 +205,3 @@ def test_c_optimise_back_scope_improves_on_the_default_within_bounds():
         assert lo <= r.params[name] <= hi
     assert r.record.label == "DRAFT" and len(r.runs) == 3
     assert r.cost == pytest.approx(ensemble_cost(r.runs, CostWeights()))
-
-
-# ---- analysis B2 ---------------------------------------------------------------------------------
-def test_b2_initial_knots_come_from_analysis_a_and_stay_in_bounds():
-    prm = freeform_opt.init_from_zero_loss(VP, Scenario(100.0), 22.0)
-    u = freeform_opt.BOUNDS.to_unit(prm)
-    assert u.shape == (13,) and np.all((0.0 <= u) & (u <= 1.0))
-    fp = freeform_opt.decode(prm)
-    assert len(fp.delta_r) == len(fp.theta) == 6
-
-
-def test_b2_optimise_never_returns_worse_than_its_start():
-    scens = latin_hypercube(3, VP, seed=1)
-    r = freeform_opt.optimise(VP, scens, seeds=(1,), popsize=8, maxiter=3)
-    assert r.cost <= r.cost_initial
-    assert r.cost == pytest.approx(ensemble_cost(r.runs, CostWeights()))
-    # same cost definition as analysis C, so the two results are comparable
-    c = restricted.optimise(VP, scens, "back", seeds=(1,), popsize=4, maxiter=1)
-    assert math.isfinite(c.cost)

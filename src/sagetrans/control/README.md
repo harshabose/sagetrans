@@ -8,7 +8,6 @@ commanded pitch). **Controllers know nothing of analyses** (NFR-05).
 | --- | --- |
 | `base.py` | `ModeState` and the `Controller` protocol |
 | `ardupilot_like.py` | the ArduPilot-structured baseline: `Position1Controller`, `BaselineController` and their parameter classes |
-| `freeform.py` | the speed-scheduled free-form law used by analysis B2 |
 
 ## The interface (`base.py`)
 
@@ -67,7 +66,7 @@ constant deceleration is optimistic (analysis D). The airspeed form (O-05) needs
 * `ff_mode="lift_aware"` (with a `LiftFF` table built from the scenario vehicle) replaces the
   constant `delta_hover` by the throttle for `(W - L_hat) / cos(theta)`; `L_hat` is the simulated
   lift times `ff_lift_scale`, filtered with time constant `ff_lift_tau_s`. At tau 0 and scale 1 it
-  is an oracle. The default of the dataclass stays `"repo"`, so C and B2 are unchanged.
+  is an oracle. The default of the dataclass stays `"repo"`, so C is unchanged.
 * `alpha_cap` limits the pitch command to `alpha_cap + gamma` while `V >= alpha_cap_vmin`.
 * `rotor_lag_s` is the one lumped actuator lag of D, first order on the rotor throttle (ESC slew,
   filtering, inertia beyond `I_rot`); a sensitivity, not the spool law.
@@ -143,25 +142,9 @@ exactly this.
 on mode switch, `Q_OPTIONS` level-transition. **Gains are assumed.** The cruise stub holds speed
 and altitude within about 1 m/s and 1.5 m in the placeholder model.
 
-## `FreeFormController` (`freeform.py`) — eq. 8.1
-
-For analysis B2. Rotor throttle and pitch command are **piecewise-linear in normalised airspeed
-`V / V_s`**, with `V_s` the scenario's 1g stall speed:
-
-```
-delta_r = f(V/V_s)   if V/V_s <= s_on  else 0          theta_cmd = k(V/V_s)         pusher = 0
-```
-
-* Knots are shared by both channels at `V/V_s = 0.1, 0.4, 0.8, 1.2, 1.6, 2.4`; `FreeFormParams`
-  holds the knot values and `s_on` (the rotor start speed, `V_on / V_s`, a decision variable).
-* It is robust to mass and density because it reacts to the speed actually flown.
-* **It has no altitude feedback**, so it cannot correct a disturbance it did not anticipate; and
-  `V/V_s` does not absorb the throttle-to-thrust dependence on density and pack voltage.
-
 ## Tests
 
-`tests/unit/test_m5.py` (the controller parts): the free-form law's interpolation, rotors-off above
-`s_on`, and independence from altitude and climb rate; the baseline's mode sequence
+`tests/unit/test_m5.py` (the controller parts): the baseline's mode sequence
 `fwd_wait → fwd_fade → cruise → position1`, the wait for `AIRSPEED_MIN` (allowing for the one-step
 lag), `TKOFF_THR_MAX` during the wait, the fade duration and zero rotor throttle at its end, the
 cruise stub's settling, the switch test firing at the planned distance, the air-speed test

@@ -11,8 +11,8 @@
 | `unit/test_dynamics.py` | 7 | **T-04, T-05, T-06, T-09, T-10**, events, determinism |
 | `unit/test_analyses.py` | 15 | analyses A and D, including the scenario-mass regression for D |
 | `unit/test_energy_descent.py` | 15 | analyses E and F, steady-flight helpers, hand-calculated budget |
-| `unit/test_m5.py` | 16 | **T-12** (analytic), search, ensembles, baseline and free-form controllers, analyses B2 and C (including C taking `Q_TRANS_DECEL` from analysis D) |
-| `unit/test_m6.py` | 10 | analysis B1 including **T-11**, and B2 starting from a B1 solution |
+| `unit/test_m5.py` | 13 | **T-12** (analytic), search, ensembles, baseline controller, analysis C (including C taking `Q_TRANS_DECEL` from analysis D) |
+| `unit/test_m6.py` | 9 | analysis B1 including **T-11** |
 | `unit/test_m7.py` | 23 | sensitivity, run records, results writer, release gate (including the real-problem T-12 rule), the CI check, report |
 | `unit/test_register_drift.py` | 8 | the YAML register against the physics defaults; missing register files |
 | `unit/physics_reference.py` | — | the NumPy reference implementation used only by tests (T-15, T-07) |
