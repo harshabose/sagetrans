@@ -97,7 +97,7 @@ def _section_d(q: dict[str, Any]) -> str | None:
         "Entry is the AIRBRAKE exit: the rotors already carry what the wing does not, the pusher "
         "is off, and the pitch limit ramps from the last fixed-wing pitch to the cap over "
         "`Q_BACKTRANS_MS`. The entry air speed comes from the exit rule "
-        "`max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`; the ground speed is that minus the headwind.", "",
+        "`AIRSPEED_MIN - 2`; the ground speed is that minus the headwind.", "",
         md_table(t["D_a_eq"], ["scenario", "mass_kg", "V0_air_ms", "V0_ground_ms", "a_eq_ms2",
                                "x_actual_m", "alt_gain_m", "alt_loss_m", "alpha_max_gated_deg",
                                "t_above_alpha_s_s", "vh_end_ms", "sinking"]), "",

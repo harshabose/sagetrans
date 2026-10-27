@@ -241,7 +241,8 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
   is the TECS/navigation pitch demand at the AIRBRAKE exit, from a SITL run or a flight log; each
   degree adds about 0.05 m/s² to `a_eq`). `airbrake_entry_state` builds that state.
 * **The entry speed comes from the airspeed exit rule only**: `entry_airspeed` returns
-  `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)` as a true airspeed. `entry_convention: eas` (set in
+  `AIRSPEED_MIN - 2` as a true airspeed (`Q_ASSIST_SPEED` is not modelled; the study assumes it is 0,
+  O-20). `entry_convention: eas` (set in
   `study.yaml` since 2026-10-27, O-14/O-23) reads `AIRSPEED_MIN` as an equivalent airspeed and converts
   it to the true airspeed the model integrates; `tas` reads it as a true airspeed and is kept so old
   runs reproduce. The ground speed is the air speed minus the headwind.
@@ -373,7 +374,7 @@ instead is open). Analysis C keeps the old behaviour: C's `plan_decel` still cal
 | Name | Purpose |
 | --- | --- |
 | `ideal_stopping(v0, theta_max, t_bt, v_end=0, dt=1e-4)` | the planner worked example: ideal pitch, no lift/drag, braking at the limit throughout; returns `(distance, a_eq, ramp distance)` |
-| `entry_airspeed(airspeed_min, q_assist_speed, rho, convention)` | the airspeed exit rule, as a true airspeed |
+| `entry_airspeed(airspeed_min, rho, convention)` | the airspeed exit rule `AIRSPEED_MIN - 2`, as a true airspeed |
 | `airbrake_entry_state(vp, scen, bp, v_air0)` | the state at the AIRBRAKE exit and the ground speed |
 | `run_braking(vp, scen, v0, bp, ..., x0=None)` | simulate Position1 from ground speed `v0` to `V_f`; builds the `LiftFF` table when `bp.ff_mode == "lift_aware"`; returns a `BrakingResult` |
 | `measure_a_eq(...)` | the worst case: pitch at the envelope limit throughout |
@@ -574,8 +575,8 @@ register value and the result is very sensitive to it. The lift share is E's rul
 **Question.** What can the autopilot be *configured* to do, and how far is that from the bound?
 
 **Entry.** C starts at the AIRBRAKE exit, like D: the same entry state (`braking.airbrake_entry_state`),
-the same entry speed rule (`braking.entry_airspeed`, `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`) and
-t = 0 at the exit. `theta_fw0_deg`, `pit_lim_mode`, `q_assist_speed_ms` and `entry_convention` are
+the same entry speed rule (`braking.entry_airspeed`, `AIRSPEED_MIN - 2`) and
+t = 0 at the exit. `theta_fw0_deg`, `pit_lim_mode` and `entry_convention` are
 read from the **D block** (they describe the exit, not C); `io.stages.exit_params` builds the
 controller parameters for both so they cannot drift. There is no forward transition, no cruise and
 no planner simulation. The position cascade runs (`brake_at_limit = False`); the at-limit run is
@@ -675,7 +676,7 @@ distance, under a **stated wing limit**? It is the energy-against-distance front
 
 **Entry.** B1 starts at the AIRBRAKE exit, like D and C: `make_problem_exit` builds the problem from
 `braking.airbrake_entry_state` (all nine states fixed to it, the rotor speed included; `prespin_max`
-stays 0), at the entry speed of D's rule `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`. The rotor start
+stays 0), at the entry speed of D's rule `AIRSPEED_MIN - 2`. The rotor start
 (`carry` or `idle`) and the end sink tolerance are read from the **C block**, the entry-speed rule and
 `theta_fw0` from the **D block**; the B1 block does not repeat them. The old level-cruise problem
 (`make_problem`, 22 m/s) is kept for the legacy `bound_check` and the unit tests. B-9 (B2 against C) is

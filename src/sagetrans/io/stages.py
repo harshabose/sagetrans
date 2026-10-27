@@ -347,8 +347,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         )
 
         def entry(sc: Scenario) -> float:
-            return braking.entry_airspeed(inp.airspeed_min, c.q_assist_speed_ms, sc.rho,
-                                          c.entry_convention)  # fmt: skip
+            return braking.entry_airspeed(inp.airspeed_min, sc.rho, c.entry_convention)
 
         Run = tuple[braking.BrakingResult, dict[str, Any], float]
 
@@ -737,7 +736,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
 def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams, CostWeights]:
     """C's evaluation settings, base controller parameters and cost normalisers from the config.
 
-    The entry (`theta_fw0_deg`, `pit_lim_mode`, `q_assist_speed_ms`, `entry_convention`) is read
+    The entry (`theta_fw0_deg`, `pit_lim_mode`, `entry_convention`) is read
     from the D block: it describes the AIRBRAKE exit, not C.
     """
     c, d = inp.study.C, inp.study.D
@@ -750,9 +749,9 @@ def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams
         z_vel_flt_hz=z.vel_flt_hz, z_acc_flt_hz=z.acc_flt_hz,
     )  # fmt: skip
     cev = restricted.CEval(
-        airspeed_min=inp.airspeed_min, q_assist_speed=d.q_assist_speed_ms,
-        entry_convention=d.entry_convention, rotor_start=c.rotor_start, os_tol_m=c.os_tol_m,
-        sink_tol_ms=c.sink_tol_ms, end_speed=END_SPEED_MS,
+        airspeed_min=inp.airspeed_min, entry_convention=d.entry_convention,
+        rotor_start=c.rotor_start, os_tol_m=c.os_tol_m, sink_tol_ms=c.sink_tol_ms,
+        end_speed=END_SPEED_MS,
     )  # fmt: skip
     w = CostWeights(h_ref=c.weights.h_ref, E_ref=c.weights.E_ref, x_ref=c.weights.x_ref)
     return cev, base, w
@@ -892,9 +891,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     scen = inp.scenarios[scen_name]
     cev, c_base, w = c_settings(inp)
     base = exit_params(inp, rotor_lag_s=c.rotor_lag_s)  # the entry state reads theta_fw0, delta_min
-    v_air = braking.entry_airspeed(
-        inp.airspeed_min, d.q_assist_speed_ms, scen.rho, d.entry_convention
-    )
+    v_air = braking.entry_airspeed(inp.airspeed_min, scen.rho, d.entry_convention)
     end_band = b.end_vh_band_ms or c.sink_tol_ms
     lim, alpha_hi = alpha_limits(inp)
     errors: list[str] = []

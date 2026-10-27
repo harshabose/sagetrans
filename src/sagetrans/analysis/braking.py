@@ -64,15 +64,15 @@ def _initial_state(vp: VehicleParams, scen: Scenario, v0: float, rotors: str) ->
 
 
 def entry_airspeed(
-    airspeed_min: float, q_assist_speed: float, rho: float, convention: str = "tas"
+    airspeed_min: float, rho: float, convention: str = "tas"
 ) -> float:
-    """True airspeed at the AIRBRAKE entry: the exit rule max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED).
+    """True airspeed at the AIRBRAKE entry: the exit rule AIRSPEED_MIN - 2.
 
     ArduPilot compares AIRSPEED_MIN as an equivalent airspeed (O-14, O-23), so `"eas"` (the value
     in study.yaml) converts the rule's value at the scenario density. `"tas"` returns it as is and
     is kept so runs made before 2026-10-27 reproduce (RC5).
     """
-    v = max(airspeed_min - 2.0, q_assist_speed)
+    v = airspeed_min - 2.0
     if convention == "tas":
         return v
     if convention == "eas":

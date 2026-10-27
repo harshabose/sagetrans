@@ -148,7 +148,6 @@ class DCfg(_Strict):
     ff_lift_scale: float = Field(1.0, gt=0.0)
     theta_fw0_deg: float = 0.0  # last fixed-wing pitch at the AIRBRAKE exit (placeholder)
     pit_lim_mode: Literal["constant", "airspeed"] = "constant"  # Q_BCK_PIT_LIM form (O-05)
-    q_assist_speed_ms: float = Field(0.0, ge=0.0)  # entry speed: max(AIRSPEED_MIN - 2, this)
     entry_convention: Literal["tas", "eas"] = "tas"  # AIRSPEED_MIN read as true or equivalent
     enforce_alpha: bool = False  # hold the wing angle of attack to the 0.8 C_L,max band top
     alpha_gate_ms: float = Field(5.0, ge=0.0)  # below this airspeed alpha is not judged

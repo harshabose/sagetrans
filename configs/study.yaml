@@ -42,8 +42,7 @@ A:                         # zero-altitude-loss feasibility
 D:                         # braking and Q_TRANS_DECEL
   scenarios: [S-01, S-02, S-03, S-05, S-06, S-07]   # S-01 first: it sets the trade curve
   mass_factors: [0.80, 1.0, 1.15]
-  # Entry is the AIRBRAKE exit; its air speed is max(AIRSPEED_MIN - 2, q_assist_speed_ms).
-  q_assist_speed_ms: 0              # Q_ASSIST_SPEED; 0 = assist off (ArduPilot default)
+  # Entry is the AIRBRAKE exit; its air speed is AIRSPEED_MIN - 2.
   entry_convention: eas             # tas | eas: how AIRSPEED_MIN is read. eas since 2026-10-27 (ArduPilot compares EAS, O-14/O-23; docs/FT_spec.md 2); tas kept to reproduce old runs
   # Altitude hold: repo = constant hover throttle; lift_aware = throttle for W - L. At tau 0 and
   # scale 1 lift_aware is an ORACLE (it reads the simulated lift); tau and scale stand in for an
@@ -88,7 +87,7 @@ Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX
   feed_convention: tas      # the one E reads (the register compares AIRSPEED_MIN as TAS)
 
 C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C_fix_spec.md)
-  # The entry (theta_fw0_deg, pit_lim_mode, q_assist_speed_ms, entry_convention) comes from the D block.
+  # The entry (theta_fw0_deg, pit_lim_mode, entry_convention) comes from the D block.
   # Four variables are searched: Q_BACKTRANS_MS, Q_A_ANGLE_MAX, Q_M_SPIN_MIN and Q_TRANS_DECEL (q).
   ensemble_n: 32
   ensemble_seed: 8         # fixed seed of the 32-member ensemble

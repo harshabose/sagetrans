@@ -245,7 +245,6 @@ class CEval:
     """Settings of one C evaluation that the search does not decide."""
 
     airspeed_min: float  # AIRSPEED_MIN, m/s
-    q_assist_speed: float = 0.0  # Q_ASSIST_SPEED, m/s; the entry is max(AIRSPEED_MIN - 2, this)
     entry_convention: str = "tas"  # how AIRSPEED_MIN is read: "tas" | "eas"
     rotor_start: str = "idle"  # rotors at the AIRBRAKE exit: "idle" (O-13) | "carry" (W - L)
     os_tol_m: float = 2.0  # overshoot past x_tgt that counts as a failure (proposed)
@@ -282,7 +281,7 @@ def _simulate_c(
 ) -> CRun:  # fmt: skip
     vps = scen.vehicle_for(vp)
     v_air = braking.entry_airspeed(
-        cfg.airspeed_min, cfg.q_assist_speed, scen.rho, cfg.entry_convention
+        cfg.airspeed_min, scen.rho, cfg.entry_convention
     )
     ff, d_hover = _scenario_tables(vps, scen.rho, scen.soc)
     q = prm["q"]
