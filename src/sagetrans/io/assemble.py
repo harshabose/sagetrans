@@ -270,6 +270,7 @@ def assemble(
             "", md_table(tables["FT_params"], ["case", "p95_excursion_m", "mean_energy_kJ",
                                                "worst_sink_ms", "worst_stall_margin", "n_flags",
                                                *n_flag_cols]),
+            *([""] + [f"_{n}_" for n in ft_task["notes"]] if ft_task.get("notes") else []),
             "", "Search:", "", md_table(tables["FT_search"]), "",
             *(["`AIRSPEED_MIN` held fixed, the other three re-searched:", "",
                md_table(tables["FT_scan"], ["airspeed_min_eas_ms", "q_transition_s",
@@ -324,7 +325,9 @@ def assemble(
             "idle is read from the ArduPilot source and not checked in SITL or a log (O-13); the "
             "Z-loop defaults are master 4.8.0-dev, not a pinned tag (O-08).",
             "",
-            md_table(tables["C_params"]), "", "Search:", "", md_table(tables["C_search"]), "",
+            md_table(tables["C_params"]),
+            *([""] + [f"_{n}_" for n in c_task["notes"]] if c_task.get("notes") else []),
+            "", "Search:", "", md_table(tables["C_search"]), "",
             "Energy against distance with the optimum's ramp and q varied:", "",
             md_table(tables["C_q_curve"]), "",
             "One at a time at the optimum:", "", md_table(tables["C_sens"]), "",

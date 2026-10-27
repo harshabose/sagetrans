@@ -782,12 +782,38 @@ def _c_row(label: str, results: list[restricted.CRun], w: CostWeights) -> dict[s
     return {"case": label, **{k: _num(v) for k, v in restricted.summarise_c(results, w).items()}}
 
 
+def default_case(
+    inp: StudyInputs, names: dict[str, str], convert: dict[str, Any] | None = None
+) -> tuple[dict[str, float] | None, str]:
+    """The parameters of an analysis's `ardupilot_default` case, from the defaults register.
+
+    `names` maps the analysis's variable to the ArduPilot name. Returns (None, note) when any
+    default is missing: the analysis then skips the case and says so (never a made-up value).
+    `convert` turns an SI default into the variable's own unit (FT: radians to degrees).
+    """
+    out: dict[str, float] = {}
+    missing: list[str] = []
+    for var, name in names.items():
+        v = inp.resolve_default(name)
+        if v is None:
+            missing.append(name)
+        else:
+            out[var] = (convert or {}).get(var, lambda x: x)(v)
+    if missing:
+        return None, ("ArduPilot default case not run: no default for " + ", ".join(missing)
+                      + " in ardupilot_defaults.yaml")  # fmt: skip
+    return out, ""
+
+
 def task_c(inp: StudyInputs) -> dict[str, Any]:
     """Analysis C: search the four ArduPilot variables from the AIRBRAKE exit, then report.
 
-    Tables: `C_params` (the optimum and the register at q = 2), `C_search`, `C_runs` (one row per
-    ensemble member, with the capability ceiling and D's alpha and VRS checks), `C_q_curve`
-    (the optimum's ramp with q varied) and `C_sens` (one-at-a-time changes at the optimum).
+    Tables: `C_params` (the optimum, the register at q = 2 and the ArduPilot default), `C_search`,
+    `C_runs` (one row per ensemble member and case, with the capability ceiling and D's alpha and
+    VRS checks), `C_q_curve` (the optimum's ramp with q varied) and `C_sens` (one-at-a-time
+    changes at the optimum). The ArduPilot-default case (docs/DEFAULTS_spec.md 2.2) sets the four
+    searched parameters to their defaults and keeps the register's entry (`AIRSPEED_MIN`), so the
+    back transition starts from the same state in all three cases; it is a reference only.
     """
     c, d, vp = inp.study.C, inp.study.D, inp.vehicle
     scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
@@ -800,6 +826,10 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     )  # fmt: skip
     best = r.params
     reg = {**start, "q": restricted.C_Q_START}
+    dflt, dflt_note = default_case(
+        inp, {"T_bt": "Q_BACKTRANS_MS", "theta_A": "Q_A_ANGLE_MAX", "spin_min": "Q_M_SPIN_MIN",
+              "q": "Q_TRANS_DECEL"}
+    )  # fmt: skip
 
     def run_all(
         prm: dict[str, float], ev: restricted.CEval = cev, bp: BackTransitionParams = base
@@ -814,6 +844,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     opt = run_all(best)
     reg_runs = run_all(reg)
     s_opt, s_reg = restricted.summarise_c(opt, w), restricted.summarise_c(reg_runs, w)
+    dflt_runs = run_all(dflt) if dflt is not None else None
     params: Table = [
         {"case": "optimum", **deg(best), "J": r.cost, "J_start": r.cost_default,
          "seed_spread": r.search.spread,
@@ -823,31 +854,45 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
          "J_start": "", "seed_spread": "", "at_bound": "",
          **{k: _num(v) for k, v in s_reg.items() if k != "J"}},
     ]  # fmt: skip
+    if dflt is not None and dflt_runs is not None:
+        s_dflt = restricted.summarise_c(dflt_runs, w)
+        params.append({
+            "case": "ardupilot_default", **deg(dflt), "J": s_dflt["J"], "J_start": "",
+            "seed_spread": "", "at_bound": "",
+            **{k: _num(v) for k, v in s_dflt.items() if k != "J"},
+        })  # fmt: skip
     search = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
               for sr in r.search.seeds]  # fmt: skip
 
-    # per member: the run, the capability ceiling, D's alpha and VRS checks (reporting only)
+    # per member and case: the run, the capability ceiling, D's alpha and VRS checks (report only)
     lim, alpha_hi = alpha_limits(inp)
     run_rows: Table = []
-    for i, (s, cr) in enumerate(zip(scens, opt, strict=True)):
-        vps = s.vehicle_for(vp)
-        bp_i = dataclasses.replace(base, T_bt=best["T_bt"], theta_A=best["theta_A"],
-                                   delta_min=best["spin_min"])  # fmt: skip
-        fl = braking.braking_flags(
-            cr.sim, vps, s, bp_i, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
-            kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
-        )  # fmt: skip
-        a_cap = restricted.capability_ceiling(vp, s, best, cev, base)
-        run_rows.append({
-            "member": i, "altitude_m": s.altitude_amsl_m, "isa_offset_k": s.isa_offset_k,
-            "mass_kg": s.mass_kg, "soc": s.soc, "headwind_ms": s.headwind_ms,
-            "V0_air_ms": cr.v_air0, "V0_ground_ms": cr.v_ground0, "x_tgt_m": cr.x_tgt,
-            "x_end_m": _num(cr.x_end), "overshoot_m": _num(cr.overshoot),
-            "energy_kJ": cr.metrics.energy / 1e3, "excursion_m": cr.metrics.excursion,
-            "end_sink_ms": _num(-cr.vh_end), "flags": ",".join(cr.metrics.failures),
-            "a_cap_ms2": _num(a_cap), "q_over_a_cap": _num(best["q"] / a_cap),
-            **{k: v if isinstance(v, bool) else _num(v) for k, v in fl.items()},
-        })  # fmt: skip
+
+    def member_rows(case: str, prm: dict[str, float], results: list[restricted.CRun]) -> None:
+        for i, (s, cr) in enumerate(zip(scens, results, strict=True)):
+            vps = s.vehicle_for(vp)
+            bp_i = dataclasses.replace(base, T_bt=prm["T_bt"], theta_A=prm["theta_A"],
+                                       delta_min=prm["spin_min"])  # fmt: skip
+            fl = braking.braking_flags(
+                cr.sim, vps, s, bp_i, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
+                kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
+            )  # fmt: skip
+            a_cap = restricted.capability_ceiling(vp, s, prm, cev, base)
+            run_rows.append({
+                "case": case, "member": i, "altitude_m": s.altitude_amsl_m,
+                "isa_offset_k": s.isa_offset_k, "mass_kg": s.mass_kg, "soc": s.soc,
+                "headwind_ms": s.headwind_ms, "V0_air_ms": cr.v_air0,
+                "V0_ground_ms": cr.v_ground0, "x_tgt_m": cr.x_tgt,
+                "x_end_m": _num(cr.x_end), "overshoot_m": _num(cr.overshoot),
+                "energy_kJ": cr.metrics.energy / 1e3, "excursion_m": cr.metrics.excursion,
+                "end_sink_ms": _num(-cr.vh_end), "flags": ",".join(cr.metrics.failures),
+                "a_cap_ms2": _num(a_cap), "q_over_a_cap": _num(prm["q"] / a_cap),
+                **{k: v if isinstance(v, bool) else _num(v) for k, v in fl.items()},
+            })  # fmt: skip
+
+    member_rows("optimum", best, opt)
+    if dflt is not None and dflt_runs is not None:
+        member_rows("ardupilot_default", dflt, dflt_runs)
 
     q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q}
                for q in c.q_curve]  # fmt: skip
@@ -874,7 +919,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         row.pop("case", None)
     print(f"    C reports: {time.time() - t0:.0f} s", flush=True)
     return {
-        "result": r, "scens": scens,
+        "result": r, "scens": scens, "notes": [dflt_note] if dflt_note else [],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
                    "C_q_curve": q_curve, "C_sens": sens_rows},
     }  # fmt: skip
@@ -960,9 +1005,11 @@ def _ft_sens_eval(fev: forward.FTEval, key: str, value: Any) -> forward.FTEval:
 def task_ft(inp: StudyInputs) -> dict[str, Any]:
     """Analysis FT: search the four forward-transition parameters, then report.
 
-    Tables: `FT_params` (the optimum and the register start), `FT_search`, `FT_runs` (every member
-    of both cases, Sobol core and corners), `FT_sens` (one at a time at the optimum) and
-    `FT_history` (time series of the named scenarios, both cases).
+    Tables: `FT_params` (the optimum, the register start and the ArduPilot default), `FT_search`,
+    `FT_runs` (every member of each case, Sobol core and corners), `FT_sens` (one at a time at the
+    optimum) and `FT_history` (time series of the named scenarios, each case). The
+    `ardupilot_default` case (docs/DEFAULTS_spec.md 2.1) sets the four searched parameters to their
+    defaults, everything else to the register; no search is run for it.
     """
     f, vp = inp.study.FT, inp.vehicle
     fev, start = ft_settings(inp)
@@ -977,6 +1024,13 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
     best = r.params
     t1 = time.time()
     cases = {"optimum": best, "register": start}
+    dflt, dflt_note = default_case(
+        inp, {"airspeed_min": "AIRSPEED_MIN", "q_transition": "Q_TRANSITION_MS",
+              "tkoff_thr_max": "TKOFF_THR_MAX", "tran_pit_max": "Q_TRAN_PIT_MAX"},
+        convert={"tran_pit_max": math.degrees},
+    )  # fmt: skip
+    if dflt is not None:
+        cases["ardupilot_default"] = dflt
     core_runs = {c: forward_runs(vp, core, prm, fev) for c, prm in cases.items()}
     corner_runs = {c: forward_runs(vp, corners, prm, fev) for c, prm in cases.items()}
     params: Table = []
@@ -1010,7 +1064,7 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
             hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
     print(f"    FT reports: {time.time() - t1:.0f} s", flush=True)
     return {
-        "result": r, "scens": core, "E_ref": w.E_ref,
+        "result": r, "scens": core, "E_ref": w.E_ref, "notes": [dflt_note] if dflt_note else [],
         "tables": {"FT_params": params, "FT_search": search, "FT_runs": run_rows,
                    "FT_sens": sens_rows, "FT_history": hist},
     }  # fmt: skip
