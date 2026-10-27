@@ -281,3 +281,22 @@ def test_view_cannot_be_combined_with_a_run(tmp_path):
         assert exc.value.code == 2
     with pytest.raises(SystemExit):
         cli.main(["--no-open"])  # only meaningful with --view
+
+
+def test_the_ft_chapter_shows_the_cl_max_sensitivity_next_to_the_base_case(tmp_path):
+    write_table(tmp_path, "FT_params", [
+        {"case": "optimum", "airspeed_min_eas_ms": 18.7, "q_transition_s": 9.0, "J": 0.8},
+        {"case": "register", "airspeed_min_eas_ms": 17.0, "q_transition_s": 5.0,
+         "J": 11.0}])  # fmt: skip
+    write_table(tmp_path, "FT_sens", [
+        {"parameter": "base", "value": "", "cl_max": 1.444, "J": 0.8, "worst_stall_margin": 1.29,
+         "n_flags": 0},
+        {"parameter": "CL_max_scale", "value": 0.9, "cl_max": 1.30, "J": 3.1,
+         "worst_stall_margin": 1.18, "n_flags": 2},
+        {"parameter": "CL_max_scale", "value": 1.1, "cl_max": 1.59, "J": 0.8,
+         "worst_stall_margin": 1.36, "n_flags": 0}])  # fmt: skip
+    write_record(tmp_path, schema_version=2)
+    html = build_html(load(tmp_path))
+    ft = html.split('id="ft"')[1].split("</section>")[0]
+    assert "Sensitivity to C_L,max" in ft and "C_L,max x 0.9" in ft and "C_L,max x 1.1" in ft
+    assert ">base<" in ft.replace(" ", "") or "base" in ft

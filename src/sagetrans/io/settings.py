@@ -334,6 +334,9 @@ class FTSensCfg(_Strict):
     TRIM_THROTTLE: list[float] = [0.35, 0.45, 0.55]
     tecs_start: list[Literal["warm", "cold"]] = ["warm", "cold"]
     rec_cl_frac: list[float] = [0.7, 0.8, 0.9]  # changes only the projection
+    # the model's C_L,max times this, through the stall angle alpha_s (provisional in vehicle.yaml);
+    # the simulated lift, the stall speed, the stall flag and the recovery all follow
+    CL_max_scale: list[float] = [0.9, 1.1]
 
 
 class FTCfg(_Strict):

@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from sagetrans.io.view import charts as ch
-from sagetrans.io.view.html import Item, Out, absent, panelbox
+from sagetrans.io.view.html import Item, Out, absent, panelbox, table_html
 from sagetrans.io.view.load import Results
 from sagetrans.io.view.units import fmt_value, header_label, unit_of
 
@@ -1464,6 +1464,24 @@ def build_ft(c: Ctx) -> Out:
                 "One-at-a-time sensitivity",
                 "Change of the cost J against the optimum when one setting changes.",
                 ch.dot_chart(items, "change of J [%]", "FT sensitivity"),
+            )
+        )
+    # the stall margin rests on a provisional C_L,max: the optimum re-evaluated with it +-10 %
+    cl_rows = [r for r in sens if r.get("parameter") in ("base", "CL_max_scale")]
+    if len(cl_rows) > 1:
+        shown = [
+            {"case": "base" if r["parameter"] == "base" else f"C_L,max x {r['value']:g}", **r}
+            for r in cl_rows
+        ]
+        cols = ["case", "cl_max", "alpha_s_rad", "J", "worst_stall_margin", "n_stall_margin",
+                "n_stall", "n_alt_loss", "n_proj_loss", "n_flags"]  # fmt: skip
+        o.figures.append(
+            panelbox(
+                "Sensitivity to C_L,max",
+                "The optimum's four values held fixed, with the model's C_L,max scaled through the "
+                "stall angle alpha_s (the lift, the stall speed, the stall flag and the recovery "
+                "follow). Evaluated on the search ensemble, like the other sensitivities.",
+                table_html("FT_sens", [c for c in cols if any(c in r for r in shown)], shown),
             )
         )
     # 6. spread strips

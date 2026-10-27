@@ -122,6 +122,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
     TRIM_THROTTLE: [0.35, 0.45, 0.55]
     tecs_start: [warm, cold]
     rec_cl_frac: [0.7, 0.8, 0.9]       # changes only the projection
+    CL_max_scale: [0.9, 1.1]           # the model's C_L,max x this, through alpha_s; lift, stall speed, stall flag and recovery follow
 
 C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C_fix_spec.md)
   # The entry (theta_fw0_deg, pit_lim_mode, entry_convention) comes from the D block.

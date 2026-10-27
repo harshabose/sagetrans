@@ -1024,6 +1024,26 @@ def _ft_sens_eval(fev: forward.FTEval, key: str, value: Any) -> forward.FTEval:
     return dataclasses.replace(fev, template=dataclasses.replace(tp, **{own[key]: value}))
 
 
+def vehicle_with_cl_max(vp: VehicleParams, scale: float) -> VehicleParams:
+    """The vehicle with its wing's C_L,max scaled, the least invasive way: only `alpha_s` moves.
+
+    The stall angle `alpha_s` is the provisional input of the lift peak (vehicle.yaml); it is found
+    by bisection so that `runs.cl_max` is `scale` times the model's value (C_L,max rises with
+    alpha_s). The stall speed, the stall flag, the recovery acceleration and the simulated lift all
+    read the wing, so they follow. Nothing else of the wing (C_L0, C_L,alpha, C_N, M, drag) changes.
+    """
+    target = scale * runs.cl_max(vp.wing)
+    lo, hi = 0.5 * vp.wing.alpha_s, 2.0 * vp.wing.alpha_s
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        wing = dataclasses.replace(vp.wing, alpha_s=mid)
+        if runs.cl_max(wing) < target:
+            lo = mid
+        else:
+            hi = mid
+    return dataclasses.replace(vp, wing=dataclasses.replace(vp.wing, alpha_s=0.5 * (lo + hi)))
+
+
 def task_ft(inp: StudyInputs) -> dict[str, Any]:
     """Analysis FT: search the four forward-transition parameters, then report.
 
@@ -1088,11 +1108,17 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
     sens_rows: Table = []
     base_sm = forward.summarise_ft(forward_runs(vp, core, best, fev), w)
     sens_rows.append({"parameter": "base", "value": "", "ensemble_n": len(core),
+                      "cl_max": runs.cl_max(vp.wing), "alpha_s_rad": vp.wing.alpha_s,
                       **{k: _num(x) for k, x in base_sm.items()}})  # fmt: skip
     for key, values in f.sens.model_dump().items():
         for v in values:
-            sm = forward.summarise_ft(forward_runs(vp, core, best, _ft_sens_eval(fev, key, v)), w)
+            if key == "CL_max_scale":  # a different wing: the stall flag reads the changed C_L,max
+                vp_s, fev_s = vehicle_with_cl_max(vp, v), fev
+            else:
+                vp_s, fev_s = vp, _ft_sens_eval(fev, key, v)
+            sm = forward.summarise_ft(forward_runs(vp_s, core, best, fev_s), w)
             sens_rows.append({"parameter": key, "value": v, "ensemble_n": len(core),
+                              "cl_max": runs.cl_max(vp_s.wing), "alpha_s_rad": vp_s.wing.alpha_s,
                               **{k: _num(x) for k, x in sm.items()}})  # fmt: skip
     hist: Table = []
     for name in f.history_scenarios:

@@ -107,6 +107,7 @@ FT:
     TRIM_THROTTLE: [0.45]
     tecs_start: [warm, cold]
     rec_cl_frac: [0.8]
+    CL_max_scale: [0.9, 1.1]
 """
 
 
@@ -136,9 +137,14 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
     members = {r["member"] for r in runs if r["set"] == "core" and r["case"] == "optimum"}
     assert members == {0, 1, 2, 3}
     assert any("first 4 members" in n and "first 2 members" in n for n in out["notes"])
-    # FT_sens: a base row on the search ensemble, the reference of the sensitivities
-    base = [r for r in tables["FT_sens"] if r["parameter"] == "base"]
-    assert len(base) == 1 and base[0]["ensemble_n"] == 2
+    # FT_sens: a base row on the search ensemble, and the C_L,max cases next to it
+    sens = {(r["parameter"], r["value"]): r for r in tables["FT_sens"]}
+    base, lo, hi = sens[("base", "")], sens[("CL_max_scale", 0.9)], sens[("CL_max_scale", 1.1)]
+    assert base["ensemble_n"] == 2
+    assert lo["cl_max"] == pytest.approx(0.9 * base["cl_max"], rel=2e-3)
+    assert hi["cl_max"] == pytest.approx(1.1 * base["cl_max"], rel=2e-3)
+    # a lower C_L,max is a higher stall speed, so a smaller margin (the flag reads the changed wing)
+    assert lo["worst_stall_margin"] < base["worst_stall_margin"] < hi["worst_stall_margin"]
     scan = stages.run_task(inp, "FT_scan:16")["row"]
     assert scan["airspeed_min_eas_ms"] == 16.0 and scan["entry_eas_back_ms"] == 14.0
 
@@ -150,3 +156,17 @@ def test_the_final_ensemble_is_a_prefix_of_a_larger_sample():
     assert [s.mass_kg for s in big[:4]] == [s.mass_kg for s in small]
     with pytest.raises(ValueError, match="final_ensemble_n"):
         FTCfg(ensemble_n=16, final_ensemble_n=8)
+
+
+def test_cl_max_sensitivity_moves_only_alpha_s():
+    import dataclasses
+
+    from sagetrans.analysis import runs
+
+    inp = load_inputs(CONFIGS)
+    vp = inp.vehicle
+    for scale in (0.9, 1.1):
+        v = stages.vehicle_with_cl_max(vp, scale)
+        assert runs.cl_max(v.wing) == pytest.approx(scale * runs.cl_max(vp.wing), rel=2e-3)
+        assert dataclasses.replace(v.wing, alpha_s=vp.wing.alpha_s) == vp.wing  # only alpha_s
+        assert v.m == vp.m and v.rotor == vp.rotor
