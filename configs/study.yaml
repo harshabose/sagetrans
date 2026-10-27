@@ -87,13 +87,33 @@ Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX
   conventions: [tas, eas]   # AIRSPEED_MIN read as true or equivalent airspeed (DEC-1 open): both reported
   feed_convention: tas      # the one E reads (the register compares AIRSPEED_MIN as TAS)
 
-C:                         # ArduPilot-parameter optimisation (back-transition)
+C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C_fix_spec.md)
+  # The entry (theta_fw0_deg, pit_lim_mode, q_assist_speed_ms, entry_convention) comes from the D block.
+  # Four variables are searched: Q_BACKTRANS_MS, Q_A_ANGLE_MAX, Q_M_SPIN_MIN and Q_TRANS_DECEL (q).
   ensemble_n: 32
   ensemble_seed: 8         # same ensemble as B2 so the two can be compared
   seeds: [1, 2, 3, 4, 5, 6, 7, 8]
   popsize: 8
   maxiter: 20
-  a_plan_source: simulated         # simulated | ideal
+  rotor_lag_s: 0.25        # D's lumped actuator lag (D spec section 14); C's own value
+  rotor_start: idle        # idle | carry: rotors at the AIRBRAKE exit; idle is O-13, UNVERIFIED (SITL or log)
+  os_tol_m: 2.0            # overshoot past x_tgt that counts as a failure (PROPOSED; decides the answer)
+  sink_tol_ms: 1.76        # end sink rate that counts as sinking (PROPOSED: low end of F's descent cap)
+  weights: {h_ref: 2.0, E_ref: 15000.0, x_ref: 100.0}   # normalisers; weights 1, 0.3, 0.5 and penalty 10 stay
+  bounds:                  # search bounds [low, high]
+    T_bt: [1.0, 6.0]
+    theta_A_deg: [10.0, 30.0]   # 30 is DEC-7 and binding
+    spin_min: [0.06, 0.25]
+    q: [1.0, 3.0]               # Q_TRANS_DECEL, m/s^2
+  z:                       # ArduPilot vertical loop (O-12): master 4.8.0-dev Plane defaults, not a pinned tag (O-08)
+    {pos_p: 1.0, vel_p: 5.0, acc_p: 0.03, acc_i: 0.1, acc_imax: 0.8, vmax: 2.5, vel_flt_hz: 5.0, acc_flt_hz: 10.0}
+  q_curve: [1.0, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0]   # C_q_curve: the optimum's ramp with q varied
+  sens:                    # C_sens: one at a time at the optimum
+    rotor_lag_s: [0, 0.25, 0.5]
+    rotor_start: [idle, carry]
+    z_vel_p: [2.5, 5, 10]
+    z_acc_p: [0.015, 0.03, 0.06]
+    theta_fw0_deg: [0, 8]
 
 B2:                        # speed-scheduled law, started from a B1 solution
   ensemble_n: 32

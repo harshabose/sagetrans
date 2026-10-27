@@ -1,28 +1,27 @@
 """Analysis C: restricted-parameter optimisation of the ArduPilot-structured baseline (10C).
 
-Bare-minimum M5 version. Two scopes:
+**Current: `evaluate_c` / `optimise_c` / `capability_ceiling`** (docs/C_fix_spec.md). C starts at
+the AIRBRAKE exit like analysis D (same entry state and entry speed rule), runs the position
+cascade (`brake_at_limit = False`) with ArduPilot's vertical loop (`z_mode="ardupilot"`, O-12) and
+searches four variables: Q_BACKTRANS_MS (`T_bt`), Q_A_ANGLE_MAX (`theta_A`), Q_M_SPIN_MIN
+(`spin_min`) and Q_TRANS_DECEL (`q`). `q` does both jobs it does in ArduPilot: it places the
+stopping point, x_tgt = V_ground^2 / (2 q) (O-02), and it is the cascade's acceleration limit
+(O-11). An overshoot of the stopping point beyond `os_tol_m` and an end sink rate beyond
+`sink_tol_ms` are failures, so the search cannot pick a `q` the pitch ramp cannot deliver.
 
-* ``back``: the back-transition only (Q_BACKTRANS_MS, Q_A_ANGLE_MAX, Q_M_SPIN_MIN), started from
-  an idealised level cruise. Directly comparable with the free-form law of analysis B2.
-* ``full``: forward transition, cruise stub and back-transition from hover, adding AIRSPEED_MIN,
-  Q_TRANSITION_MS and TKOFF_THR_MAX. Cost: worst excursion of the two transitions, summed
-  energy, back-transition distance.
-
-Not in the decision vector: PTCH_LIM_MAX_DEG (fixed at 35 deg), Q_TRANS_FAIL (off), BATT_WATT_MAX
-(not modelled).
-
-Q_TRANS_DECEL is not decided by the search: each evaluation sets it from analysis D, as the
-proposal asks (section 10C step 4). By default (`a_plan_source="simulated"`) it is the worst-case
-a_eq that `braking.measure_a_eq` simulates for the same parameters, scenario and entry state, so
-the planner is self-consistent with what the aircraft can actually do. `"ideal"` uses the
-ideal-pitch planner instead (no simulation, about half the cost); that figure ignores wing drag,
-lift and pitch lag, so it is neither an upper nor a lower bound on the simulated one.
+**Legacy: `evaluate_back`, `plan_decel`, `evaluate_full`, `optimise`, `BACK_BOUNDS`, `FULL_BOUNDS`,
+`DEFAULT_PARAMS`, `THETA_P`.** The old scopes: ``back`` starts from an idealised level cruise and
+takes Q_TRANS_DECEL from a planner run (`a_plan_source`), ``full`` adds the forward transition and
+AIRSPEED_MIN, Q_TRANSITION_MS and TKOFF_THR_MAX. They stay because `analysis/sensitivity.py` and
+`analysis/collocation.py` call them (B2 and B1 are compared with C on that entry until they move
+to the AIRBRAKE exit); the study no longer runs them.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -35,10 +34,11 @@ from sagetrans.control.ardupilot_like import (
     BackTransitionParams,
     BaselineController,
     BaselineParams,
+    LiftFF,
     Position1Controller,
 )
 from sagetrans.dynamics import trim
-from sagetrans.dynamics.simulate import simulate
+from sagetrans.dynamics.simulate import Result, simulate
 from sagetrans.physics.params import VehicleParams
 
 THETA_P = math.radians(35.0)
@@ -69,7 +69,7 @@ def plan_decel(
     source: str = "simulated", agl0: float = 100.0,
     controller_overrides: dict[str, float] | None = None, theta_p: float = THETA_P,
 ) -> float:  # fmt: skip
-    """Q_TRANS_DECEL for one evaluation, from analysis D.
+    """LEGACY (see the module docstring). Q_TRANS_DECEL for one evaluation, from analysis D.
 
     `"simulated"`: the worst-case a_eq of `braking.measure_a_eq` (pitch at the envelope limit
     throughout) from the same entry state `x0`. `"ideal"`: the ideal-pitch planner. If the
@@ -94,7 +94,7 @@ def evaluate_back(
     v_f: float = 1.0, agl0: float = 100.0, controller_overrides: dict[str, float] | None = None,
     a_plan_source: str = "simulated", theta_p: float = THETA_P, v0_eas: float | None = None,
 ) -> RunMetrics:  # fmt: skip
-    """One back-transition from level cruise with the position cascade toward the planned point.
+    """LEGACY. One back-transition from level cruise with the position cascade to the plan.
 
     `controller_overrides` replaces fields of BackTransitionParams (e.g. altitude-hold gains).
     `a_plan_source` selects how Q_TRANS_DECEL is set (see `plan_decel`). `theta_p` is the fixed
@@ -128,7 +128,7 @@ def evaluate_full(
     controller_overrides: dict[str, float] | None = None,
     baseline_overrides: dict[str, Any] | None = None,
 ) -> RunMetrics:  # fmt: skip
-    """Hover -> forward transition -> cruise stub -> back-transition.
+    """LEGACY. Hover -> forward transition -> cruise stub -> back-transition.
 
     `baseline_overrides` sets the BaselineParams fields the search does not decide (stub gains,
     Q_TRANS_FAIL, switch test); a `v_cruise` entry in it replaces the `v_cruise` argument.
@@ -176,6 +176,7 @@ class RestrictedResult:
     runs: list[RunMetrics]
     search: SearchResult
     record: RunRecord
+    at_bound: dict[str, str] = field(default_factory=dict)  # variable -> "lo" | "hi" within 10%
 
 
 def optimise(
@@ -194,7 +195,7 @@ def optimise(
     start: dict[str, float] | None = None,
     v0_eas: float | None = None,
 ) -> RestrictedResult:
-    """CMA-ES over the decision vector, scored with (10.1) over the ensemble.
+    """LEGACY. CMA-ES over the old decision vector, scored with (10.1) over the ensemble.
 
     `start` is the search's starting point (default `DEFAULT_PARAMS`); the shipped config passes the
     register's own values. `v0_eas` sets the back-transition entry speed as an equivalent airspeed.
@@ -230,4 +231,197 @@ def optimise(
     )  # fmt: skip
 
 
-__all__ = ["RestrictedResult", "evaluate_back", "evaluate_full", "optimise", "plan_decel"]
+# ---- current: analysis C from the AIRBRAKE exit (docs/C_fix_spec.md) ---------------------------
+C_BOUNDS = Bounds(
+    ("T_bt", "theta_A", "spin_min", "q"),
+    (1.0, math.radians(10.0), 0.06, 1.0),
+    (6.0, math.radians(30.0), 0.25, 3.0),
+)
+C_Q_START = 2.0  # Q_TRANS_DECEL of the search's start point and of the register comparison row
+
+
+@dataclass(frozen=True)
+class CEval:
+    """Settings of one C evaluation that the search does not decide."""
+
+    airspeed_min: float  # AIRSPEED_MIN, m/s
+    q_assist_speed: float = 0.0  # Q_ASSIST_SPEED, m/s; the entry is max(AIRSPEED_MIN - 2, this)
+    entry_convention: str = "tas"  # how AIRSPEED_MIN is read: "tas" | "eas"
+    rotor_start: str = "idle"  # rotors at the AIRBRAKE exit: "idle" (O-13) | "carry" (W - L)
+    os_tol_m: float = 2.0  # overshoot past x_tgt that counts as a failure (proposed)
+    sink_tol_ms: float = 1.76  # end sink rate that counts as sinking (proposed)
+    end_speed: float = 1.0  # ground speed at which a run ends, m/s
+    agl0: float = 100.0  # height below the start at which a run counts as touched down
+    t_end: float = 60.0
+
+
+@dataclass(frozen=True)
+class CRun:
+    """One C run: the metrics of the cost and what the report needs. `sim` is the full trace."""
+
+    metrics: RunMetrics
+    v_air0: float
+    v_ground0: float
+    x_tgt: float
+    stopped: bool
+    x_end: float  # NaN unless the run stopped
+    overshoot: float  # x_end - x_tgt, NaN unless the run stopped
+    vh_end: float  # climb rate at the end, NaN unless the run stopped
+    sim: Result
+
+
+@lru_cache(maxsize=256)
+def _scenario_tables(vps: VehicleParams, rho: float, soc: float) -> tuple[LiftFF, float]:
+    """The thrust map and the hover throttle of one scenario (they do not depend on the search)."""
+    return LiftFF(vps, rho, soc, t_max_factor=3.0, n=70), trim.hover_throttle(vps, rho, soc)
+
+
+def _simulate_c(
+    vp: VehicleParams, scen: Scenario, prm: dict[str, float], cfg: CEval,
+    base_bp: BackTransitionParams, at_limit: bool,
+) -> CRun:  # fmt: skip
+    vps = scen.vehicle_for(vp)
+    v_air = braking.entry_airspeed(
+        cfg.airspeed_min, cfg.q_assist_speed, scen.rho, cfg.entry_convention
+    )
+    ff, d_hover = _scenario_tables(vps, scen.rho, scen.soc)
+    q = prm["q"]
+    bp = replace(
+        base_bp, T_bt=prm["T_bt"], theta_A=prm["theta_A"], delta_min=prm["spin_min"], a_lim=q,
+        h_tgt=scen.altitude_amsl_m, delta_hover=d_hover,
+    )  # fmt: skip
+    x0, v_ground = braking.airbrake_entry_state(
+        vps, scen, bp, v_air, cfg.end_speed, cfg.rotor_start, ff
+    )
+    t0 = braking.entry_rotor_thrust(vps, scen, bp, v_air, cfg.rotor_start, ff)
+    x_tgt = v_ground**2 / (2.0 * q)
+    bp = replace(bp, x_tgt=x_tgt, brake_at_limit=at_limit)
+    ctl = Position1Controller(bp, ff, z_i0=t0 / ff.thrust_for_delta(bp.delta_max))
+    sim = simulate(
+        runs.vehicle_for(vps), ctl, scen.environment(), x0, cfg.t_end,
+        runs.end_events(vps, scen, cfg.end_speed, cfg.agl0),
+    )  # fmt: skip
+    m = runs.run_metrics(sim, vps, float(x0[1]))
+    stopped = sim.terminated_by == "ground_speed_reached"
+    nan = math.nan
+    x_end = float(sim["x"][-1]) if stopped else nan
+    vh_end = float(sim["vh"][-1]) if stopped else nan
+    flags = list(m.failures)
+    if stopped and x_end - x_tgt > cfg.os_tol_m:
+        flags.append("overshoot")
+    if stopped and vh_end < -cfg.sink_tol_ms:
+        flags.append("sinking")
+    metrics = RunMetrics(m.excursion, m.energy, m.distance, tuple(flags))
+    return CRun(metrics, v_air, v_ground, x_tgt, stopped, x_end, x_end - x_tgt, vh_end, sim)
+
+
+def run_c(
+    vp: VehicleParams, scen: Scenario, prm: dict[str, float], cfg: CEval,
+    base_bp: BackTransitionParams,
+) -> CRun:  # fmt: skip
+    """One C run from the AIRBRAKE exit with the position cascade (`brake_at_limit = False`).
+
+    `prm` has `T_bt`, `theta_A` (rad), `spin_min` and `q`; `base_bp` carries everything else (the
+    Z loop, the lag, `theta_fw0`, the pitch-limit form). Q_TRANS_DECEL `q` is also the cascade's
+    acceleration limit. The failures are the usual ones plus `"overshoot"` (the aircraft stopped
+    more than `cfg.os_tol_m` past x_tgt) and `"sinking"` (end climb rate below -`cfg.sink_tol_ms`);
+    a run that does not stop is already a `not_stopped` failure.
+    """
+    return _simulate_c(vp, scen, prm, cfg, base_bp, at_limit=False)
+
+
+def evaluate_c(
+    vp: VehicleParams, scen: Scenario, prm: dict[str, float], cfg: CEval,
+    base_bp: BackTransitionParams,
+) -> RunMetrics:  # fmt: skip
+    """Metrics of `run_c`: excursion, bus energy, distance and the failure flags."""
+    return run_c(vp, scen, prm, cfg, base_bp).metrics
+
+
+def capability_ceiling(
+    vp: VehicleParams, scen: Scenario, prm: dict[str, float], cfg: CEval,
+    base_bp: BackTransitionParams,
+) -> float:  # fmt: skip
+    """The deceleration the pitch ramp can deliver: the same run with the pitch at the ramp limit.
+
+    a_cap = (V_ground^2 - V_end^2) / (2 x_end), the equivalent of D's `a_eq` under the same Z loop
+    and lag. NaN if the run does not stop. Reporting only: it is run once per member at the optimum.
+    """
+    r = _simulate_c(vp, scen, prm, cfg, base_bp, at_limit=True)
+    if not r.stopped:
+        return math.nan
+    return (r.v_ground0**2 - cfg.end_speed**2) / (2.0 * r.x_end)
+
+
+def summarise_c(results: list[CRun], weights: CostWeights) -> dict[str, float]:
+    """The ensemble columns of the C tables: the cost and its parts, overshoot, flag counts."""
+    ms = [r.metrics for r in results]
+    ovs = [r.overshoot for r in results if r.stopped]
+    n_os = sum("overshoot" in m.failures for m in ms)
+    n_sink = sum("sinking" in m.failures for m in ms)
+    n_all = sum(len(m.failures) for m in ms)
+    return {
+        "J": ensemble_cost(ms, weights),
+        "p95_excursion_m": float(np.percentile([m.excursion for m in ms], 95)),
+        "mean_energy_kJ": float(np.mean([m.energy for m in ms])) / 1e3,
+        "p95_distance_m": float(np.percentile([m.distance for m in ms], 95)),
+        "max_overshoot_m": max(ovs) if ovs else math.nan,
+        "n_overshoot": float(n_os), "n_sinking": float(n_sink),
+        "n_other_flags": float(n_all - n_os - n_sink),
+    }  # fmt: skip
+
+
+def at_bound(bounds: Bounds, params: dict[str, float], frac: float = 0.1) -> dict[str, str]:
+    """Variables within `frac` of their range from a bound: "lo" or "hi" (others are absent)."""
+    out: dict[str, str] = {}
+    for n, lo, hi in zip(bounds.names, bounds.lo, bounds.hi, strict=True):
+        pos = (params[n] - lo) / (hi - lo)
+        if pos <= frac:
+            out[n] = "lo"
+        elif pos >= 1.0 - frac:
+            out[n] = "hi"
+    return out
+
+
+def optimise_c(
+    vp: VehicleParams,
+    scens: list[Scenario],
+    cfg: CEval,
+    base_bp: BackTransitionParams,
+    weights: CostWeights,
+    start: dict[str, float],
+    *,
+    bounds: Bounds = C_BOUNDS,
+    seeds: tuple[int, ...] = (1, 2, 3),
+    popsize: int = 8,
+    maxiter: int = 15,
+) -> RestrictedResult:
+    """CMA-ES over (T_bt, theta_A, spin_min, q), scored with (10.1) over the ensemble.
+
+    `start` holds the register values of `T_bt`, `theta_A` and `spin_min`; `q` starts at
+    `C_Q_START` unless `start` has one. `result.cost_default` is the cost at that start and
+    `result.search.spread` the T-12 figure for `io.record.build_record(search_spreads=...)`.
+    `result.at_bound` names the variables within 10% of their range of a bound.
+    """
+
+    def metrics(prm: dict[str, float]) -> list[RunMetrics]:
+        return [evaluate_c(vp, s, prm, cfg, base_bp) for s in scens]
+
+    def cost(u: np.ndarray) -> float:
+        return ensemble_cost(metrics(bounds.to_physical(u)), weights)
+
+    u0 = bounds.to_unit({"q": C_Q_START, **start})
+    res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter)
+    best = bounds.to_physical(res.best_x)
+    return RestrictedResult(
+        "c", best, res.best_f, res.f_start, metrics(best), res,
+        make_record(vp, scens, "c", cfg, base_bp, weights, bounds, seeds, popsize, maxiter, start),
+        at_bound(bounds, best),
+    )  # fmt: skip
+
+
+__all__ = [
+    "C_BOUNDS", "C_Q_START", "CEval", "CRun", "RestrictedResult", "at_bound",
+    "capability_ceiling", "evaluate_back", "evaluate_c", "evaluate_full", "optimise",
+    "optimise_c", "plan_decel", "run_c", "summarise_c",
+]  # fmt: skip

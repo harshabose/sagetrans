@@ -34,8 +34,16 @@ from sagetrans.analysis import (
 from sagetrans.analysis import collocation as coll
 from sagetrans.analysis import sensitivity as sens
 from sagetrans.analysis.common import Scenario
-from sagetrans.analysis.ensemble import bootstrap_percentile, braking_ensemble, latin_hypercube
+from sagetrans.analysis.ensemble import (
+    CostWeights,
+    bootstrap_percentile,
+    braking_ensemble,
+    latin_hypercube,
+)
+from sagetrans.analysis.search import Bounds
+from sagetrans.control.ardupilot_like import BackTransitionParams
 from sagetrans.io.inputs import StudyInputs
+from sagetrans.io.settings import END_SPEED_MS
 from sagetrans.physics import aero, battery, motor, rotor
 from sagetrans.physics.params import VehicleParams
 
@@ -72,6 +80,24 @@ def _attempt(label: str, fn: Callable[[], Any], errors: list[str]) -> Any:
 
 def _ensemble(inp: StudyInputs, n: int, seed: int) -> list[Scenario]:
     return latin_hypercube(n, inp.vehicle, seed=seed, axes=inp.ensemble_axes)
+
+
+def exit_params(
+    inp: StudyInputs, *, rotor_lag_s: float, alpha_cap: float | None = None, **extra: Any
+) -> BackTransitionParams:
+    """Controller parameters at the AIRBRAKE exit: the register's values plus the D block's.
+
+    The exit state belongs to D's block (`theta_fw0_deg`, `pit_lim_mode`, the lift feed-forward,
+    the alpha gate), so D and C build their parameters here and cannot drift. `rotor_lag_s` is the
+    caller's own (D's or C's) and `extra` any other field (C passes the Z-loop ones).
+    """
+    c = inp.study.D
+    return dataclasses.replace(
+        inp.controller, theta_fw0=math.radians(c.theta_fw0_deg), pit_lim_mode=c.pit_lim_mode,
+        v_min_ref=inp.airspeed_min, ff_mode=c.ff_mode, ff_lift_tau_s=c.ff_lift_tau_s,
+        ff_lift_scale=c.ff_lift_scale, rotor_lag_s=rotor_lag_s, alpha_cap=alpha_cap,
+        alpha_cap_vmin=c.alpha_gate_ms, **extra,
+    )  # fmt: skip
 
 
 # ---- Q2: pusher thrust margin ------------------------------------------------------------------
@@ -316,12 +342,9 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         alpha_cap = zero_loss._alpha_band(vp, lim)[1]  # body pitch; the wing angle adds i_w
         alpha_hi = alpha_cap + vp.wing.i_w
         kappa = inp.descent.kappa
-        base_bp = dataclasses.replace(
-            inp.controller, theta_fw0=math.radians(c.theta_fw0_deg), pit_lim_mode=c.pit_lim_mode,
-            v_min_ref=inp.airspeed_min, ff_mode=c.ff_mode, ff_lift_tau_s=c.ff_lift_tau_s,
-            ff_lift_scale=c.ff_lift_scale, rotor_lag_s=c.rotor_lag_s,
-            alpha_cap=alpha_cap if c.enforce_alpha else None, alpha_cap_vmin=c.alpha_gate_ms,
-        )  # fmt: skip
+        base_bp = exit_params(
+            inp, rotor_lag_s=c.rotor_lag_s, alpha_cap=alpha_cap if c.enforce_alpha else None
+        )
 
         def entry(sc: Scenario) -> float:
             return braking.entry_airspeed(inp.airspeed_min, c.q_assist_speed_ms, sc.rho,
@@ -711,16 +734,144 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
 
 
 # ---- tasks: C, B2, B1, sensitivity -------------------------------------------------------------
-def task_c(inp: StudyInputs) -> dict[str, Any]:
-    c = inp.study.C
-    scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
-    r = restricted.optimise(
-        inp.vehicle, scens, "back", seeds=tuple(c.seeds), popsize=c.popsize, maxiter=c.maxiter,
-        a_plan_source=c.a_plan_source, theta_p=inp.theta_p,
-        controller_overrides=inp.controller_overrides, start=inp.start_params,
-        v0_eas=inp.entry_eas,
+def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams, CostWeights]:
+    """C's evaluation settings, base controller parameters and cost normalisers from the config.
+
+    The entry (`theta_fw0_deg`, `pit_lim_mode`, `q_assist_speed_ms`, `entry_convention`) is read
+    from the D block: it describes the AIRBRAKE exit, not C.
+    """
+    c, d = inp.study.C, inp.study.D
+    if d.pit_lim_mode == "airspeed" and inp.controller.theta_B is None:
+        raise ValueError("D.pit_lim_mode 'airspeed' needs controller.ardupilot.Q_BCK_PIT_LIM")
+    z = c.z
+    base = exit_params(
+        inp, rotor_lag_s=c.rotor_lag_s, z_mode="ardupilot", z_pos_p=z.pos_p, z_vel_p=z.vel_p,
+        z_acc_p=z.acc_p, z_acc_i=z.acc_i, z_acc_imax=z.acc_imax, z_vmax=z.vmax,
+        z_vel_flt_hz=z.vel_flt_hz, z_acc_flt_hz=z.acc_flt_hz,
     )  # fmt: skip
-    return {"result": r, "scens": scens}
+    cev = restricted.CEval(
+        airspeed_min=inp.airspeed_min, q_assist_speed=d.q_assist_speed_ms,
+        entry_convention=d.entry_convention, rotor_start=c.rotor_start, os_tol_m=c.os_tol_m,
+        sink_tol_ms=c.sink_tol_ms, end_speed=END_SPEED_MS,
+    )  # fmt: skip
+    w = CostWeights(h_ref=c.weights.h_ref, E_ref=c.weights.E_ref, x_ref=c.weights.x_ref)
+    return cev, base, w
+
+
+def c_bounds(inp: StudyInputs) -> Bounds:
+    b = inp.study.C.bounds
+    return Bounds(
+        restricted.C_BOUNDS.names,
+        (b.T_bt[0], math.radians(b.theta_A_deg[0]), b.spin_min[0], b.q[0]),
+        (b.T_bt[1], math.radians(b.theta_A_deg[1]), b.spin_min[1], b.q[1]),
+    )  # fmt: skip
+
+
+def _c_row(label: str, results: list[restricted.CRun], w: CostWeights) -> dict[str, Any]:
+    return {"case": label, **{k: _num(v) for k, v in restricted.summarise_c(results, w).items()}}
+
+
+def task_c(inp: StudyInputs) -> dict[str, Any]:
+    """Analysis C: search the four ArduPilot variables from the AIRBRAKE exit, then report.
+
+    Tables: `C_params` (the optimum and the register at q = 2), `C_search`, `C_runs` (one row per
+    ensemble member, with the capability ceiling and D's alpha and VRS checks), `C_q_curve`
+    (the optimum's ramp with q varied) and `C_sens` (one-at-a-time changes at the optimum).
+    """
+    c, d, vp = inp.study.C, inp.study.D, inp.vehicle
+    scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
+    cev, base, w = c_settings(inp)
+    bounds = c_bounds(inp)
+    start = {k: inp.start_params[k] for k in ("T_bt", "theta_A", "spin_min")}
+    r = restricted.optimise_c(
+        vp, scens, cev, base, w, start, bounds=bounds, seeds=tuple(c.seeds),
+        popsize=c.popsize, maxiter=c.maxiter,
+    )  # fmt: skip
+    best = r.params
+    reg = {**start, "q": restricted.C_Q_START}
+
+    def run_all(
+        prm: dict[str, float], ev: restricted.CEval = cev, bp: BackTransitionParams = base
+    ) -> list[restricted.CRun]:
+        return [restricted.run_c(vp, s, prm, ev, bp) for s in scens]
+
+    def deg(prm: dict[str, float]) -> dict[str, Any]:
+        return {"T_bt_s": prm["T_bt"], "theta_A_deg": math.degrees(prm["theta_A"]),
+                "spin_min": prm["spin_min"], "Q_TRANS_DECEL_ms2": prm["q"]}  # fmt: skip
+
+    t0 = time.time()
+    opt = run_all(best)
+    reg_runs = run_all(reg)
+    s_opt, s_reg = restricted.summarise_c(opt, w), restricted.summarise_c(reg_runs, w)
+    params: Table = [
+        {"case": "optimum", **deg(best), "J": r.cost, "J_start": r.cost_default,
+         "seed_spread": r.search.spread,
+         "at_bound": ";".join(f"{k}:{v}" for k, v in r.at_bound.items()),
+         **{k: _num(v) for k, v in s_opt.items() if k != "J"}},
+        {"case": f"register at q = {restricted.C_Q_START:g}", **deg(reg), "J": s_reg["J"],
+         "J_start": "", "seed_spread": "", "at_bound": "",
+         **{k: _num(v) for k, v in s_reg.items() if k != "J"}},
+    ]  # fmt: skip
+    search = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
+              for sr in r.search.seeds]  # fmt: skip
+
+    # per member: the run, the capability ceiling, D's alpha and VRS checks (reporting only)
+    lim = zero_loss.ActuatorLimits(
+        alpha_min=0.0 if inp.study.A.alpha_min_deg is None
+        else math.radians(inp.study.A.alpha_min_deg),
+        cl_frac=inp.study.A.cl_frac or 0.8,
+    )  # fmt: skip
+    alpha_hi = zero_loss._alpha_band(vp, lim)[1] + vp.wing.i_w
+    run_rows: Table = []
+    for i, (s, cr) in enumerate(zip(scens, opt, strict=True)):
+        vps = s.vehicle_for(vp)
+        bp_i = dataclasses.replace(base, T_bt=best["T_bt"], theta_A=best["theta_A"],
+                                   delta_min=best["spin_min"])  # fmt: skip
+        fl = braking.braking_flags(
+            cr.sim, vps, s, bp_i, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
+            kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
+        )  # fmt: skip
+        a_cap = restricted.capability_ceiling(vp, s, best, cev, base)
+        run_rows.append({
+            "member": i, "altitude_m": s.altitude_amsl_m, "isa_offset_k": s.isa_offset_k,
+            "mass_kg": s.mass_kg, "soc": s.soc, "headwind_ms": s.headwind_ms,
+            "V0_air_ms": cr.v_air0, "V0_ground_ms": cr.v_ground0, "x_tgt_m": cr.x_tgt,
+            "x_end_m": _num(cr.x_end), "overshoot_m": _num(cr.overshoot),
+            "energy_kJ": cr.metrics.energy / 1e3, "excursion_m": cr.metrics.excursion,
+            "end_sink_ms": _num(-cr.vh_end), "flags": ",".join(cr.metrics.failures),
+            "a_cap_ms2": _num(a_cap), "q_over_a_cap": _num(best["q"] / a_cap),
+            **{k: v if isinstance(v, bool) else _num(v) for k, v in fl.items()},
+        })  # fmt: skip
+
+    q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q}
+               for q in c.q_curve]  # fmt: skip
+
+    sens_rows: Table = []
+
+    def sens_case(name: str, value: Any, ev: restricted.CEval = cev,
+                  bp: BackTransitionParams = base) -> None:  # fmt: skip
+        row = _c_row("", run_all(best, ev, bp), w)
+        sens_rows.append({"parameter": name, "value": value, **row})
+
+    sc_ = c.sens
+    for v in sc_.rotor_lag_s:
+        sens_case("rotor_lag_s", v, bp=dataclasses.replace(base, rotor_lag_s=v))
+    for rs in sc_.rotor_start:
+        sens_case("rotor_start", rs, ev=dataclasses.replace(cev, rotor_start=rs))
+    for v in sc_.z_vel_p:
+        sens_case("z_vel_p", v, bp=dataclasses.replace(base, z_vel_p=v))
+    for v in sc_.z_acc_p:
+        sens_case("z_acc_p", v, bp=dataclasses.replace(base, z_acc_p=v))
+    for v in sc_.theta_fw0_deg:
+        sens_case("theta_fw0_deg", v, bp=dataclasses.replace(base, theta_fw0=math.radians(v)))
+    for row in sens_rows:
+        row.pop("case", None)
+    print(f"    C reports: {time.time() - t0:.0f} s", flush=True)
+    return {
+        "result": r, "scens": scens,
+        "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
+                   "C_q_curve": q_curve, "C_sens": sens_rows},
+    }  # fmt: skip
 
 
 def _b1_problem(inp: StudyInputs, scen: Scenario) -> coll.Problem:
@@ -804,7 +955,7 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
     return sens.HeadlineModel(
         inp.vehicle, scen, inputs, prm=dict(inp.start_params), budget=budget,
         controller=dict(inp.controller_overrides), theta_p=inp.theta_p,
-        a_plan_source=inp.study.C.a_plan_source, v0_eas=inp.entry_eas,
+        a_plan_source="simulated", v0_eas=inp.entry_eas,
     )  # fmt: skip
 
 

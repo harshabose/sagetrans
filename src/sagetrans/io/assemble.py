@@ -228,22 +228,58 @@ def assemble(
                                                     "v_end_tas_ms", "a_min_ms2", "a_equiv_ms2",
                                                     "reachable", "current_limited"]))  # fmt: skip
 
-    c_res = task_results.get("C", {}).get("result")
+    c_task = task_results.get("C", {})
+    c_res = c_task.get("result")
     if c_res is not None:
         spreads["C"] = c_res.search.spread
         analyses["C"] = c_res.record
-        tables["C_params"] = [{"parameter": k, "value": v} for k, v in c_res.params.items()]
-        tables["C_search"] = [{"seed": s.seed, "best_cost": s.f, "evaluations": s.n_evals}
-                              for s in c_res.search.seeds]  # fmt: skip
-        tables["C_ensemble_runs"] = [
-            {"scenario": i, "excursion_m": m.excursion, "energy_J": m.energy,
-             "distance_m": m.distance, "failures": ",".join(m.failures)}
-            for i, m in enumerate(c_res.runs)]  # fmt: skip
-        sections["C — ArduPilot parameter optimisation (back-transition)"] = "\n".join([
-            f"Cost {c_res.cost_default:.3f} (register values) → **{c_res.cost:.3f}**; three-seed "
-            f"spread **{c_res.search.spread:.2%}** (T-12 limit {gate.T12_SPREAD_MAX:.0%}).", "",
-            md_table(tables["C_params"]), "", md_table(tables["C_search"]), "",
-            md_table(tables["C_ensemble_runs"])])  # fmt: skip
+        tables.update(c_task["tables"])
+        cc = inp.study.C
+        runs_c = tables["C_runs"]
+        a_cap = sorted(float(r["a_cap_ms2"]) for r in runs_c if r["a_cap_ms2"] != "")
+        q_opt = c_res.params["q"]
+        cap_txt = (
+            f"The pitch ramp can deliver {min(a_cap):.2f} to {max(a_cap):.2f} m/s^2 across the "
+            f"ensemble (`a_cap_ms2`, median {a_cap[len(a_cap) // 2]:.2f}); the optimum asks for "
+            f"`q` = {q_opt:.2f}, so " + (
+                "it is above the slowest member's ceiling and the overshoot tolerance binds."
+                if a_cap and q_opt > min(a_cap) else "it is below every member's ceiling."
+            )
+        ) if a_cap else ""
+        flagged = c_res.at_bound
+        sections["C — ArduPilot parameters from the AIRBRAKE exit"] = "\n".join([
+            f"Cost {c_res.cost_default:.3f} (register values, q = 2) → **{c_res.cost:.3f}**; "
+            f"{len(c_res.search.seeds)}-seed spread **{c_res.search.spread:.2%}** (T-12 limit "
+            f"{gate.T12_SPREAD_MAX:.0%}). Entry is the AIRBRAKE exit like D; four variables are "
+            "searched, `Q_TRANS_DECEL` (q) among them, which sets the stopping point and is the "
+            "cascade's acceleration limit. The vertical loop is ArduPilot's structure with its "
+            f"default values; rotor lag {cc.rotor_lag_s:g} s, rotors `{cc.rotor_start}` at "
+            "the exit.",
+            "",
+            "**The overshoot tolerance decides the answer.** A run that stops more than "
+            f"{cc.os_tol_m:g} m past its stopping point, or ends sinking faster than "
+            f"{cc.sink_tol_ms:g} m/s, is a failure; both tolerances are proposals. "
+            + cap_txt + (
+                " Variables within 10% of a bound: "
+                + ", ".join(f"`{k}` ({v})" for k, v in flagged.items()) + "." if flagged else ""
+            ),
+            "",
+            "`theta_A` against its bound is a stalled-wing brake as in D (check D's alpha and VRS "
+            "columns in `C_runs`); it is not a recommendation to fly at that angle. `rotor_start` "
+            "idle is read from the ArduPilot source and not checked in SITL or a log (O-13); the "
+            "Z-loop defaults are master 4.8.0-dev, not a pinned tag (O-08). B and C are not "
+            "comparable yet: B1 and B2 still start at level cruise.",
+            "",
+            md_table(tables["C_params"]), "", "Search:", "", md_table(tables["C_search"]), "",
+            "Energy against distance with the optimum's ramp and q varied:", "",
+            md_table(tables["C_q_curve"]), "",
+            "One at a time at the optimum:", "", md_table(tables["C_sens"]), "",
+            "Ensemble members at the optimum:", "",
+            md_table(runs_c, ["member", "altitude_m", "mass_kg", "soc", "headwind_ms",
+                              "V0_ground_ms", "x_tgt_m", "x_end_m", "overshoot_m", "energy_kJ",
+                              "excursion_m", "end_sink_ms", "flags", "a_cap_ms2", "q_over_a_cap",
+                              "alpha_max_gated_deg", "vrs_min"]),
+        ])  # fmt: skip
 
     b2 = task_results.get("B2", {})
     b2_res = b2.get("result")
