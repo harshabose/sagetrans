@@ -108,7 +108,7 @@ class DSensCfg(_Strict):
     """Cases of `D_sensitivity`, on the first named scenario at nominal mass."""
 
     theta_fw0_deg_sweep: list[float] = [0.0, 4.0, 8.0, 12.0]
-    lag_s_sweep: list[float] = [0.0, 0.25, 0.5]
+    lag_s_sweep: list[float] = [0.0, 0.1, 0.25, 0.5]
     lift_tau_s_sweep: list[float] = [0.0, 0.5]
     lift_scale_sweep: list[float] = [0.8, 1.2]
 
@@ -128,7 +128,7 @@ class DCfg(_Strict):
     enforce_alpha: bool = False  # hold the wing angle of attack to the 0.8 C_L,max band top
     alpha_gate_ms: float = Field(5.0, ge=0.0)  # below this airspeed alpha is not judged
     sink_tol_ms: float = Field(0.5, ge=0.0)  # end sink rate that counts as sinking (placeholder)
-    rotor_lag_s: float = Field(0.0, ge=0.0)  # sensitivity only
+    rotor_lag_s: float = Field(0.0, ge=0.0)  # the lumped actuator lag; a sensitivity until measured
     # diagnostic speed grid (D_a_eq_speed), to set beside A's windows; not the headline
     v0_eas_ms: list[float] = [16.0, 22.0]
     sens: DSensCfg = DSensCfg()

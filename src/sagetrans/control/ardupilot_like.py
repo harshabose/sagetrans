@@ -69,7 +69,10 @@ class BackTransitionParams:
     # limits and sensitivities of analysis D; all off by default
     alpha_cap: float | None = None  # rad; theta - gamma <= alpha_cap while V >= alpha_cap_vmin
     alpha_cap_vmin: float = 5.0  # m/s; below it the wing carries under 10% of the weight
-    rotor_lag_s: float = 0.0  # sensitivity only; not ArduPilot's spool law
+    # the one lumped actuator lag of D (first order, on the rotor throttle): ESC slew, output
+    # filtering, throttle smoothing and any rotor inertia beyond I_rot, which adds in series.
+    # A sensitivity until a bench value is set; not ArduPilot's spool law
+    rotor_lag_s: float = 0.0
 
     @classmethod
     def for_vehicle(
@@ -141,8 +144,13 @@ class Position1Controller:
     measure. The filter and the scale stand in for an estimate. The gains are untouched.
 
     `alpha_cap` limits the pitch command to `alpha_cap + gamma` (wing angle of attack) above
-    `alpha_cap_vmin`. `rotor_lag_s` is a first-order lag on the rotor throttle: a crude stand-in
-    for rotor and ESC lag, not MOT_SPOOL_TIME (the rotors are already spooled in AIRBRAKE).
+    `alpha_cap_vmin`. `rotor_lag_s` is the one lumped actuator lag of D: a first-order lag on the
+    rotor throttle command that stands for everything between ArduPilot's rotor output and the
+    rotor-speed response that the vehicle model does not already contain (ESC slew, output
+    filtering, throttle smoothing, rotor or motor inertia beyond the placeholder `I_rot`). It adds
+    in series with the model's own lag (`braking.rotor_speed_tau`, small at the placeholder
+    `I_rot`). It is not MOT_SPOOL_TIME (the rotors are already spooled in AIRBRAKE); its value is
+    set from a bench step test, so until then the excursions it produces are a sensitivity.
     """
 
     def __init__(self, p: BackTransitionParams, ff: LiftFF | None = None) -> None:

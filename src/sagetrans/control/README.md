@@ -69,7 +69,8 @@ constant deceleration is optimistic (analysis D). The airspeed form (O-05) needs
   lift times `ff_lift_scale`, filtered with time constant `ff_lift_tau_s`. At tau 0 and scale 1 it
   is an oracle. The default of the dataclass stays `"repo"`, so C and B2 are unchanged.
 * `alpha_cap` limits the pitch command to `alpha_cap + gamma` while `V >= alpha_cap_vmin`.
-* `rotor_lag_s` is a first-order lag on the rotor throttle (a sensitivity, not the spool law).
+* `rotor_lag_s` is the one lumped actuator lag of D, first order on the rotor throttle (ESC slew,
+  filtering, inertia beyond `I_rot`); a sensitivity, not the spool law.
 * Filter states live in `ModeState.memory` (`L_f`, `d_eff`) and are carried through each step.
 
 ### Position cascade (eqs. 8.9, 8.4, 8.10)

@@ -56,11 +56,11 @@ D:                         # braking and Q_TRANS_DECEL
   enforce_alpha: false              # true: hold wing alpha to the 0.8 C_L,max band top of analysis A
   alpha_gate_ms: 5.0                # alpha is not judged below this airspeed
   sink_tol_ms: 0.5                  # end sink rate that counts as "still sinking" (placeholder)
-  rotor_lag_s: 0.0                  # sensitivity only; not ArduPilot's spool law
+  rotor_lag_s: 0.0                  # lumped first-order actuator lag on the rotor throttle; sensitivity until a bench value
   v0_eas_ms: [16, 17.1, 20.9]       # diagnostic speed grid (D_a_eq_speed), to set beside A's windows
   sens:
     theta_fw0_deg_sweep: [0, 4, 8, 12]
-    lag_s_sweep: [0, 0.25, 0.5]
+    lag_s_sweep: [0, 0.1, 0.25, 0.5]
     lift_tau_s_sweep: [0, 0.5]
     lift_scale_sweep: [0.8, 1.2]
   recommendation: {ensemble_n: 32, ensemble_seed: 8, percentile: 5, corners: true, n_boot: 1000}   # n: power of two

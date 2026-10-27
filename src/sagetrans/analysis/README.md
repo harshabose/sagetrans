@@ -259,9 +259,26 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
   measure. The tau and the scale stand in for an estimate. D then describes a controller with a
   lift-aware altitude hold, not necessarily ArduPilot's; both are shown in `D_sensitivity`. The
   altitude-hold gains are unchanged.
-* **No spool dynamics and no actuator lag** by default. `rotor_lag_s` is a first-order lag on the
-  rotor throttle, a crude stand-in for rotor/ESC lag (not `MOT_SPOOL_TIME`; the rotors are already
-  spooled), used as a sensitivity only.
+* **No spool dynamics and no actuator lag** by default. `rotor_lag_s` is the one actuator-lag
+  parameter of D: a lumped first-order lag on the rotor throttle command. It stands for everything
+  between ArduPilot's rotor output and the rotor-speed response that the vehicle model does not
+  already contain (ESC slew, output filtering, throttle smoothing, rotor or motor inertia beyond the
+  placeholder `I_rot`). It is not `MOT_SPOOL_TIME` (the rotors are already spooled). Its value is
+  not fixed: `D.sens.lag_s_sweep` (0, 0.1, 0.25, 0.5 s) is a sensitivity, and the altitude excursion
+  stays a lower bound until a bench value is set.
+  * `vehicle.rotor.I_rot` is separate and stays: the vehicle model integrates the rotor speed with it
+    and analyses A, B1 and B2 depend on it. It is a physical parameter, not a D setting, and D does
+    not sweep it. `braking.rotor_speed_tau` is the model's own time constant at hover (about 0.023 s
+    at the placeholder, linear in `I_rot`); it adds in series with `rotor_lag_s`, so the lag
+    dominates for any value worth sweeping. `D_sensitivity` shows `rotor_lag_s`,
+    `tau_rotor_model_s` and `tau_total_s` on every row.
+  * **How to set it:** bench-test one lift motor with its ESC and propeller, step the throttle about
+    the hover command (for example +10%), record rotor speed (or thrust) and fit a first-order
+    `tau_meas`. Then `rotor_lag_s = max(0, tau_meas - tau_rotor_model_s)`, so the model's lag is not
+    counted twice. If a measured `I_rot` arrives, enter it in `vehicle.yaml` and reduce `rotor_lag_s`
+    by the model time constant it adds.
+  * B1 and B2 have only `I_rot`, not this lag; C uses the controller and gets it. Compare B with C
+    at `rotor_lag_s = 0`.
 
 ### The wing is stalled while braking
 

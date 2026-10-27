@@ -488,6 +488,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         cases += [("enforce_alpha", {"alpha_cap": alpha_cap})]
         with_ensemble = {"base", "ff_mode_repo", "enforce_alpha"}
         sens_rows: Table = []
+        # the vehicle model's own rotor lag at this density and SoC; rotor_lag_s adds in series
+        tau_model = braking.rotor_speed_tau(scn.vehicle_for(vp), scn.rho, scn.soc)
         for case, over in cases:
             bps = dataclasses.replace(base_bp, **over)
             r, fl, _ = run(scn, bps, v_air_n)
@@ -497,7 +499,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                 "alt_gain_m": m["altitude_gain"], "alt_loss_m": m["altitude_loss"],
                 **cells({k: fl[k] for k in ("vh_end_ms", "alpha_max_gated_deg",
                                             "t_above_alpha_08_s", "t_above_alpha_s_s")}),
-                "a_rec_pct_ensemble_ms2": "",
+                "a_rec_pct_ensemble_ms2": "", "rotor_lag_s": bps.rotor_lag_s,
+                "tau_rotor_model_s": tau_model, "tau_total_s": bps.rotor_lag_s + tau_model,
             }  # fmt: skip
             if case in with_ensemble:
                 _, ca, _ = ensemble(bps)
