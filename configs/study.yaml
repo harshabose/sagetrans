@@ -89,6 +89,7 @@ Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX
 FT:                        # forward transition from hover (docs/FT_spec.md)
   # Start: mission.profile.clearance_agl_m above the site; limits mission.profile.fwd_alt_loss_max_m / fwd_alt_gain_max_m.
   ensemble_n: 16           # the first 16 points of C's Sobol sample (same seed), so the members compare. FT_spec 6.5: one FT evaluation of 32 runs took 14.2 s against C's 4.1 s (3.5x, limit 2x), so n is halved
+  final_ensemble_n: 32     # the optimum, the register start and the ArduPilot default are reported on the first 32 points (the search uses ensemble_n)
   ensemble_seed: 8
   headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed
   seeds: [1, 2, 3, 4, 5, 6, 7, 8]
@@ -104,13 +105,13 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
   weights: {h_ref: 5.0, E_ref: null, x_ref: 100.0, w_h: 1.0, w_E: 0.3, w_x: 0.0}   # E_ref null = mean energy at the start point; w_x 0: distance is not a cost here
   bounds:
     airspeed_min_eas_ms: [14.0, 20.0]   # below the cruise EAS (20.9); the 1.2 rule decides the lower end in practice
-    q_transition_s: [2.0, 8.0]
+    q_transition_s: [2.0, 12.0]         # was 2 to 8 s: the first full run ended at 8 s, the bound
     tkoff_thr_max: [0.5, 1.0]           # TECS forces a 1 % range above the minimum (O-22)
     q_tran_pit_max_deg: [1.0, 10.0]     # ArduPilot range 0 to 30; the fade cap is 4 to 22 deg
   scan:                    # FT_scan: AIRSPEED_MIN fixed on a grid, the other three re-searched
     airspeed_min_eas_ms: [15.0, 16.0, 17.0, 18.0, 19.0, 20.0]
     seeds: [1, 2, 3]
-    maxiter: 12
+    maxiter: 12            # the 20 m/s point reaches a 0.004 % seed spread at 12 (checked at the 12 s bound)
   history_scenarios: [S-07, S-03]      # time histories at the optimum and at the register values
   sens:                    # FT_sens: one at a time at the optimum
     TECS_TIME_CONST: [3.0, 5.0, 8.0]

@@ -91,6 +91,7 @@ def test_z_loop_split_gives_the_same_command_as_the_altitude_error_form():
 FT_TINY = """
 FT:
   ensemble_n: 2
+  final_ensemble_n: 4
   headwind_ms: [0.0, 5.0]
   seeds: [1]
   popsize: 4
@@ -130,5 +131,22 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
         (c, k) for c in ("optimum", "register") for k in ("core", "corner")
     }
     assert out["result"].search.spread >= 0.0
+    # the search ensemble is 2; the three cases are reported on the first 4 members (a prefix)
+    assert all(r["ensemble_n"] == 4 for r in params)
+    members = {r["member"] for r in runs if r["set"] == "core" and r["case"] == "optimum"}
+    assert members == {0, 1, 2, 3}
+    assert any("first 4 members" in n and "first 2 members" in n for n in out["notes"])
+    # FT_sens: a base row on the search ensemble, the reference of the sensitivities
+    base = [r for r in tables["FT_sens"] if r["parameter"] == "base"]
+    assert len(base) == 1 and base[0]["ensemble_n"] == 2
     scan = stages.run_task(inp, "FT_scan:16")["row"]
     assert scan["airspeed_min_eas_ms"] == 16.0 and scan["entry_eas_back_ms"] == 14.0
+
+
+def test_the_final_ensemble_is_a_prefix_of_a_larger_sample():
+    inp = load_inputs(CONFIGS)
+    small, _ = stages.ft_scenarios(inp, 4)
+    big, _ = stages.ft_scenarios(inp, 8)
+    assert [s.mass_kg for s in big[:4]] == [s.mass_kg for s in small]
+    with pytest.raises(ValueError, match="final_ensemble_n"):
+        FTCfg(ensemble_n=16, final_ensemble_n=8)

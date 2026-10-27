@@ -299,7 +299,7 @@ class FTBoundsCfg(_Strict):
     """Search bounds of analysis FT: (low, high) of each of the four variables."""
 
     airspeed_min_eas_ms: tuple[float, float] = (14.0, 20.0)  # AIRSPEED_MIN as an EAS
-    q_transition_s: tuple[float, float] = (2.0, 8.0)  # Q_TRANSITION_MS in seconds
+    q_transition_s: tuple[float, float] = (2.0, 12.0)  # Q_TRANSITION_MS in seconds
     tkoff_thr_max: tuple[float, float] = (0.5, 1.0)  # TECS forces a 1 % range (O-22)
     q_tran_pit_max_deg: tuple[float, float] = (1.0, 10.0)  # the fade cap is 4 to 22 deg
 
@@ -343,7 +343,11 @@ class FTCfg(_Strict):
     gain are `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`.
     """
 
-    ensemble_n: int = Field(16, ge=1)  # the first points of C's Sobol sample (halved, spec 6.5)
+    # the search ensemble: the first points of C's Sobol sample (halved, spec 6.5)
+    ensemble_n: int = Field(16, ge=1)
+    # the final evaluation of the optimum, the register start and the ArduPilot default: the first
+    # `final_ensemble_n` points of the same sample (a prefix, so the search members are among them)
+    final_ensemble_n: int = Field(32, ge=1)
     ensemble_seed: int = 8
     headwind_ms: list[float] = [0.0, 5.0]  # the ensemble's headwind range (low, high)
     seeds: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
@@ -366,6 +370,8 @@ class FTCfg(_Strict):
     def _headwind_range(self) -> FTCfg:
         if len(self.headwind_ms) != 2 or self.headwind_ms[0] > self.headwind_ms[1]:
             raise ValueError("FT.headwind_ms must be [low, high] with low <= high")
+        if self.final_ensemble_n < self.ensemble_n:
+            raise ValueError("FT.final_ensemble_n must be at least FT.ensemble_n")
         return self
 
 

@@ -1450,11 +1450,15 @@ def build_ft(c: Ctx) -> Out:
                 ),
             )
         )
-    sens, j0 = c.rows("FT_sens"), num(params[opt].get("J"))
+    sens = c.rows("FT_sens")
+    # the sensitivities are evaluated on the search ensemble, so the reference is the `base` row
+    # of FT_sens (the unchanged evaluation there), not the optimum's J on the final ensemble
+    base = next((r for r in sens if r.get("parameter") == "base"), None)
+    j0 = num(base.get("J")) if base else num(params[opt].get("J"))
     if sens and ok(j0) and j0:
         items = [(f"{r['parameter']} = {r['value']}", (r["J"] / j0 - 1) * 100,
                   f"J = {r['J']:.3f}; change = ({r['J']:.3f} / {j0:.3f} - 1) x 100", "s1")
-                 for r in sens if ok(num(r.get("J")))]  # fmt: skip
+                 for r in sens if ok(num(r.get("J"))) and r is not base]  # fmt: skip
         o.figures.append(
             panelbox(
                 "One-at-a-time sensitivity",

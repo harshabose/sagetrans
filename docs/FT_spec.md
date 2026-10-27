@@ -168,7 +168,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
   weights: {h_ref: 5.0, E_ref: null, x_ref: 100.0, w_h: 1.0, w_E: 0.3, w_x: 0.0}   # E_ref null = mean energy at the start point; w_x 0: distance is not a cost here
   bounds:
     airspeed_min_eas_ms: [14.0, 20.0]   # below the cruise EAS (20.9); the 1.2 rule decides the lower end in practice
-    q_transition_s: [2.0, 8.0]
+    q_transition_s: [2.0, 12.0]         # was 2 to 8 s; widened after the full run put the optimum at 8 s
     tkoff_thr_max: [0.5, 1.0]           # TECS forces a 1 % range above the minimum (O-22)
     q_tran_pit_max_deg: [1.0, 10.0]     # ArduPilot range 0 to 30; the fade cap is 4 to 22 deg
   scan:                    # FT_scan: AIRSPEED_MIN fixed on a grid, the other three re-searched
@@ -192,7 +192,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
 Bounds validation: `lo < hi` for every pair; `tkoff_thr_max.lo > 0`.
 
 Rationale of the bounds: `AIRSPEED_MIN` upper end 20 stays under the cruise EAS so TECS has a speed to
-climb to; `Q_TRANSITION_MS` 2 to 8 s is the old `FULL_BOUNDS` range; `Q_TRAN_PIT_MAX` 1 to 10 deg gives
+climb to; `Q_TRANSITION_MS` 2 to 12 s (the old `FULL_BOUNDS` range was 2 to 8 s; the first full run put the optimum at the 8 s bound, so the upper end was widened to 12 s, the owner's decision of 2026-10-27); `Q_TRAN_PIT_MAX` 1 to 10 deg gives
 a fade cap of 4 to 22 deg, below the 35 deg of `PTCH_LIM_MAX_DEG` and inside the wing band checked by
 the angle-of-attack flag. `at_bound` (the existing 10 % rule) names any variable that lands at a bound.
 

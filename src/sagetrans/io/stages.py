@@ -962,12 +962,18 @@ def ft_settings(inp: StudyInputs) -> tuple[forward.FTEval, dict[str, float]]:
     return fev, start
 
 
-def ft_scenarios(inp: StudyInputs) -> tuple[list[Scenario], list[Scenario]]:
-    """The Sobol sample (searched) and the corners (reported), at the transition altitude."""
+def ft_scenarios(
+    inp: StudyInputs, n: int | None = None
+) -> tuple[list[Scenario], list[Scenario]]:
+    """The Sobol sample and the corners, at the transition altitude.
+
+    `n` members of the sample (default `FT.ensemble_n`, the search ensemble). A larger `n` is a
+    prefix extension of a smaller one, so the search members are the first members of the final set.
+    """
     f = inp.study.FT
     axes = dataclasses.replace(inp.ensemble_axes, headwind_ms=(f.headwind_ms[0], f.headwind_ms[1]))
     return forward.ft_ensemble(
-        f.ensemble_n, inp.vehicle, f.ensemble_seed, axes, inp.mission.clearance_agl_m
+        n or f.ensemble_n, inp.vehicle, f.ensemble_seed, axes, inp.mission.clearance_agl_m
     )
 
 
@@ -1023,7 +1029,10 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
 
     Tables: `FT_params` (the optimum, the register start and the ArduPilot default), `FT_search`,
     `FT_runs` (every member of each case, Sobol core and corners), `FT_sens` (one at a time at the
-    optimum) and `FT_history` (time series of the named scenarios, each case). The
+    optimum) and `FT_history` (time series of the named scenarios, each case). The search,
+    `FT_search`, `FT_sens` and `J_start` use the first `FT.ensemble_n` members; the three cases of
+    `FT_params`, `FT_runs` and `FT_history` are evaluated on the first `FT.final_ensemble_n`
+    (`ensemble_n` columns say which, and the notes of the task repeat it). The
     `ardupilot_default` case (docs/DEFAULTS_spec.md 2.1) sets the four searched parameters to their
     defaults, everything else to the register; no search is run for it.
     """
@@ -1047,14 +1056,16 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
     )  # fmt: skip
     if dflt is not None:
         cases["ardupilot_default"] = dflt
-    core_runs = {c: forward_runs(vp, core, prm, fev) for c, prm in cases.items()}
-    corner_runs = {c: forward_runs(vp, corners, prm, fev) for c, prm in cases.items()}
+    final, final_corners = ft_scenarios(inp, f.final_ensemble_n)
+    core_runs = {c: forward_runs(vp, final, prm, fev) for c, prm in cases.items()}
+    corner_runs = {c: forward_runs(vp, final_corners, prm, fev) for c, prm in cases.items()}
     params: Table = []
     for c, prm in cases.items():
         opt = c == "optimum"
         params.append({
             "case": c, **{FT_PARAM_COLUMNS[k]: prm[k] for k in forward.FT_NAMES},
-            "J_start": r.cost_default if opt else "", "seed_spread": r.search.spread if opt else "",
+            "ensemble_n": len(final), "J_start": r.cost_default if opt else "",
+            "seed_spread": r.search.spread if opt else "",
             "at_bound": ";".join(f"{k}:{v}" for k, v in r.at_bound.items()) if opt else "",
             **{k: _num(v) for k, v in forward.summarise_ft(core_runs[c], w).items()},
         })  # fmt: skip
@@ -1063,15 +1074,26 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
     run_rows: Table = []
     for c in cases:
         for kind, scens, results in (
-            ("core", core, core_runs[c]), ("corner", corners, corner_runs[c])
+            ("core", final, core_runs[c]), ("corner", final_corners, corner_runs[c])
         ):
             for i, (sc, rr) in enumerate(zip(scens, results, strict=True)):
                 run_rows.append(_ft_member_row(sc, rr, c, kind, i))
+    notes = [
+        "FT_params, FT_runs and FT_history evaluate the optimum, the register start and the "
+        f"ArduPilot default on the first {len(final)} members of the Sobol sample and the "
+        f"{len(final_corners)} corners. The search, FT_search, FT_sens and J_start use the first "
+        f"{len(core)} members."
+    ]
+    # one at a time at the optimum, on the search ensemble; `base` is the unchanged evaluation there
     sens_rows: Table = []
+    base_sm = forward.summarise_ft(forward_runs(vp, core, best, fev), w)
+    sens_rows.append({"parameter": "base", "value": "", "ensemble_n": len(core),
+                      **{k: _num(x) for k, x in base_sm.items()}})  # fmt: skip
     for key, values in f.sens.model_dump().items():
         for v in values:
             sm = forward.summarise_ft(forward_runs(vp, core, best, _ft_sens_eval(fev, key, v)), w)
-            sens_rows.append({"parameter": key, "value": v, **{k: _num(x) for k, x in sm.items()}})
+            sens_rows.append({"parameter": key, "value": v, "ensemble_n": len(core),
+                              **{k: _num(x) for k, x in sm.items()}})  # fmt: skip
     hist: Table = []
     for name in f.history_scenarios:
         sc = forward.ft_scenario(inp.scenarios[name], inp.mission.clearance_agl_m)
@@ -1080,7 +1102,8 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
             hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
     print(f"    FT reports: {time.time() - t1:.0f} s", flush=True)
     return {
-        "result": r, "scens": core, "E_ref": w.E_ref, "notes": [dflt_note] if dflt_note else [],
+        "result": r, "scens": core, "E_ref": w.E_ref,
+        "notes": [*notes, *([dflt_note] if dflt_note else [])],
         "tables": {"FT_params": params, "FT_search": search, "FT_runs": run_rows,
                    "FT_sens": sens_rows, "FT_history": hist},
     }  # fmt: skip
