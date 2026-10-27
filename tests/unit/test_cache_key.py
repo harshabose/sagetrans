@@ -1,6 +1,7 @@
 """The task cache is keyed by the inputs and by the source that computes a task."""
 
 import json
+import os
 import pickle
 import shutil
 from pathlib import Path
@@ -130,3 +131,13 @@ def test_fresh_cache_deletes_the_cache_and_computes_every_task(tmp_path):
     assert run(fresh_cache=True).tasks == {"basics": "ran"}
     assert not stale.exists()  # the whole task cache went, not only the entries in use
     assert run().tasks == {"basics": "cached"}  # and the new run filled it again
+
+
+def test_workers_get_one_blas_thread_unless_the_user_chose(monkeypatch):
+    for var in study.BLAS_THREAD_VARS:
+        monkeypatch.setenv(var, "x")  # so that the test restores the variable afterwards
+        monkeypatch.delenv(var)
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    study._one_blas_thread_per_worker()
+    assert os.environ["OPENBLAS_NUM_THREADS"] == "1" and os.environ["MKL_NUM_THREADS"] == "1"
+    assert os.environ["OMP_NUM_THREADS"] == "4"  # the user's choice stays

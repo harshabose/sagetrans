@@ -135,6 +135,20 @@ def _n_workers(inp: StudyInputs, n_tasks: int, override: int | None) -> int:
     return max(1, min(cap, max(1, n_tasks)))
 
 
+BLAS_THREAD_VARS = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+
+
+def _one_blas_thread_per_worker() -> None:
+    """Give each worker process one linear-algebra thread (a value the user set is kept).
+
+    The task matrices are small. Without this every worker starts one OpenBLAS thread per core, and
+    16 workers on a 24-core machine ran out of memory (BrokenProcessPool) in the acceptance run.
+    Spawned workers inherit the environment, so it is set before the pool starts.
+    """
+    for var in BLAS_THREAD_VARS:
+        os.environ.setdefault(var, "1")
+
+
 # ---- the run -----------------------------------------------------------------------------------
 def run_study(
     config_dir: str | Path,
@@ -197,6 +211,7 @@ def run_study(
             _record(_worker(str(inp.config_dir), inp.mode, sel, t, str(_cache_path(work, inp, t))),
                     inp, work, results, failed, outcome, log)
     elif pending:
+        _one_blas_thread_per_worker()
         ctx = multiprocessing.get_context("spawn")
         with cf.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
             futs = [pool.submit(_worker, str(inp.config_dir), inp.mode, sel, t,
