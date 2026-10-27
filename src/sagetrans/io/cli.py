@@ -6,6 +6,7 @@
     python run.py --mode release           # refuse to run unless nothing is TBD or missing
     python run.py --only A D E             # just these analyses
     python run.py --force                  # ignore cached results
+    python run.py --fresh-cache            # delete the task cache first, then compute everything
     python run.py --serial                 # one process (easier to debug)
     python run.py --verify                 # also run the test suite and feed the release gate
     python run.py --view [FOLDER]          # open the results as report.html (+ tables.xlsx); no run
@@ -40,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--only", nargs="+", metavar="ANALYSIS", choices=ALL_ANALYSES,
                    help=f"run only these analyses ({', '.join(ALL_ANALYSES)})")
     p.add_argument("--force", action="store_true", help="ignore cached task results")
+    p.add_argument("--fresh-cache", action="store_true",
+                   help="delete the task cache of this run first, then compute every task "
+                        "(the start of an acceptance run)")
     p.add_argument("--serial", action="store_true", help="run tasks one at a time, in-process")
     p.add_argument("--workers", type=int, default=None, help="number of parallel worker processes")
     p.add_argument("--junit", default=None, help="a pytest JUnit file for the release gate")
@@ -59,7 +63,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = Path(args.config)
     if args.view is not None:
         clash = [f for f, on in (("--only", args.only), ("--force", args.force),
-                                 ("--verify", args.verify), ("--check", args.check)) if on]
+                                 ("--verify", args.verify), ("--check", args.check),
+                                 ("--fresh-cache", args.fresh_cache)) if on]
         if clash:
             parser.error(f"--view only shows existing results; it cannot be combined with "
                          f"{', '.join(clash)}")
@@ -88,7 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_OK
 
     outcome = run_study(
-        config, mode=args.mode, only=only, force=args.force,
+        config, mode=args.mode, only=only, force=args.force, fresh_cache=args.fresh_cache,
         workers=1 if args.serial else args.workers, out_dir=args.out, junit=args.junit,
         verify=args.verify,
     )  # fmt: skip

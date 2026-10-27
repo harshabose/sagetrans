@@ -64,6 +64,7 @@ python run.py                    run everything configured
 python run.py --only A D E       just these analyses
 python run.py --mode release     refuse unless nothing is TBD or missing
 python run.py --force            ignore cached results
+python run.py --fresh-cache      delete the task cache of this run, then compute everything
 python run.py --serial           one process (easier to debug)
 python run.py --verify           also run the test suite and feed the release gate
 python run.py --view [FOLDER]    open existing results as report.html (+ tables.xlsx); runs nothing
@@ -75,6 +76,27 @@ python run.py --view [FOLDER]    open existing results as report.html (+ tables.
 
 Results are cached per task and keyed by a hash of every result-relevant input, so an unchanged re-run
 only rebuilds the report and changing one value only re-runs what depends on it.
+
+## Acceptance run
+
+A full study from nothing, then the viewer. From a fresh clone (the commands are the same in the
+working copy):
+
+```bash
+git clone <repo> sagetrans-accept && cd sagetrans-accept
+git checkout feat/ft-defaults-outputs          # the branch under test
+python -m venv .venv && . .venv/bin/activate   # Windows (Git Bash): . .venv/Scripts/activate
+pip install -e ".[dev]"
+python run.py --fresh-cache                    # clean cache, every analysis (hours: FT is the long part)
+python run.py --view                           # report.html and tables.xlsx into results/study, then open
+pytest && ruff check . && mypy && lint-imports # the checks the gate reads
+```
+
+`--fresh-cache` deletes `<output_dir>/<run_name>/_work` first, so nothing is served from an earlier
+run; `--force` only ignores the entries it finds. The cache is also keyed by the source of the analysis
+code (`run_record.json` has `source_hash`), so a code change never serves an old result. Add
+`--workers N` to choose the number of processes; B1 solves are memory-heavy, so keep it at 3 or fewer
+on a small machine when running `--only B1`.
 
 ## More
 

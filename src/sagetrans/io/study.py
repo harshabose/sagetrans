@@ -15,6 +15,7 @@ import concurrent.futures as cf
 import multiprocessing
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import time
@@ -145,9 +146,14 @@ def run_study(
     out_dir: str | Path | None = None,
     junit: str | Path | None = None,
     verify: bool = False,
+    fresh_cache: bool = False,
     log: Callable[[str], None] = _print,
 ) -> StudyOutcome:
-    """Load -> check -> run tasks -> assemble. Never raises for bad inputs; see `exit_code`."""
+    """Load -> check -> run tasks -> assemble. Never raises for bad inputs; see `exit_code`.
+
+    `fresh_cache` deletes the task cache (`<run>/_work`, stale entries included) before the run, so
+    every task is computed: the start of an acceptance run. `force` only ignores what it finds.
+    """
     t_start = time.time()
     try:
         inp = load_inputs(config_dir, mode, only)
@@ -163,6 +169,8 @@ def run_study(
     if not root.is_absolute():
         root = Path.cwd() / root
     work = root / inp.study.run_name / "_work"
+    if fresh_cache and work.is_dir():
+        shutil.rmtree(work)
     outcome = StudyOutcome(EXIT_OK)
     for line in preflight(inp, work):
         log(line)

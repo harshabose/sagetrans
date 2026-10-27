@@ -114,3 +114,19 @@ def test_the_run_record_carries_the_source_hash(tmp_path):
     out = study.run_study(cfg, out_dir=tmp_path / "res", workers=1, log=lambda s: None)
     rec = json.loads((out.folder / "run_record.json").read_text(encoding="utf-8"))
     assert rec["source_hash"] == record.source_hash() and len(rec["source_hash"]) == 64
+
+
+def test_fresh_cache_deletes_the_cache_and_computes_every_task(tmp_path):
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    (cfg / "study.yaml").write_text(SMOKE, encoding="utf-8")
+    run = lambda **kw: study.run_study(  # noqa: E731
+        cfg, out_dir=tmp_path / "res", workers=1, log=lambda s: None, **kw
+    )
+    out = run()
+    assert run().tasks == {"basics": "cached"}
+    stale = out.folder / "_work" / "old_entry.pkl"  # an entry no current key would ever name
+    stale.write_bytes(b"x")
+    assert run(fresh_cache=True).tasks == {"basics": "ran"}
+    assert not stale.exists()  # the whole task cache went, not only the entries in use
+    assert run().tasks == {"basics": "cached"}  # and the new run filled it again
