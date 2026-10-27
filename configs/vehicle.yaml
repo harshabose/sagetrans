@@ -20,7 +20,7 @@ wing:
   S: {value: 1.617, unit: "m^2", source: "aircraft parameter sheet (note: b x MAC = 1.605 m^2, 0.7% off)", status: stated}
   CL0: {value: 0.4, unit: "-", source: "CFD (half-model, doubled): linear fit CL vs alpha, 0-10 deg; raw 0.376 at 0 deg; AoA reference to confirm", status: derived}
   CL_alpha: {value: 4.75, unit: "rad^-1", source: "CFD linear fit 0-10 deg (lifting-line estimate 5.0-5.2)", status: derived}
-  alpha_s: {value: 0.274, unit: "rad", source: "PROVISIONAL: set so the model CL_max is about 1.5 (parameter sheet, not supported by CFD, which has no peak up to 15 deg); needs CFD at 16-24 deg", status: assumed}
+  alpha_s: {value: 0.274, unit: "rad", source: "PROVISIONAL: chosen for a CL_max of about 1.5 (parameter sheet, not supported by CFD, which has no peak up to 15 deg). The model's CL_max is 1.444, not 1.5: the stall-blend sharpness M went from 100 to 70 on 2026-10-14 and that lowered the peak; alpha_s and M are unchanged, the owner decides whether to re-tune. Needs CFD at 16-24 deg", status: assumed}
   # CD0 PLACEHOLDER (2026-10-14): doubled from the wing-only CFD value 0.033 to stand in for
   # whole-aircraft drag (fuselage, booms, rotors, gear). REPLACE with the CFD value when available; re-run A and D afterwards.
   CD0: {value: 0.066, unit: "-", source: "ASSUMED: 2 x 0.033 (wing-only CFD symmetric fit CD = CD0 + k CL^2, 0-10 deg) as a stand-in for whole-aircraft CD0; replace with whole-aircraft CFD", status: assumed}

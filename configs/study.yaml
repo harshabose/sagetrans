@@ -20,7 +20,7 @@ switch_test: ground        # speed used in the Position1 switch test: ground | a
 # which is 20.9 m/s EQUIVALENT airspeed (rho = 1.058 kg/m^3, sqrt(rho/rho0) = 0.929).
 # Every *_eas_ms list below is equivalent airspeed; every *_ground_ms list is ground speed
 # (= true airspeed in still air).
-# Stall (C_L,max 1.5, S 1.617 m^2): 11.9 / 13.3 / 14.2 m/s EAS at mass x0.80 / 1.0 / 1.15.
+# Stall (model C_L,max 1.444, S 1.617 m^2): 12.1 / 13.5 / 14.5 m/s EAS at mass x0.80 / 1.0 / 1.15.
 
 # ---- analysis settings -------------------------------------------------------------------------
 A:                         # zero-altitude-loss feasibility
