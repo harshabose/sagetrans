@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
 from collections.abc import Mapping
 from pathlib import Path
@@ -56,6 +57,35 @@ def describe_inputs(inp: StudyInputs) -> str:
         head += ["Entries that fell back to the built-in placeholder (missing from the register):",
                  ""] + [f"- `{p}`" for p in inp.fallbacks] + [""]
     return "\n".join(head) + md_table(rows, ["parameter", "value", "unit", "status", "source"], 6)
+
+
+def inputs_register(inp: StudyInputs) -> Table:
+    """`inputs_register.csv`: every register entry as used (the data behind `inputs_used.md`).
+
+    `group` is the register file (or `ardupilot_defaults` for the defaults reference). No
+    parameter-to-analysis map exists in the code, so there is no `used_by` column (spec 5.4).
+    """
+    rows: Table = []
+    for path in inp.config:
+        r = inp.config.record(path)
+        rows.append({
+            "name": path, "group": path.split(".")[0],
+            "value": r.value if r.value is not None else (r.file or ""), "unit": r.unit or "",
+            "grade": r.status.value, "source": r.source,
+        })  # fmt: skip
+    return rows
+
+
+def headline_json(nominal: Mapping[str, float], tables: Mapping[str, Table]) -> str:
+    """`headline.json`: each quoted nominal number with the table cell that holds it (spec 5.2)."""
+    oat = tables.get("sens_oat", [])
+    out: dict[str, Any] = {}
+    for key, val in nominal.items():
+        row = next((i for i, r in enumerate(oat) if r.get("output") == key), None)
+        out[key] = {"value": float(val), "unit": report.UNITS.get(key, ""),
+                    "table": "sens_oat" if row is not None else None,
+                    "column": "nominal_out" if row is not None else None, "row": row}  # fmt: skip
+    return json.dumps(out, indent=2, sort_keys=True) + "\n"
 
 
 def _section_a(q: dict[str, Any], figs: dict[str, Any]) -> str | None:
@@ -346,6 +376,10 @@ def assemble(
         for key, tab in (("points", "B1_front"), ("gap", "B1_gap"), ("sens", "B1_sens")):
             tables[tab] = [r for _, res in b1_runs for r in res[key]]
         tables["B1_schedule"] = b1_runs[0][1]["schedule"]
+        # the same traces under the shared history name; `case` = "B1 <variant>", C's is "C <case>"
+        tables["B1_history"] = [
+            {"case": f"B1 {r['variant']}", **{k: v for k, v in r.items() if k != "variant"}}
+            for r in tables["B1_schedule"]]  # fmt: skip
         for n, res in b1_runs:
             errors += [f"B1 {n}: {e}" for e in res["errors"]]
         front, gap, sens_rows = tables["B1_front"], tables["B1_gap"], tables["B1_sens"]
@@ -430,11 +464,16 @@ def assemble(
         search_spreads=spreads, mode=inp.mode, settings_hash=inp.settings_hash,
         fallbacks=inp.fallbacks, extra_reasons=inp.draft_reasons,
     )  # fmt: skip
+    conv_d, conv_q = inp.study.D.entry_convention, inp.study.Q2.feed_convention
+    kind = {"eas": "an equivalent", "tas": "a true"}
     limitations = [
-        "Back-transition only for B1 and C; the forward transition is not optimised.",
+        "Back-transition: B1 and C. Forward transition: FT, when it is among the analyses; B1 "
+        "does not cover it.",
         "The forward transition in the energy budget is a quasi-steady estimate.",
-        "AIRSPEED_MIN: the simulated controller compares true airspeed; Q2 reads it as an "
-        "equivalent airspeed. Which one ArduPilot uses is open (O-02).",
+        f"AIRSPEED_MIN: D, C, B1 and FT read it as {kind[conv_d]} airspeed "
+        f"(D.entry_convention); Q2, which feeds E, reads it as {kind[conv_q]} airspeed "
+        "(Q2.feed_convention). "
+        "Which one ArduPilot compares is open (O-02).",
         *[f"Input set is not release grade: {r}" for r in inp.draft_reasons],
         *[f"ERROR: {e}" for e in errors],
     ]
@@ -445,11 +484,25 @@ def assemble(
         results=sections, limitations=limitations))  # fmt: skip
     gate_res = gate.release_gate(
         rec, dict(verification or {}), s_res, report.flagged_assumptions(s_res) if s_res else [])
+    tables["inputs_register"] = inputs_register(inp)
     texts = {
         "report.md": text,
         "release_gate.txt": gate_res.summary() + "\n",
         "inputs_used.md": describe_inputs(inp) + "\n",
     }
+    if nominal:
+        texts["headline.json"] = headline_json(nominal, tables)
+    # what the results viewer shows that is in no table: the notes, the limitations and the
+    # study.yaml block of each analysis (docs/OUTPUTS_spec.md 5.5)
+    rec = dataclasses.replace(rec, context={
+        "limitations": limitations,
+        "mission": {"fwd_alt_loss_max_m": inp.mission.fwd_alt_loss_max_m,
+                    "fwd_alt_gain_max_m": inp.mission.fwd_alt_gain_max_m},
+        "notes": {n: list(t["notes"]) for n, t in task_results.items() if t.get("notes")},
+        "study": {a: getattr(inp.study, a).model_dump(mode="json")
+                  for a in ("A", "D", "F", "E", "Q2", "C", "FT", "B1", "sensitivity")
+                  if a in inp.study.analyses},
+    })  # fmt: skip
     folder = results.write_results(
         out_root, inp.study.run_name, rec, cfg, tables=tables, figures=figs, texts=texts,
         override=inp.mode == "draft")  # fmt: skip

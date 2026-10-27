@@ -8,6 +8,7 @@
     python run.py --force                  # ignore cached results
     python run.py --serial                 # one process (easier to debug)
     python run.py --verify                 # also run the test suite and feed the release gate
+    python run.py --view [FOLDER]          # open the results as report.html (+ tables.xlsx); no run
 
 Exit codes: 0 ok, 1 a task failed, 2 the inputs are unusable (or release mode refused),
 3 release mode finished but the release gate blocked the result.
@@ -44,12 +45,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--junit", default=None, help="a pytest JUnit file for the release gate")
     p.add_argument("--verify", action="store_true",
                    help="run the test suite first and feed the release gate (a few minutes)")
+    p.add_argument("--view", nargs="?", const="", default=None, metavar="FOLDER",
+                   help="view an existing results folder (default: output_dir/run_name of "
+                        "study.yaml): writes report.html and tables.xlsx there and opens the page; "
+                        "runs nothing")
+    p.add_argument("--no-open", action="store_true", help="with --view: do not open the browser")
     return p
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     config = Path(args.config)
+    if args.view is not None:
+        clash = [f for f, on in (("--only", args.only), ("--force", args.force),
+                                 ("--verify", args.verify), ("--check", args.check)) if on]
+        if clash:
+            parser.error(f"--view only shows existing results; it cannot be combined with "
+                         f"{', '.join(clash)}")
+        from sagetrans.io.view import default_folder, view
+
+        folder = Path(args.view) if args.view else default_folder(config, args.out)
+        return view(folder, open_browser=not args.no_open)
+    if args.no_open:
+        parser.error("--no-open only applies to --view")
     try:
         inp = load_inputs(config, args.mode, set(args.only) if args.only else None)
     except InputError as exc:

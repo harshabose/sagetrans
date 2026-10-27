@@ -805,15 +805,26 @@ def default_case(
     return out, ""
 
 
+def _c_trace(sim: Any, i_w: float, case: str, member: int, every: int = 5) -> Table:
+    """`C_history` rows of one run: every `every`-th sample, angles in degrees (as B1's series)."""
+    cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
+            "theta": np.degrees(sim["theta"]), "alpha_w_deg": np.degrees(sim["alpha"] + i_w),
+            "delta_r": sim["delta_r"], "theta_cmd": np.degrees(sim["theta_cmd"]),
+            "omega_r": sim["omega_r"]}  # fmt: skip
+    return [{"case": case, "member": member, **{k: float(v[i]) for k, v in cols.items()}}
+            for i in range(0, len(sim.t), every)]  # fmt: skip
+
+
 def task_c(inp: StudyInputs) -> dict[str, Any]:
     """Analysis C: search the four ArduPilot variables from the AIRBRAKE exit, then report.
 
     Tables: `C_params` (the optimum, the register at q = 2 and the ArduPilot default), `C_search`,
     `C_runs` (one row per ensemble member and case, with the capability ceiling and D's alpha and
-    VRS checks), `C_q_curve` (the optimum's ramp with q varied) and `C_sens` (one-at-a-time
-    changes at the optimum). The ArduPilot-default case (docs/DEFAULTS_spec.md 2.2) sets the four
-    searched parameters to their defaults and keeps the register's entry (`AIRSPEED_MIN`), so the
-    back transition starts from the same state in all three cases; it is a reference only.
+    VRS checks), `C_q_curve` (the optimum's ramp with q varied), `C_sens` (one-at-a-time
+    changes at the optimum) and `C_history` (the time series of member 0 in each
+    case). The ArduPilot-default case (docs/DEFAULTS_spec.md 2.2) sets the four searched
+    parameters to their defaults and keeps the register's entry (`AIRSPEED_MIN`), so the back
+    transition starts from the same state in all three cases; it is a reference only.
     """
     c, d, vp = inp.study.C, inp.study.D, inp.vehicle
     scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
@@ -894,6 +905,11 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     if dflt is not None and dflt_runs is not None:
         member_rows("ardupilot_default", dflt, dflt_runs)
 
+    history: Table = _c_trace(opt[0].sim, vp.wing.i_w, "C optimum", 0)
+    history += _c_trace(reg_runs[0].sim, vp.wing.i_w, "C register", 0)
+    if dflt_runs is not None:
+        history += _c_trace(dflt_runs[0].sim, vp.wing.i_w, "C ardupilot_default", 0)
+
     q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q}
                for q in c.q_curve]  # fmt: skip
 
@@ -921,7 +937,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     return {
         "result": r, "scens": scens, "notes": [dflt_note] if dflt_note else [],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
-                   "C_q_curve": q_curve, "C_sens": sens_rows},
+                   "C_q_curve": q_curve, "C_sens": sens_rows, "C_history": history},
     }  # fmt: skip
 
 

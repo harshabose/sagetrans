@@ -16,6 +16,7 @@ dependencies = [
     "cma",
     "SALib",
     "matplotlib",
+    "openpyxl",  # the tables.xlsx workbook of the results viewer (docs/OUTPUTS_spec.md)
 ]
 
 [project.optional-dependencies]
@@ -49,7 +50,7 @@ files = ["src"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["casadi.*", "scipy.*", "cma.*", "SALib.*", "matplotlib.*"]
+module = ["casadi.*", "scipy.*", "cma.*", "SALib.*", "matplotlib.*", "openpyxl.*"]
 ignore_missing_imports = true
 
 # NFR-05: physics knows nothing of controllers; controllers know nothing of analyses.
@@ -70,7 +71,21 @@ layers = [
     "sagetrans.config",
 ]
 
+# docs/OUTPUTS_spec.md 1: the viewer reads a results folder; it imports no analysis code.
+[[tool.importlinter.contracts]]
+name = "The results viewer reads files and imports no analysis code"
+type = "forbidden"
+source_modules = ["sagetrans.io.view"]
+forbidden_modules = [
+    "sagetrans.analysis",
+    "sagetrans.control",
+    "sagetrans.dynamics",
+    "sagetrans.physics",
+]
+
 [tool.ruff.lint.per-file-ignores]
 # physics symbols (T_r, Vc, J, ...) follow the proposal's notation
 "src/sagetrans/*" = ["N802", "N803", "N806", "N815", "N816"]
 "tests/*" = ["N802", "N803", "N806", "N815", "N816"]
+# the viewer writes SVG/HTML markup and tooltip text in single strings
+"src/sagetrans/io/view/*" = ["E501"]

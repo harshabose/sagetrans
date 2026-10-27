@@ -62,6 +62,12 @@ class FullRunRecord:
     fallbacks: tuple[str, ...] = ()
     override: bool = False  # the DRAFT refusal was explicitly overridden
     outputs: dict[str, str] = field(default_factory=dict)  # file name -> sha256
+    # schema 2 (docs/OUTPUTS_spec.md 5.5): what the results viewer needs that is not in a table.
+    # A record without `schema_version` was written by an older version and still loads.
+    schema_version: int = 2
+    tables: dict[str, dict[str, Any]] = field(default_factory=dict)  # name -> {rows, columns}
+    # {"limitations": [...], "notes": {analysis: [...]}, "study": {analysis: settings}}
+    context: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
