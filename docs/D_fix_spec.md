@@ -1,6 +1,6 @@
 # Analysis D fix specification (`braking.py`, `ardupilot_like.py`): hand-off for an implementing agent
 
-Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: implemented** (branch `feat/analysis-d-ardupilot-braking`; section 11 checks 1 to 3 and 5 to 11 were run, check 4 within about 0.05 at 15 m/s and about 0.08 at 17 m/s with 8 and 12 deg; tests are left to the owner, as in section 0). Written 26 Oct 2026 after the owner settled the points in section 0. The reference numbers in sections 1 and 11 come from my scratch scripts with a **hand-copied** vehicle (m = 26.664 kg, S = 1.617, CL0 0.4, CL_alpha 4.75, alpha_s 0.274, CD0 0.066, k 0.042, i_w 0, CN 1.5, M 70, 1500 m, SoC 0.8, controller from `controller.yaml`: Q_A_ANGLE_MAX 30 deg, T_bt 3 s, gains K_h 0.5, K_vh 0.02, K_i 0.01, a_lim 3.0); re-baseline with `load_inputs("configs", "draft", ...)` before trusting any of them. Nothing here was run against a repo change; every "expected" number is a scratch experiment that subclasses the controller.
+Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: implemented** (branch `feat/analysis-d-ardupilot-braking`; **sections 14 and 15 are addenda, specified and not implemented**; section 11 checks 1 to 3 and 5 to 11 were run, check 4 within about 0.05 at 15 m/s and about 0.08 at 17 m/s with 8 and 12 deg; tests are left to the owner, as in section 0). Written 26 Oct 2026 after the owner settled the points in section 0. The reference numbers in sections 1 and 11 come from my scratch scripts with a **hand-copied** vehicle (m = 26.664 kg, S = 1.617, CL0 0.4, CL_alpha 4.75, alpha_s 0.274, CD0 0.066, k 0.042, i_w 0, CN 1.5, M 70, 1500 m, SoC 0.8, controller from `controller.yaml`: Q_A_ANGLE_MAX 30 deg, T_bt 3 s, gains K_h 0.5, K_vh 0.02, K_i 0.01, a_lim 3.0); re-baseline with `load_inputs("configs", "draft", ...)` before trusting any of them. Nothing here was run against a repo change; every "expected" number is a scratch experiment that subclasses the controller.
 
 ## 0. Decisions already taken by the project owner (do not re-open)
 
@@ -220,3 +220,103 @@ Rewrite: entry is the AIRBRAKE exit; the ramp and its clock; the two `Q_BCK_PIT_
 ## 13. How the scratch numbers were produced
 
 Scratch scripts (not for the repo), all on the hand-copied vehicle above: a subclass of `Position1Controller` that replaces `delta_hover` by the throttle for `max(0, W - L)/cos(theta)` using the simulated lift (the lift-aware case, with optional filter and scale); a `theta_limit` override that starts the ramp at `theta_fw0` and an initial state with `theta = theta_fw0` (the sweep in check 4); a subclass that limits `lim` to `alpha_cap + gamma` above 5 m/s (check 6); and a loop over 32 scrambled-Sobol scenarios plus 8 corners with entry `V_air0 = 15 m/s` and ground speed `V_air0 - headwind`, mass applied through `Scenario.mass_kg` and a per-scenario feed-forward built from that scenario's mass, density and SoC (check 9).
+
+## 14. Addendum: one lumped actuator lag (specified, not implemented)
+
+Written 27 Oct 2026 after the owner settled the points in 14.1. It changes what `rotor_lag_s` means and how it is swept; it does not change any default result. It is a small follow-up, **not an amendment of the D change** (14.6).
+
+### 14.1 Decisions already taken by the project owner (do not re-open)
+
+1. **`rotor_lag_s` is the one actuator-lag parameter of D.** It is a lumped first-order lag on the rotor throttle command and stands for everything between ArduPilot's rotor output and the rotor-speed response that the vehicle model does not already contain: ESC slew, output filtering, throttle smoothing and any rotor or motor inertia beyond the placeholder `I_rot`. No separate ESC, slew or filter model is added (each would bring its own unknowns).
+2. **Its value is not fixed yet.** It is swept, and the sweep rows are labelled a sensitivity. The value is set later from a bench measurement (14.4). Until then D's altitude excursion stays labelled a lower bound.
+3. **`vehicle.rotor.I_rot` stays.** It is a physical parameter of the vehicle model, not a D setting: the simulation integrates the rotor speed with `I_rot * d(omega)/dt = Q_motor - Q_aero` (`physics/vehicle.py`), `dynamics/trim.py` and analysis A (`zero_loss.py`) use it for the torque to accelerate the rotors, and B1 and B2 depend on it through the same vehicle model. Removing it would make the rotor speed algebraic and change every analysis that integrates the vehicle. It is not swept in D.
+4. **The two lags add in series, and the model's own is small.** At the placeholder `I_rot = 1.5e-3` the linearised rotor-speed time constant at hover is about 0.023 s, so `rotor_lag_s` dominates for any value worth sweeping.
+
+### 14.2 Changes
+
+- `control/ardupilot_like.py`: rewrite the `rotor_lag_s` comment and the class docstring to the wording of 14.1 item 1 (today: "a crude stand-in for rotor and ESC lag"). No behaviour change: `rotor_lag_s = 0` stays the default and reproduces today's output bit for bit.
+- `analysis/braking.py`: add `rotor_speed_tau(vp, rho, soc) -> float`, the time constant of the rotor-speed response to a small throttle change at hover. Linearise `omega_dot(omega) = (Q_motor(omega, d, V_bus) - Q_aero(omega)) / I_rot` at the hover speed (`trim.hover_state` gives the throttle and the bus voltage) with a central difference of relative size 1e-3 and return `-1 / d(omega_dot)/d(omega)`. It scales linearly with `I_rot`.
+- `io/settings.py` and `configs/study.yaml`: `D.sens.lag_s_sweep` becomes `[0, 0.1, 0.25, 0.5]` (adds 0.1).
+- `io/stages.py`, `D_sensitivity`: add the columns `rotor_lag_s`, `tau_rotor_model_s` (`rotor_speed_tau` at the case's density and SoC, the same for every row) and `tau_total_s` (their sum). Case names stay `rotor_lag_<s>s`.
+- `analysis/README.md`, D section: say what `rotor_lag_s` stands for, that `I_rot` is separate and small, and how the value is to be set (14.4).
+- Not changed: `vehicle.yaml` and `I_rot` (still TBD), the spool law (O-06), analyses A, B1, B2, C, E, Q2.
+
+### 14.3 Expected values (scratch runs on the repo code, S-01, nominal mass, 15 m/s, no wind, lift-aware hold)
+
+|case|`a_eq`|altitude gain|altitude loss|
+|---|---|---|---|
+|`rotor_lag_s` = 0|2.53|0.24 m|0.30 m|
+|0.1 s|2.51|0.58 m|0.75 m|
+|0.25 s|2.48|1.04 m|1.46 m|
+|0.5 s|2.44|1.62 m|2.31 m|
+|`I_rot` 5e-3, no lag|2.51|0.50 m|0.56 m|
+|`I_rot` 1.5e-2, no lag|2.47|1.17 m|1.14 m|
+|`I_rot` 3e-2, no lag|2.43|1.94 m|1.65 m|
+
+The model time constant is 0.023 s at `I_rot` 1.5e-3 (sea level, SoC 0.8), 0.076 s at 5e-3 and 0.23 s at 1.5e-2. A lag of 0.25 s therefore does about what an inertia ten times the placeholder does (`a_eq` the same, gain and loss within about 0.3 m). The two are interchangeable at this level of detail, not identical, because the inertia lag is nonlinear (aerodynamic torque grows with speed squared and the back-EMF damps the motor).
+
+### 14.4 How the value is fixed later
+
+A bench test of one lift motor with its ESC and propeller: apply a throttle step about the hover command (for example +10%) and record rotor speed (or thrust). Fit a first-order time constant `tau_meas`. Set `rotor_lag_s = max(0, tau_meas - tau_rotor_model_s)` so that the model's own lag is not counted twice. If a measured `I_rot` becomes available, enter it in `vehicle.yaml` and reduce `rotor_lag_s` by the model time constant it adds.
+
+### 14.5 Acceptance checks
+
+1. **Regression (exact):** with `rotor_lag_s = 0` every D table, including `D_sensitivity` rows other than the new columns and the added 0.1 s case, is identical to before.
+2. **Sweep:** the four `rotor_lag_*` rows of 14.3 reproduce to within 0.02 in `a_eq` and 0.05 m in gain and loss.
+3. **Model time constant:** `rotor_speed_tau` is 0.023 s within 0.002 s at the placeholder, sea level, SoC 0.8, and scales with `I_rot` (3x `I_rot` gives 3x the value within 2%).
+4. **Columns:** `tau_total_s = rotor_lag_s + tau_rotor_model_s` on every row.
+
+### 14.6 Caveats and delivery
+
+- **B does not have this lag.** B1 and B2 optimise rotor commands against the vehicle model with only `I_rot`; C uses the controller, so it gets the lag when `rotor_lag_s` is set in the controller config. A B-versus-C comparison made with a non-zero lag compares different actuator models. Keep both at zero for that comparison, or add the same lag to B as a state in a separate change.
+- **The lag is not the spool law.** The rotors are already spinning at the AIRBRAKE exit, so `MOT_SPOOL_TIME` does not apply (O-06 stays deferred).
+- **Delivery.** The D change is pull request 3. The Q2 and E branches (pull requests 4 and 5) are built on top of it, and all of them target `master`. Do this addendum as a separate small branch from the tip of the stack, so the existing branches are not rewritten or force-pushed, and open it once the stack has merged or against the E branch.
+
+## 15. Addendum: `a_rec` as a curve over ground speed (specified, not implemented)
+
+Written 27 Oct 2026 after the owner chose to report the recommendation as a function of ground speed. It adds a table and a few columns; no default result changes.
+
+### 15.1 Decisions already taken by the project owner (do not re-open)
+
+1. **The recommendation is a curve, `a_rec(V_ground)`.** `Q_TRANS_DECEL` is read from it at the slowest ground speed the owner needs to cover. The single number of `D_recommendation` stays, but it is always reported with the ground-speed range it covers.
+2. **The ensemble is not cut** (no change to its axes or size). Cutting it to headwind and `theta_fw0` is a later option.
+3. **E keeps taking the single conservative value** (`a_rec_min`) until DEC-3 is settled (15.5).
+
+### 15.2 Why (short)
+
+In the default runs `a_eq` is set by the ground speed at the AIRBRAKE exit and by almost nothing else. The pitch limit ramps with time from the exit, the rotors carry `W - L`, so the deceleration is about `g tan(theta)` times `(1 - L/W)`; mass cancels and density only enters through the small wing terms. A slow aircraft stops while the ramp is still low, so its distance-equivalent `a_eq` is low. In the ensemble the entry air speed is fixed (15 m/s), so only headwind moves the ground speed, the correlation of `a_eq` with headwind is exactly -1, and `a_rec_pct` is in effect the percentile of the headwind range. The 2.09 means "holds down to a ground speed of about 10.5 m/s", and the proposal's headwind range (-5 to +10) would give about 1.35.
+
+### 15.3 Changes
+
+- `io/settings.py` and `configs/study.yaml`: `D.curve.ground_speeds_ms`, default `[5, 6, 8, 10, 12, 14, 15, 16, 18, 20]`; every value must exceed the end speed `v_f` (1 m/s). `D.recommendation.design_ground_speed_ms`, default `null`.
+- `io/stages.py`, `stage_d`: new table **`D_a_rec_curve`**. For each ground speed `V_g` in the list and for every scenario of `D.scenarios` x `mass_factors`: air speed from the entry rule (`entry(sc)`, 15 m/s with `"tas"`), **headwind = `V_air0 - V_g`** (so the wing sees the same air speed as in the ensemble; a negative value is a tailwind), then `airbrake_entry_state` and `measure_a_eq` exactly as for the headline table. One row per speed with: `ground_speed_ms`, `headwind_ms`, `V0_air_ms`, `a_rec_min_ms2` (minimum over the runs), `set_by` (scenario and mass factor of the minimum), `a_eq_median_ms2`, `a_eq_max_ms2`, `x_at_min_m`, `t_stop_at_min_s`, `excursion_max_m` (largest of gain and loss over the runs), `n_sinking`, `n_runs`, `n_nan`. A speed with no completed run gets a row with the other columns empty and a `note`. About 180 runs, about 25 s here.
+- `D_recommendation`: add `ground_speed_min_ms` and `ground_speed_max_ms` (over the Sobol sample and the corners, from `V0_ground_ms`), `headwind_min_ms` and `headwind_max_ms`, and `covers` (text: "ground speeds 10.0 to 20.0 m/s (air speed 15.0, headwind -5.0 to +5.0)"). Add `a_rec_design_ms2`: the curve value at `design_ground_speed_ms` by linear interpolation, empty when it is `null`; a value outside the curve is an error.
+- `D_a_eq_speed` stays as it is (the comparison with A's speed grid).
+- `analysis/README.md`, D section: say that `a_rec` is a function of ground speed, how to read the curve, and that the single number is valid only inside `covers`.
+- Not changed: the ensemble, `latin_hypercube`, the controller, `braking_flags`, `trade`.
+
+### 15.4 Expected values (scratch run on the repo code, real configs, `"tas"`, lift-aware, `theta_fw0` 0)
+
+|ground speed (m/s)|5|8|10|12|15|20|
+|---|---|---|---|---|---|---|
+|headwind (m/s)|10|7|5|3|0|-5|
+|`a_rec_min` (m/s^2)|1.35|1.76|1.99|2.19|2.45|2.82|
+|median over the runs|1.36|1.78|2.03|2.24|2.52|2.90|
+|stopping distance at the minimum (m)|8.9|17.9|24.9|32.7|45.7|70.8|
+
+(Also 6 m/s: 1.51; 14: 2.37; 16: 2.53; 18: 2.68.) The minimum is set by S-01 at mass x0.8 for every speed from 8 m/s up (S-03 at x1.15 at 5 and 6 m/s); it sits 0.04 to 0.07 below the median, and that run is the one whose rotors start at the 10% floor of the entry state (altitude gain 1.0 m, end sink -0.76 m/s, flagged `sinking`). The largest excursion over the runs is 1.0 m at every speed above 5 m/s. The ensemble's `a_rec_min` (1.99, set by the +5 m/s headwind corner) equals the curve at 10 m/s ground speed within 0.01.
+
+### 15.5 Acceptance checks
+
+1. **Regression:** every existing D table is unchanged except the new columns of `D_recommendation`.
+2. **Curve:** the rows of 15.4 reproduce within 0.03 in `a_rec_min` and 1 m in the stopping distance; the table has one row per listed speed.
+3. **Consistency:** `a_rec_min_ms2` of `D_recommendation` is within 0.02 of the curve value at the ensemble's smallest ground speed (`ground_speed_min_ms`).
+4. **Coverage:** with the default config `ground_speed_min_ms` is 10.0 and `ground_speed_max_ms` 20.0; `covers` shows them.
+5. **Design value:** `design_ground_speed_ms: 12` gives `a_rec_design_ms2` within 0.01 of 2.19; 25 raises an error.
+
+### 15.6 Caveats
+
+- **E enters faster than the curve.** E's back transition starts at its entry EAS converted to true airspeed (about 21 to 27 m/s depending on the site), above the 20 m/s end of the curve, and `a_plan` from D is `a_rec_min`. At those speeds `a_eq` would be higher (2.8 and more at 20 m/s), so `a_rec_min` is conservative there: the switch point is placed early. Using the curve at E's entry speed is a decision for DEC-3 and DEC-8, not part of this change.
+- **The minimum is partly an entry-state artefact** (the 10% rotor floor in the x0.8 mass run, 15.4). Read the median beside it.
+- **Still a stalled-wing number.** The curve inherits all the caveats of section 12 and of 14.6; it describes the controller at the register ramp (30 degrees, 3 s), not a hardware limit.
+- **Delivery.** With section 14, as one small follow-up branch from the tip of the stack (14.6); it does not amend pull request 3.

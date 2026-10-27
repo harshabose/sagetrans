@@ -2,6 +2,18 @@
 
 > [!note] Where the numbers in this note come from Section 4 quotes the repo's own `task_basics` run (stages D, F, E, Q2) with the real `study.yaml`, `mission.yaml`, `scenarios.yaml`, `vehicle.yaml` and `controller.yaml`, loaded with `io.inputs.load_inputs` in draft mode (one draft reason, no register fallbacks). The **corrected-altitude** results (4.2) and the **SoC** numbers (6) are **my experiments**, run in scripts; the repo is unchanged. In the corrected-altitude experiment I patched the trim bracket (7.1) in the script only.
 
+> [!warning] Fix implemented on branch `feat/e-mission-budget` (26 Oct 2026)
+> The redesign is written in [`E_fix_spec.md`](E_fix_spec.md) (built on [`Q2_fix_spec.md`](Q2_fix_spec.md)) and has been implemented. Sections 4 and 6 below describe the run before the fix, and section 7 is superseded where it differs from the spec. The repo run on the real configs reproduces the numbers below. Settled by the owner:
+>
+> - **Two missions per site:** `round_trip` (loaded out, empty back, so two take-offs, transitions and landings) and `one_way` (loaded). **Range is an output**: the requirements (100 and 120 km) appear only as comparison columns; what is left after the fixed segments goes to cruise.
+> - **Fixed climb height of 200 m (config), same take-off and landing elevation**, with a site-elevation sweep (0, 1500, 2500, 5000 m). Replaces the E-2 proposal in 7.1. **Out of scope:** the E-3 trim bracket (it surfaces as an infeasible segment, not a crash) and the E-5 OCV and battery current limit.
+> - **Cruise design speed 22.5 m/s TAS at 1500 m, converted to constant dynamic pressure** (EAS 20.91) at other altitudes; climb and glide default to the cruise speed (optional overrides). This removes the fixed-TAS altitude benefit: Wh/km goes from 18.3 (0 m) to 14.4 (5000 m) at fixed TAS, but only 16.9 to 16.2 at constant EAS.
+> - **Throttle check is report-only against `TKOFF_THR_MAX` (0.8)**; a segment fails only when the trim is infeasible (command above 1, current limit, bus voltage under `V_min`). The 200 m climb at 5000 m at cruise speed needs a command above 1.0 at low SoC, and that is reported as a failure, not hidden.
+> - **SoC trace** from `soc_start` (default 1.0, full pack) down to `1 - eta_usable` = 0.2, checked at both ends of each segment (worse one reported); `a_fwd` per site, leg and SoC from Q2 (two passes). Reserve counted once (largest of the landings); `n_diversion_transitions` stays at 0.
+> - **E-1** (use the configured controller, entry at `entry_eas` converted to TAS) and **E-4** (visible `a_plan_source`, `a_plan_fallback_ms2`) are fixed; the mission geometry moves from `mission.yaml` to `study.yaml` (`sites_amsl_m`, `missions`, `ranges_km`, `a_fwd_mode`, `a_fwd_metric`), and `cruise_amsl_m` and `ground_amsl_m` leave `mission.yaml`. New `analysis/soc_trace.py`.
+>
+> Result (repo run, defaults): round-trip radius 45.9 / 46.3 / 46.6 / 47.1 km at 0 / 1500 / 2500 / 5000 m (flown distance about 92 to 94 km); one-way 92.1 / 93.1 / 93.7 / 95.1 km; reserve 150 to 161 Wh. **The "100 km fits only at 5000 m" reading in section 4 was an artefact of fixed TAS** and is withdrawn. Open: whether `eta_usable` should read 0.9 (if the battery cut-off is 0.1 rather than 0.2, the same pack gives more usable energy; O-15), DEC-1, DEC-8.
+
 ---
 
 ## 1. What question E answers, and where it sits
