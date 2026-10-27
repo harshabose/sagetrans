@@ -13,8 +13,26 @@ ardupilot:
   Q_M_SPIN_MIN: {value: 0.1, unit: "-", source: "rotor throttle floor in altitude hold; set above the ESC dead zone", status: TBD}
   Q_M_SPIN_MAX: {value: 0.95, unit: "-", source: "rotor throttle ceiling", status: TBD}
   PTCH_LIM_MAX_DEG: {value: 35.0, unit: "deg", source: "fixed-wing pitch limit (not a decision variable in analysis C)", status: TBD}
+  Q_TRAN_PIT_MAX: {value: 3.0, unit: "deg", source: "(DEFAULT ARDU VALUE) pitch cap in the forward transition; the fade cap is (Q_TRAN_PIT_MAX + 1) x 2 (O-16)", status: TBD}
+  TKOFF_THR_MIN: {value: 0.0, unit: "-", source: "(DEFAULT ARDU VALUE) 0 = use TRIM_THROTTLE as the pusher minimum in the forward transition (O-17)", status: TBD}
+  TRIM_THROTTLE: {value: 0.45, unit: "-", source: "(DEFAULT ARDU VALUE) THROTTLE_CRUISE 45 percent (config.h). Set to the flown value: it is the pusher minimum during the forward transition and the TECS feed-forward", status: TBD}
+  THR_MIN: {value: 0.0, unit: "-", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  THR_MAX: {value: 1.0, unit: "-", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  THR_SLEWRATE: {value: 100.0, unit: "%/s", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  PTCH_LIM_MIN_DEG: {value: -25.0, unit: "deg", source: "ArduPilot default as remembered; not re-read from source. Check", status: TBD}
   # Q_TRANS_DECEL: normally an ANALYSIS OUTPUT (analysis D). Add it only to fix the planner
   # value used when an analysis does not compute it.
+
+tecs:            # TECS defaults for the forward-transition model (analysis FT, docs/FT_spec.md 4.4; O-19, O-22)
+  TECS_TIME_CONST: {value: 5.0, unit: "s", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_THR_DAMP:   {value: 0.5, unit: "s", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_INTEG_GAIN: {value: 0.3, unit: "-", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_VERT_ACC:   {value: 7.0, unit: "m/s^2", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_PTCH_DAMP:  {value: 0.3, unit: "s", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_CLMB_MAX:   {value: 5.0, unit: "m/s", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_SINK_MAX:   {value: 5.0, unit: "m/s", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_SINK_MIN:   {value: 2.0, unit: "m/s", source: "(DEFAULT ARDU VALUE)", status: TBD}
+  TECS_PITCH_MAX:  {value: 15.0, unit: "deg", source: "(DEFAULT ARDU VALUE) 0 would use PTCH_LIM_MAX_DEG", status: TBD}
 
 altitude_hold:   # rotor altitude hold, eq. 8.5 (gains assumed)
   K_h: {value: 0.5, unit: "s^-1", source: "altitude error to demanded climb rate", status: TBD}

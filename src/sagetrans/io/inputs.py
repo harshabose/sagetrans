@@ -75,7 +75,12 @@ MISSION_FROM_STUDY = {"cruise_amsl_m", "ground_amsl_m"}  # set per site by analy
 ARDUPILOT_PARAMS = (
     "AIRSPEED_MIN", "Q_TRANSITION_MS", "Q_BACKTRANS_MS", "Q_A_ANGLE_MAX", "Q_BCK_PIT_LIM",
     "TKOFF_THR_MAX", "Q_TRANS_FAIL", "Q_M_SPIN_MIN", "Q_M_SPIN_MAX", "PTCH_LIM_MAX_DEG",
-    "Q_TRANS_DECEL",
+    "Q_TRANS_DECEL", "Q_TRAN_PIT_MAX", "TKOFF_THR_MIN", "TRIM_THROTTLE", "THR_MIN", "THR_MAX",
+    "THR_SLEWRATE", "PTCH_LIM_MIN_DEG",
+)  # fmt: skip
+TECS_PARAMS = (
+    "TECS_TIME_CONST", "TECS_THR_DAMP", "TECS_INTEG_GAIN", "TECS_VERT_ACC", "TECS_PTCH_DAMP",
+    "TECS_CLMB_MAX", "TECS_SINK_MAX", "TECS_SINK_MIN", "TECS_PITCH_MAX",
 )  # fmt: skip
 CONTROLLER_GROUPS = {
     "altitude_hold": ("K_h", "K_vh", "K_i", "v_dem_max", "i_max"),
@@ -199,6 +204,7 @@ def _known_paths() -> set[str]:
         "mission.speeds.entry_eas_ms",
     }  # fmt: skip
     known |= {f"controller.ardupilot.{n}" for n in ARDUPILOT_PARAMS}
+    known |= {f"controller.tecs.{n}" for n in TECS_PARAMS}
     for g, names in CONTROLLER_GROUPS.items():
         known |= {f"controller.{g}.{n}" for n in names}
     return known
@@ -407,6 +413,8 @@ def load_inputs(
     wanted = {
         "A": study.A.scenarios, "D": study.D.scenarios, "B1": study.B1.scenarios,
     }
+    if "FT" in (only or study.analyses):  # its history scenarios are looked up only when it runs
+        wanted["FT"] = study.FT.history_scenarios
     for an, names in wanted.items():
         for n in names:
             if n not in scenarios:

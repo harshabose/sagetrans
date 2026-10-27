@@ -11,8 +11,8 @@ parallel:
   enabled: true
   max_workers: 0           # 0 = one per CPU core (capped by the number of tasks)
 
-# Which analyses to run. Names: A D F E Q2 C B1 sensitivity
-analyses: [A, D, F, E, Q2, C, B1, sensitivity]
+# Which analyses to run. Names: A D F E Q2 FT C B1 sensitivity
+analyses: [A, D, F, E, Q2, FT, C, B1, sensitivity]
 
 switch_test: ground        # speed used in the Position1 switch test: ground | air  (O-02)
 
@@ -85,6 +85,42 @@ Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX
   soc: [0.8, 0.6, 0.3]
   conventions: [tas, eas]   # AIRSPEED_MIN read as true or equivalent airspeed (DEC-1 open): both reported
   feed_convention: tas      # the one E reads (the register compares AIRSPEED_MIN as TAS)
+
+FT:                        # forward transition from hover (docs/FT_spec.md)
+  # Start: mission.profile.clearance_agl_m above the site; limits mission.profile.fwd_alt_loss_max_m / fwd_alt_gain_max_m.
+  ensemble_n: 32           # same Sobol sample (seed) as C, so the members compare
+  ensemble_seed: 8
+  headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed
+  seeds: [1, 2, 3, 4, 5, 6, 7, 8]
+  popsize: 8
+  maxiter: 20
+  rotor_lag_s: 0.25        # as C
+  t_end_s: 90.0            # a run that has not reached the hand-over by then is a "no_handover" failure
+  t_settle_s: 10.0         # simulated after DONE, to see the recovery
+  tecs_start: warm         # warm | cold: does TECS run in the VTOL hover? (open item; a flight log answers it)
+  stall_margin: 1.2        # EAS / stall speed from the hand-over on; failure below it
+  rec_cl_frac: null        # C_L fraction for the recovery acceleration; null = A.cl_frac (0.8)
+  proj_is_failure: true    # the projected minimum altitude below the loss limit counts as a failure
+  weights: {h_ref: 5.0, E_ref: null, x_ref: 100.0, w_h: 1.0, w_E: 0.3, w_x: 0.0}   # E_ref null = mean energy at the start point; w_x 0: distance is not a cost here
+  bounds:
+    airspeed_min_eas_ms: [14.0, 20.0]   # below the cruise EAS (20.9); the 1.2 rule decides the lower end in practice
+    q_transition_s: [2.0, 8.0]
+    tkoff_thr_max: [0.5, 1.0]           # TECS forces a 1 % range above the minimum (O-22)
+    q_tran_pit_max_deg: [1.0, 10.0]     # ArduPilot range 0 to 30; the fade cap is 4 to 22 deg
+  scan:                    # FT_scan: AIRSPEED_MIN fixed on a grid, the other three re-searched
+    airspeed_min_eas_ms: [15.0, 16.0, 17.0, 18.0, 19.0, 20.0]
+    seeds: [1, 2, 3]
+    maxiter: 12
+  history_scenarios: [S-07, S-03]      # time histories at the optimum and at the register values
+  sens:                    # FT_sens: one at a time at the optimum
+    TECS_TIME_CONST: [3.0, 5.0, 8.0]
+    TECS_INTEG_GAIN: [0.15, 0.3, 0.6]
+    rotor_lag_s: [0.0, 0.25, 0.5]
+    z_vel_p: [2.5, 5.0, 10.0]
+    z_acc_p: [0.015, 0.03, 0.06]
+    TRIM_THROTTLE: [0.35, 0.45, 0.55]
+    tecs_start: [warm, cold]
+    rec_cl_frac: [0.7, 0.8, 0.9]       # changes only the projection
 
 C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C_fix_spec.md)
   # The entry (theta_fw0_deg, pit_lim_mode, entry_convention) comes from the D block.

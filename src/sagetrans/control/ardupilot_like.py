@@ -216,7 +216,20 @@ class Position1Controller:
     def _z_loop(
         self, dt: float, h: float, vh: float, theta: float, prev: dict[str, float]
     ) -> tuple[float, dict[str, float]]:
-        """ArduPilot's vertical loop (C spec section 3.2): the rotor command and its memory."""
+        """The vertical loop with the position P in front: climb target from the altitude error."""
+        p = self.p
+        v_t = min(max(p.z_pos_p * (p.h_tgt - h), -p.z_vmax), p.z_vmax)
+        return self.z_loop(dt, v_t, vh, theta, prev)
+
+    def z_loop(
+        self, dt: float, v_target: float, vh: float, theta: float, prev: dict[str, float]
+    ) -> tuple[float, dict[str, float]]:
+        """ArduPilot's vertical loop from the climb-rate target on (C spec section 3.2).
+
+        Velocity P, acceleration PID on the measured acceleration, thrust map and rotor lag: the
+        rotor command and its memory. `v_target` is the climb-rate demand (m/s), already limited by
+        the caller; `_z_loop` forms it from the altitude error, the forward transition from O-18.
+        """
         p = self.p
         ff, t_max = self.ff, self._t_max
         assert ff is not None and self.z_i0 is not None  # checked in __init__
@@ -231,9 +244,8 @@ class Position1Controller:
         if dt <= 0.0:  # no time has passed: nothing to update
             return prev["z_cmd"], prev
         a_meas = (vh - vh_prev) / dt  # gravity-compensated vertical acceleration
-        v_t = min(max(p.z_pos_p * (p.h_tgt - h), -p.z_vmax), p.z_vmax)
         ka = dt / (dt + 1.0 / (2.0 * math.pi * p.z_vel_flt_hz))
-        vf += ka * ((v_t - vh) - vf)
+        vf += ka * ((v_target - vh) - vf)
         a_t = p.z_vel_p * vf
         ke = dt / (dt + 1.0 / (2.0 * math.pi * p.z_acc_flt_hz))
         ef += ke * ((a_t - a_meas) - ef)

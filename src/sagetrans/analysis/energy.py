@@ -53,6 +53,8 @@ class MissionProfile:
     ground_amsl_m: float = 0.0
     isa_offset_k: float = 0.0
     clearance_agl_m: float = 30.0  # hover climb before the forward transition
+    fwd_alt_loss_max_m: float = 10.0  # accepted altitude loss in the forward transition (FT)
+    fwd_alt_gain_max_m: float = 10.0  # accepted altitude gain in the forward transition (FT)
     vz_takeoff: float = 2.0
     t_hover_pre: float = 10.0  # s of hover before lift-off
     v_trans: float = 14.0  # AIRSPEED_MIN
