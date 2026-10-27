@@ -56,7 +56,7 @@ def fmt_value(value: Any, column: str = "") -> str:
             return f"{v:.{dec}f}"
         if v == 0.0:
             return "0"
-        return f"{v:.4g}" if abs(v) < 1e5 else f"{v:.0f}"
+        return f"{v:.4g}" if abs(v) < 1e3 else f"{v:.0f}"  # 11999.8 is not 1.2e+04
     return str(value)
 
 

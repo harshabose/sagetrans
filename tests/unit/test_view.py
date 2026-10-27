@@ -294,9 +294,18 @@ def test_the_ft_chapter_shows_the_cl_max_sensitivity_next_to_the_base_case(tmp_p
         {"parameter": "CL_max_scale", "value": 0.9, "cl_max": 1.30, "J": 3.1,
          "worst_stall_margin": 1.18, "n_flags": 2},
         {"parameter": "CL_max_scale", "value": 1.1, "cl_max": 1.59, "J": 0.8,
-         "worst_stall_margin": 1.36, "n_flags": 0}])  # fmt: skip
+         "worst_stall_margin": 1.36, "n_flags": 0},
+        # a column that mixes numbers and words reads back as text, as in the real FT_sens
+        {"parameter": "tecs_start", "value": "cold", "J": 0.9}])  # fmt: skip
     write_record(tmp_path, schema_version=2)
     html = build_html(load(tmp_path))
     ft = html.split('id="ft"')[1].split("</section>")[0]
     assert "Sensitivity to C_L,max" in ft and "C_L,max x 0.9" in ft and "C_L,max x 1.1" in ft
     assert ">base<" in ft.replace(" ", "") or "base" in ft
+
+
+def test_large_numbers_are_not_printed_in_exponent_form():
+    from sagetrans.io.view.units import fmt_value
+
+    assert fmt_value(11999.8) == "12000" and fmt_value(2029.04) == "2029"
+    assert fmt_value(0.0123456) == "0.01235"

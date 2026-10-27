@@ -1470,7 +1470,7 @@ def build_ft(c: Ctx) -> Out:
     cl_rows = [r for r in sens if r.get("parameter") in ("base", "CL_max_scale")]
     if len(cl_rows) > 1:
         shown = [
-            {"case": "base" if r["parameter"] == "base" else f"C_L,max x {r['value']:g}", **r}
+            {"case": "base" if r["parameter"] == "base" else f"C_L,max x {float(r['value']):g}", **r}
             for r in cl_rows
         ]
         cols = ["case", "cl_max", "alpha_s_rad", "J", "worst_stall_margin", "n_stall_margin",
