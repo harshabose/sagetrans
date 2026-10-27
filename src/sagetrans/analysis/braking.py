@@ -79,22 +79,44 @@ def entry_airspeed(
     raise ValueError(f"unknown entry convention {convention!r}")
 
 
-def airbrake_entry_state(
-    vp: VehicleParams, scen: Scenario, bp: BackTransitionParams, v_air0: float, v_f: float = 1.0
-) -> tuple[np.ndarray, float]:
-    """State at the AIRBRAKE exit and the ground speed: rotors already carrying W - L.
+def entry_rotor_thrust(
+    vps: VehicleParams, scen: Scenario, bp: BackTransitionParams, v_air0: float,
+    rotor_start: str = "carry", ff: LiftFF | None = None,
+) -> float:
+    """Rotor thrust [N] at the AIRBRAKE exit.
 
-    Pitch is `theta_fw0`, the pusher is off and the rotors are spun up to the thrust the wing does
-    not supply (`hold_hover(0)`, no spool dynamics). The 10% floor keeps them turning when the wing
-    alone would carry the weight; it is an assumption, not an ArduPilot value.
+    `"carry"`: the rotors already carry what the wing does not supply, max(W - L, 0.10 W) over
+    cos(theta_fw0) (`hold_hover(0)` with no spool dynamics; the 10% floor is an assumption, not an
+    ArduPilot value). `"idle"`: the thrust at the lowest rotor command `bp.delta_min` (O-13: the Z
+    controller is relaxed in APPROACH and AIRBRAKE, so the rotors sit near `Q_M_SPIN_MIN` when
+    POSITION1 starts; read from source, not checked in SITL). `ff` is a `LiftFF` with a table up to
+    the largest command, built here if not given (`"idle"` only).
+    """
+    if rotor_start == "carry":
+        lift0 = float(aero.forces(scen.rho, v_air0, bp.theta_fw0 + vps.wing.i_w, vps.wing)[0])
+        weight = vps.m * G
+        return max(weight - lift0, 0.10 * weight) / max(0.5, math.cos(bp.theta_fw0))
+    if rotor_start == "idle":
+        table = ff or LiftFF(vps, scen.rho, scen.soc, t_max_factor=3.0, n=70)
+        return table.thrust_for_delta(bp.delta_min)
+    raise ValueError(f"unknown rotor_start {rotor_start!r}")
+
+
+def airbrake_entry_state(
+    vp: VehicleParams, scen: Scenario, bp: BackTransitionParams, v_air0: float, v_f: float = 1.0,
+    rotor_start: str = "carry", ff: LiftFF | None = None,
+) -> tuple[np.ndarray, float]:
+    """State at the AIRBRAKE exit and the ground speed.
+
+    Pitch is `theta_fw0` and the pusher is off. The rotors are spun up to `entry_rotor_thrust`:
+    `rotor_start="carry"` (the default, D's assumption) is the thrust the wing does not supply,
+    `"idle"` the thrust at `bp.delta_min` (O-13). There is no spool dynamics.
     """
     v0_ground = v_air0 - scen.headwind_ms  # headwind is positive against the aircraft
     if v0_ground <= v_f:
         raise ValueError(f"ground speed {v0_ground:.2f} m/s at entry is not above {v_f:g} m/s")
     vps = scen.vehicle_for(vp)
-    lift0 = float(aero.forces(scen.rho, v_air0, bp.theta_fw0 + vps.wing.i_w, vps.wing)[0])
-    weight = vps.m * G
-    t0 = max(weight - lift0, 0.10 * weight) / max(0.5, math.cos(bp.theta_fw0))
+    t0 = entry_rotor_thrust(vps, scen, bp, v_air0, rotor_start, ff)
     om0 = trim.rotor_speed_for_thrust(t0, 0.0, 0.0, scen.rho, vps)
     x0 = np.array([0.0, scen.altitude_amsl_m, v0_ground, 0.0, bp.theta_fw0, 0.0, om0, 0.0, 0.0])
     return x0, v0_ground
