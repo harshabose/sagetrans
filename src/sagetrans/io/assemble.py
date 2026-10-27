@@ -228,6 +228,61 @@ def assemble(
                                                     "v_end_tas_ms", "a_min_ms2", "a_equiv_ms2",
                                                     "reachable", "current_limited"]))  # fmt: skip
 
+    ft_task = task_results.get("FT", {})
+    ft_res = ft_task.get("result")
+    if ft_res is not None:
+        spreads["FT"] = ft_res.search.spread
+        analyses["FT"] = ft_res.record
+        tables.update(ft_task["tables"])
+        scan = sorted((res["row"] for t, res in task_results.items() if t.startswith("FT_scan:")),
+                      key=lambda r: r["airspeed_min_eas_ms"])  # fmt: skip
+        if scan:
+            tables["FT_scan"] = scan
+        ftc = inp.study.FT
+        n_flag_cols = ["n_" + k for k in ("no_handover", "stall_margin", "stall", "alt_loss",
+                                          "alt_gain", "proj_loss", "underspeed",
+                                          "battery_cutoff", "touchdown")]  # fmt: skip
+        sections["FT — forward transition (TECS-lite, uncalibrated)"] = "\n".join([
+            f"Cost {ft_res.cost_default:.3f} (register values) → **{ft_res.cost:.3f}**; "
+            f"{len(ft_res.search.seeds)}-seed spread **{ft_res.search.spread:.2%}** (T-12 limit "
+            f"{gate.T12_SPREAD_MAX:.0%}). The aircraft starts in hover "
+            f"{inp.mission.clearance_agl_m:g} m above the site and flies the forward transition "
+            "(WAIT, hand-over when the equivalent airspeed exceeds `AIRSPEED_MIN`, FADE, DONE); "
+            "`AIRSPEED_MIN`, `Q_TRANSITION_MS`, `TKOFF_THR_MAX` and `Q_TRAN_PIT_MAX` are "
+            "searched over the same Sobol ensemble as C. Every speed is an equivalent airspeed. "
+            f"A run fails on an EAS below {ftc.stall_margin:g} x the stall speed from the "
+            f"hand-over on, an altitude loss beyond {inp.mission.fwd_alt_loss_max_m:g} m or gain "
+            f"beyond {inp.mission.fwd_alt_gain_max_m:g} m (assumed limits), a projected minimum "
+            "altitude below the loss limit, a stall, or no hand-over.", "",
+            "**Model status.** The pitch and pusher come from TECS-lite, a port of ArduPilot's "
+            "TECS (`Plane-4.7.2`) with its default gains; nothing is calibrated against a log or "
+            f"SITL. TECS starts `{ftc.tecs_start}` (does TECS run through the VTOL hover? open). "
+            "`Q_ASSIST_SPEED` is assumed 0 (O-20): nothing restarts the fade, and the minimum "
+            "EAS of the fade is reported (`V_eas_min_fade_ms`) so a flown value can be checked. "
+            "The height demand is held constant and the speed and height filters of the source "
+            "are replaced by the true states. The projected minimum altitude is a lower bound on "
+            "the loss (the pull-up is assumed to start at once). The weights of `J` are a policy "
+            "choice; its terms are printed.",
+            "",
+            md_table(tables["FT_params"], ["case", "airspeed_min_eas_ms", "q_transition_s",
+                                           "tkoff_thr_max", "tran_pit_max_deg", "J", "J_exc",
+                                           "J_E", "J_pen", "J_start", "seed_spread", "at_bound"]),
+            "", md_table(tables["FT_params"], ["case", "p95_excursion_m", "mean_energy_kJ",
+                                               "worst_sink_ms", "worst_stall_margin", "n_flags",
+                                               *n_flag_cols]),
+            "", "Search:", "", md_table(tables["FT_search"]), "",
+            *(["`AIRSPEED_MIN` held fixed, the other three re-searched:", "",
+               md_table(tables["FT_scan"], ["airspeed_min_eas_ms", "q_transition_s",
+                                            "tkoff_thr_max", "tran_pit_max_deg", "J", "J_exc",
+                                            "J_E", "J_pen", "n_flags", "entry_eas_back_ms"]), ""]
+              if scan else []),
+            "One at a time at the optimum:", "", md_table(tables["FT_sens"],
+                                                         ["parameter", "value", "J", "J_pen",
+                                                          "p95_excursion_m", "mean_energy_kJ",
+                                                          "worst_sink_ms", "worst_stall_margin",
+                                                          "n_flags"]),
+        ])  # fmt: skip
+
     c_task = task_results.get("C", {})
     c_res = c_task.get("result")
     if c_res is not None:

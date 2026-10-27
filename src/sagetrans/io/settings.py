@@ -343,7 +343,7 @@ class FTCfg(_Strict):
     gain are `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`.
     """
 
-    ensemble_n: int = Field(32, ge=1)  # the same Sobol sample (seed) as C
+    ensemble_n: int = Field(16, ge=1)  # the first points of C's Sobol sample (halved, spec 6.5)
     ensemble_seed: int = 8
     headwind_ms: list[float] = [0.0, 5.0]  # the ensemble's headwind range (low, high)
     seeds: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]

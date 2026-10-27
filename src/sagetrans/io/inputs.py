@@ -34,12 +34,14 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from sagetrans import atmosphere
 from sagetrans.analysis.common import Scenario
 from sagetrans.analysis.descent import DescentLimits
 from sagetrans.analysis.energy import BatteryWindow, MissionProfile
 from sagetrans.analysis.ensemble import EnsembleAxes
 from sagetrans.config.schema import Config, ConfigError, Status
 from sagetrans.control.ardupilot_like import BackTransitionParams, BaselineParams
+from sagetrans.control.forward import ForwardParams
 from sagetrans.io.settings import ALL_ANALYSES, ScenariosFile, StudyCfg
 from sagetrans.physics.params import (
     AttitudeParams,
@@ -138,6 +140,7 @@ class StudyInputs:
     fallbacks: tuple[str, ...]  # register paths that fell back to the built-in placeholder
     draft_reasons: tuple[str, ...]  # why this is not a release-grade input set
     settings_hash: str
+    forward: ForwardParams
     notes: tuple[str, ...] = field(default=())
 
     @property
@@ -251,6 +254,54 @@ class _Reader:
             elif f.name not in optional:
                 self.fallbacks.append(path)
         return cls(**kw)
+
+
+def _forward_params(
+    rd: _Reader, study: StudyCfg, controller: BackTransitionParams, v_cruise_tas: float,
+    mission: MissionProfile, airspeed_min: float, q_transition_s: float, tkoff_thr_max: float,
+) -> ForwardParams:
+    """The forward-transition controller's parameters from the register (analysis FT, FT spec 3.2).
+
+    Angles are converted from the register's radians to degrees, `THR_SLEWRATE` is a fraction per
+    second. The speed demand is the cruise speed at its reference altitude, as an equivalent
+    airspeed.
+    """
+    ap, tc = "controller.ardupilot.", "controller.tecs."
+    d = ForwardParams(back=replace(controller, z_mode="ardupilot"))
+    z, ft = study.C.z, study.FT
+    back = replace(
+        controller, z_mode="ardupilot", rotor_lag_s=ft.rotor_lag_s, z_pos_p=z.pos_p,
+        z_vel_p=z.vel_p, z_acc_p=z.acc_p, z_acc_i=z.acc_i, z_acc_imax=z.acc_imax, z_vmax=z.vmax,
+        z_vel_flt_hz=z.vel_flt_hz, z_acc_flt_hz=z.acc_flt_hz,
+    )  # fmt: skip
+    rho_ref = float(atmosphere.density(mission.v_cruise_ref_amsl_m, mission.isa_offset_k))
+    rho0 = float(atmosphere.density(0.0))
+    return ForwardParams(
+        back=back, airspeed_min_eas=airspeed_min, q_transition_s=q_transition_s,
+        tkoff_thr_max=tkoff_thr_max,
+        tran_pit_max_deg=math.degrees(
+            rd.get(ap + "Q_TRAN_PIT_MAX", math.radians(d.tran_pit_max_deg))
+        ),
+        tkoff_thr_min=rd.get(ap + "TKOFF_THR_MIN", d.tkoff_thr_min),
+        trim_throttle=rd.get(ap + "TRIM_THROTTLE", d.trim_throttle),
+        thr_min=rd.get(ap + "THR_MIN", d.thr_min), thr_max=rd.get(ap + "THR_MAX", d.thr_max),
+        thr_slewrate=rd.get(ap + "THR_SLEWRATE", d.thr_slewrate),
+        ptch_lim_min_deg=math.degrees(
+            rd.get(ap + "PTCH_LIM_MIN_DEG", math.radians(d.ptch_lim_min_deg))
+        ),
+        tecs_time_const=rd.get(tc + "TECS_TIME_CONST", d.tecs_time_const),
+        tecs_thr_damp=rd.get(tc + "TECS_THR_DAMP", d.tecs_thr_damp),
+        tecs_integ_gain=rd.get(tc + "TECS_INTEG_GAIN", d.tecs_integ_gain),
+        tecs_vert_acc=rd.get(tc + "TECS_VERT_ACC", d.tecs_vert_acc),
+        tecs_ptch_damp=rd.get(tc + "TECS_PTCH_DAMP", d.tecs_ptch_damp),
+        tecs_clmb_max=rd.get(tc + "TECS_CLMB_MAX", d.tecs_clmb_max),
+        tecs_sink_max=rd.get(tc + "TECS_SINK_MAX", d.tecs_sink_max),
+        tecs_sink_min=rd.get(tc + "TECS_SINK_MIN", d.tecs_sink_min),
+        tecs_pitch_max_deg=math.degrees(
+            rd.get(tc + "TECS_PITCH_MAX", math.radians(d.tecs_pitch_max_deg))
+        ),
+        airspeed_cruise_eas=v_cruise_tas * math.sqrt(rho_ref / rho0), tecs_start=ft.tecs_start,
+    )
 
 
 # ---- the loader --------------------------------------------------------------------------------
@@ -371,6 +422,8 @@ def load_inputs(
         "q_trans_fail_s": q_fail,
         "speed_test": study.switch_test,
     }
+    forward = _forward_params(rd, study, controller, baseline_overrides["v_cruise"], mission,
+                              airspeed_min, q_transition_s, tkoff)
     start = {
         "T_bt": t_bt, "theta_A": theta_a, "spin_min": spin_min, "airspeed_min": airspeed_min,
         "q_transition": q_transition_s, "tkoff_thr_max": tkoff,
@@ -442,6 +495,7 @@ def load_inputs(
         ensemble_axes=axes, study=study, fallbacks=tuple(rd.fallbacks),
         draft_reasons=tuple(draft_reasons),
         settings_hash=hashlib.sha256(settings_blob.encode()).hexdigest(),
+        forward=forward,
     )  # fmt: skip
 
 

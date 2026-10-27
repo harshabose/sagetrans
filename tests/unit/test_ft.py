@@ -1,5 +1,6 @@
 """Analysis FT (docs/FT_spec.md): configuration, the z_loop split and, in later steps, the model."""
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from pydantic import ValidationError
 from sagetrans import atmosphere
 from sagetrans.analysis.common import Scenario
 from sagetrans.control.ardupilot_like import BackTransitionParams, LiftFF, Position1Controller
+from sagetrans.io import stages
 from sagetrans.io.inputs import load_inputs
 from sagetrans.io.settings import FTBoundsCfg, FTCfg, StudyCfg
 from sagetrans.physics.params import placeholder_vehicle
@@ -83,3 +85,50 @@ def test_z_loop_split_gives_the_same_command_as_the_altitude_error_form():
         a, prev = ctl._z_loop(0.02 if k else 0.0, h, vh + 0.01 * k, theta, prev)
         b, prev2 = ctl.z_loop(0.02 if k else 0.0, v_t, vh + 0.01 * k, theta, prev2)
         assert a == b and prev == prev2
+
+
+# ---- the task (spec 6, acceptance 1) -------------------------------------------------------------
+FT_TINY = """
+FT:
+  ensemble_n: 2
+  headwind_ms: [0.0, 5.0]
+  seeds: [1]
+  popsize: 4
+  maxiter: 1
+  history_scenarios: [S-01]
+  scan: {airspeed_min_eas_ms: [16.0, 18.0], seeds: [1], maxiter: 1}
+  sens:
+    TECS_TIME_CONST: [3.0]
+    TECS_INTEG_GAIN: [0.3]
+    rotor_lag_s: [0.25]
+    z_vel_p: [5.0]
+    z_acc_p: [0.03]
+    TRIM_THROTTLE: [0.45]
+    tecs_start: [warm, cold]
+    rec_cl_frac: [0.8]
+"""
+
+
+def test_ft_task_writes_every_table_of_the_contract(tmp_path):
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY)
+    inp = load_inputs(cfg, only={"FT"})
+    assert stages.plan_tasks(inp) == ["FT", "FT_scan:16", "FT_scan:18"]
+    out = stages.run_task(inp, "FT")
+    tables = out["tables"]
+    assert set(tables) == {"FT_params", "FT_search", "FT_runs", "FT_sens", "FT_history"}
+    params = tables["FT_params"]
+    assert [r["case"] for r in params] == ["optimum", "register"]
+    for col in ("J", "J_exc", "J_E", "J_pen", "J_start", "seed_spread", "at_bound"):
+        assert col in params[0]
+    assert abs(params[0]["J"] - (params[0]["J_exc"] + params[0]["J_E"] + params[0]["J_x"]
+                                 + params[0]["J_pen"])) < 1e-6
+    runs = tables["FT_runs"]
+    assert {(r["case"], r["set"]) for r in runs} == {
+        (c, k) for c in ("optimum", "register") for k in ("core", "corner")
+    }
+    assert out["result"].search.spread >= 0.0
+    scan = stages.run_task(inp, "FT_scan:16")["row"]
+    assert scan["airspeed_min_eas_ms"] == 16.0 and scan["entry_eas_back_ms"] == 14.0

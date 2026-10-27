@@ -25,6 +25,7 @@ from sagetrans.analysis import (
     braking,
     descent,
     energy,
+    forward,
     pusher,
     restricted,
     runs,
@@ -51,7 +52,7 @@ RHO0 = float(atmosphere.density(0.0))
 Table = list[dict[str, Any]]
 
 # rough wall-clock seconds on a laptop, for scheduling and for the pre-flight estimate
-TASK_COST = {"basics": 60, "C": 330, "B1": 400, "sensitivity": 220}
+TASK_COST = {"basics": 60, "C": 330, "FT": 9000, "FT_scan": 2000, "B1": 400, "sensitivity": 220}
 
 
 def tas(eas: float, scen: Scenario) -> float:
@@ -732,7 +733,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
     return out
 
 
-# ---- tasks: C, B1, sensitivity -------------------------------------------------------------
+# ---- tasks: C, FT, B1, sensitivity -------------------------------------------------------------
 def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams, CostWeights]:
     """C's evaluation settings, base controller parameters and cost normalisers from the config.
 
@@ -877,6 +878,170 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
                    "C_q_curve": q_curve, "C_sens": sens_rows},
     }  # fmt: skip
+
+
+def ft_settings(inp: StudyInputs) -> tuple[forward.FTEval, dict[str, float]]:
+    """FT's evaluation settings and the register start (the four searched values).
+
+    The controller template is `inp.forward` (the register plus C's Z-loop gains); the accepted
+    loss and gain are the mission profile's; the recovery C_L fraction is `FT.rec_cl_frac` or A's.
+    """
+    f, m, fp = inp.study.FT, inp.mission, inp.forward
+    _, alpha_hi = alpha_limits(inp)
+    fev = forward.FTEval(
+        template=fp, t_end_s=f.t_end_s, t_settle_s=f.t_settle_s, stall_margin=f.stall_margin,
+        cl_frac=f.rec_cl_frac or inp.study.A.cl_frac or 0.8, proj_is_failure=f.proj_is_failure,
+        loss_max_m=m.fwd_alt_loss_max_m, gain_max_m=m.fwd_alt_gain_max_m, alpha_hi=alpha_hi,
+        alpha_gate_ms=inp.study.D.alpha_gate_ms,
+    )  # fmt: skip
+    start = {
+        "airspeed_min": fp.airspeed_min_eas, "q_transition": fp.q_transition_s,
+        "tkoff_thr_max": fp.tkoff_thr_max, "tran_pit_max": fp.tran_pit_max_deg,
+    }  # fmt: skip
+    return fev, start
+
+
+def ft_scenarios(inp: StudyInputs) -> tuple[list[Scenario], list[Scenario]]:
+    """The Sobol sample (searched) and the corners (reported), at the transition altitude."""
+    f = inp.study.FT
+    axes = dataclasses.replace(inp.ensemble_axes, headwind_ms=(f.headwind_ms[0], f.headwind_ms[1]))
+    return forward.ft_ensemble(
+        f.ensemble_n, inp.vehicle, f.ensemble_seed, axes, inp.mission.clearance_agl_m
+    )
+
+
+def ft_bounds(inp: StudyInputs, fixed: dict[str, float] | None = None) -> Bounds:
+    b = inp.study.FT.bounds
+    return forward.ft_bounds(
+        b.airspeed_min_eas_ms, b.q_transition_s, b.tkoff_thr_max, b.q_tran_pit_max_deg, fixed
+    )
+
+
+def ft_weights(
+    inp: StudyInputs, scens: list[Scenario], fev: forward.FTEval, start: dict[str, float]
+) -> CostWeights:
+    """The cost of FT; `E_ref: null` is the mean energy at the register start (computed once)."""
+    w = inp.study.FT.weights
+    e_ref = w.E_ref or forward.mean_energy(inp.vehicle, scens, fev, start)
+    return CostWeights(w_h=w.w_h, w_E=w.w_E, w_x=w.w_x, h_ref=w.h_ref, E_ref=e_ref, x_ref=w.x_ref)
+
+
+def _ft_member_row(s: Scenario, r: forward.FTRun, case: str, kind: str, i: int) -> dict[str, Any]:
+    """One `FT_runs` row: the member's axes, then the run's columns."""
+    row: dict[str, Any] = {
+        "case": case, "set": kind, "member": i, "altitude_m": s.ground_amsl_m,
+        "isa_offset_k": s.isa_offset_k, "mass_kg": s.mass_kg, "soc": s.soc,
+        "headwind_ms": s.headwind_ms,
+    }  # fmt: skip
+    for k, v in r.row.items():
+        row[k] = v if isinstance(v, bool | str) else _num(v)
+    return row
+
+
+FT_PARAM_COLUMNS = {
+    "airspeed_min": "airspeed_min_eas_ms", "q_transition": "q_transition_s",
+    "tkoff_thr_max": "tkoff_thr_max", "tran_pit_max": "tran_pit_max_deg",
+}  # fmt: skip
+
+
+def _ft_sens_eval(fev: forward.FTEval, key: str, value: Any) -> forward.FTEval:
+    """The evaluation settings with one `FT.sens` entry changed."""
+    tp = fev.template
+    if key == "rec_cl_frac":  # changes only the projection
+        return dataclasses.replace(fev, cl_frac=value)
+    if key in ("rotor_lag_s", "z_vel_p", "z_acc_p"):
+        back = dataclasses.replace(tp.back, **{key: value})
+        return dataclasses.replace(fev, template=dataclasses.replace(tp, back=back))
+    own = {"TECS_TIME_CONST": "tecs_time_const", "TECS_INTEG_GAIN": "tecs_integ_gain",
+           "TRIM_THROTTLE": "trim_throttle", "tecs_start": "tecs_start"}  # fmt: skip
+    return dataclasses.replace(fev, template=dataclasses.replace(tp, **{own[key]: value}))
+
+
+def task_ft(inp: StudyInputs) -> dict[str, Any]:
+    """Analysis FT: search the four forward-transition parameters, then report.
+
+    Tables: `FT_params` (the optimum and the register start), `FT_search`, `FT_runs` (every member
+    of both cases, Sobol core and corners), `FT_sens` (one at a time at the optimum) and
+    `FT_history` (time series of the named scenarios, both cases).
+    """
+    f, vp = inp.study.FT, inp.vehicle
+    fev, start = ft_settings(inp)
+    core, corners = ft_scenarios(inp)
+    t0 = time.time()
+    w = ft_weights(inp, core, fev, start)
+    print(f"    FT E_ref {w.E_ref:.0f} J ({time.time() - t0:.0f} s, {len(core)} runs)", flush=True)
+    r = forward.optimise_ft(
+        vp, core, fev, w, start, ft_bounds(inp), seeds=tuple(f.seeds), popsize=f.popsize,
+        maxiter=f.maxiter,
+    )  # fmt: skip
+    best = r.params
+    t1 = time.time()
+    cases = {"optimum": best, "register": start}
+    core_runs = {c: forward_runs(vp, core, prm, fev) for c, prm in cases.items()}
+    corner_runs = {c: forward_runs(vp, corners, prm, fev) for c, prm in cases.items()}
+    params: Table = []
+    for c, prm in cases.items():
+        opt = c == "optimum"
+        params.append({
+            "case": c, **{FT_PARAM_COLUMNS[k]: prm[k] for k in forward.FT_NAMES},
+            "J_start": r.cost_default if opt else "", "seed_spread": r.search.spread if opt else "",
+            "at_bound": ";".join(f"{k}:{v}" for k, v in r.at_bound.items()) if opt else "",
+            **{k: _num(v) for k, v in forward.summarise_ft(core_runs[c], w).items()},
+        })  # fmt: skip
+    search = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
+              for sr in r.search.seeds]  # fmt: skip
+    run_rows: Table = []
+    for c in cases:
+        for kind, scens, results in (
+            ("core", core, core_runs[c]), ("corner", corners, corner_runs[c])
+        ):
+            for i, (sc, rr) in enumerate(zip(scens, results, strict=True)):
+                run_rows.append(_ft_member_row(sc, rr, c, kind, i))
+    sens_rows: Table = []
+    for key, values in f.sens.model_dump().items():
+        for v in values:
+            sm = forward.summarise_ft(forward_runs(vp, core, best, _ft_sens_eval(fev, key, v)), w)
+            sens_rows.append({"parameter": key, "value": v, **{k: _num(x) for k, x in sm.items()}})
+    hist: Table = []
+    for name in f.history_scenarios:
+        sc = forward.ft_scenario(inp.scenarios[name], inp.mission.clearance_agl_m)
+        for c, prm in cases.items():
+            rr = forward.run_ft(vp, sc, prm, fev)
+            hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
+    print(f"    FT reports: {time.time() - t1:.0f} s", flush=True)
+    return {
+        "result": r, "scens": core, "E_ref": w.E_ref,
+        "tables": {"FT_params": params, "FT_search": search, "FT_runs": run_rows,
+                   "FT_sens": sens_rows, "FT_history": hist},
+    }  # fmt: skip
+
+
+def forward_runs(
+    vp: VehicleParams, scens: list[Scenario], prm: dict[str, float], fev: forward.FTEval
+) -> list[forward.FTRun]:
+    return [forward.run_ft(vp, sc, prm, fev) for sc in scens]
+
+
+def task_ft_scan(inp: StudyInputs, v_arg: str) -> dict[str, Any]:
+    """One `FT_scan` grid point: AIRSPEED_MIN fixed, the other three variables re-searched."""
+    f, vp = inp.study.FT, inp.vehicle
+    v = float(v_arg)
+    fev, start = ft_settings(inp)
+    core, _ = ft_scenarios(inp)
+    w = ft_weights(inp, core, fev, start)
+    fixed = {"airspeed_min": v}
+    r = forward.optimise_ft(
+        vp, core, fev, w, {**start, **fixed}, ft_bounds(inp, fixed), fixed=fixed,
+        seeds=tuple(f.scan.seeds), popsize=f.popsize, maxiter=f.scan.maxiter,
+    )  # fmt: skip
+    sm = forward.summarise_ft(forward_runs(vp, core, r.params, fev), w)
+    row = {
+        "airspeed_min_eas_ms": v, **{FT_PARAM_COLUMNS[k]: r.params[k] for k in forward.FT_NAMES},
+        "J_search": r.cost, "seed_spread": r.search.spread,
+        "at_bound": ";".join(f"{k}:{x}" for k, x in r.at_bound.items()),
+        "entry_eas_back_ms": v - 2.0, **{k: _num(x) for k, x in sm.items()},
+    }  # fmt: skip
+    return {"result": r, "row": row, "airspeed_min": v}
 
 
 def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
@@ -1120,6 +1285,9 @@ def plan_tasks(inp: StudyInputs) -> list[str]:
         tasks.append("basics")
     if "C" in wanted:
         tasks.append("C")
+    if "FT" in wanted:
+        tasks.append("FT")
+        tasks += [f"FT_scan:{v:g}" for v in inp.study.FT.scan.airspeed_min_eas_ms]
     if "B1" in wanted:
         tasks += [f"B1:{n}" for n in inp.study.B1.scenarios]
     if "sensitivity" in wanted:
@@ -1140,6 +1308,10 @@ def run_task(inp: StudyInputs, task: str) -> dict[str, Any]:
         return task_basics(inp)
     if kind == "C":
         return task_c(inp)
+    if kind == "FT":
+        return task_ft(inp)
+    if kind == "FT_scan":
+        return task_ft_scan(inp, arg)
     if kind == "B1":
         return task_b1(inp, arg)
     if kind == "sensitivity":

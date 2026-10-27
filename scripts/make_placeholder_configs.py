@@ -17,6 +17,7 @@ from typing import Any
 
 from sagetrans.analysis.energy import BatteryWindow, MissionProfile
 from sagetrans.control.ardupilot_like import BackTransitionParams, BaselineParams
+from sagetrans.control.forward import ForwardParams
 from sagetrans.physics.params import VehicleParams
 
 OUT = Path(__file__).resolve().parents[1] / "configs"
@@ -204,6 +205,7 @@ def mission_yaml() -> str:
 
 def controller_yaml() -> str:
     bt, bl = BackTransitionParams(), BaselineParams(back=BackTransitionParams())
+    fd = ForwardParams(back=BackTransitionParams(z_mode="ardupilot"))
     r = lambda v, u, s, st="TBD": rec(v, u, s, st)  # noqa: E731
     doc = "Plane docs"
     return "\n".join([
@@ -222,8 +224,26 @@ def controller_yaml() -> str:
         f"  Q_M_SPIN_MIN: {r(bt.delta_min, '-', 'rotor throttle floor in altitude hold; set above the ESC dead zone')}",
         f"  Q_M_SPIN_MAX: {r(bt.delta_max, '-', 'rotor throttle ceiling')}",
         f"  PTCH_LIM_MAX_DEG: {r(35.0, 'deg', 'fixed-wing pitch limit (not a decision variable in analysis C)')}",
+        f"  Q_TRAN_PIT_MAX: {r(fd.tran_pit_max_deg, 'deg', '(DEFAULT ARDU VALUE) pitch cap in the forward transition; the fade cap is (Q_TRAN_PIT_MAX + 1) x 2 (O-16)')}",
+        f"  TKOFF_THR_MIN: {r(fd.tkoff_thr_min, '-', '(DEFAULT ARDU VALUE) 0 = use TRIM_THROTTLE as the pusher minimum in the forward transition (O-17)')}",
+        f"  TRIM_THROTTLE: {r(fd.trim_throttle, '-', '(DEFAULT ARDU VALUE) THROTTLE_CRUISE 45 percent (config.h)')}",
+        f"  THR_MIN: {r(fd.thr_min, '-', '(DEFAULT ARDU VALUE)')}",
+        f"  THR_MAX: {r(fd.thr_max, '-', '(DEFAULT ARDU VALUE)')}",
+        f"  THR_SLEWRATE: {r(fd.thr_slewrate * 100.0, '%/s', '(DEFAULT ARDU VALUE)')}",
+        f"  PTCH_LIM_MIN_DEG: {r(fd.ptch_lim_min_deg, 'deg', 'ArduPilot default as remembered; not re-read from source. Check')}",
         "  # Q_TRANS_DECEL: normally an ANALYSIS OUTPUT (analysis D). Add it only to fix the planner",
         "  # value used when an analysis does not compute it.",
+        "",
+        "tecs:            # TECS defaults for the forward-transition model (analysis FT)",
+        f"  TECS_TIME_CONST: {r(fd.tecs_time_const, 's', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_THR_DAMP:   {r(fd.tecs_thr_damp, 's', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_INTEG_GAIN: {r(fd.tecs_integ_gain, '-', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_VERT_ACC:   {r(fd.tecs_vert_acc, 'm/s^2', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_PTCH_DAMP:  {r(fd.tecs_ptch_damp, 's', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_CLMB_MAX:   {r(fd.tecs_clmb_max, 'm/s', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_SINK_MAX:   {r(fd.tecs_sink_max, 'm/s', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_SINK_MIN:   {r(fd.tecs_sink_min, 'm/s', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_PITCH_MAX:  {r(fd.tecs_pitch_max_deg, 'deg', '(DEFAULT ARDU VALUE) 0 would use PTCH_LIM_MAX_DEG')}",
         "",
         "altitude_hold:   # rotor altitude hold, eq. 8.5 (gains assumed)",
         f"  K_h: {r(bt.K_h, 's^-1', 'altitude error to demanded climb rate')}",

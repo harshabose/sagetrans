@@ -5,8 +5,8 @@ profile:        # the idealised flight used by the energy budget (analysis E)
   climb_height_m: {value: 200.0, unit: "m", source: "climb above the airfield; cruise altitude = site + this", status: TBD}
   isa_offset_k: {value: 0.0, unit: "K", source: "ISA temperature offset for the budget", status: TBD}
   clearance_agl_m: {value: 30.0, unit: "m", source: "hover climb before the forward transition; also the height above ground at which analysis FT starts", status: TBD}
-  fwd_alt_loss_max_m: {value: 10.0, unit: "m", source: "largest altitude loss below the forward-transition start that is accepted; a failure beyond it (analysis FT). Set by the owner 2026-10-27: 30 m start, 10 m clearance, so the floor is 20 m AGL", status: assumed}
-  fwd_alt_gain_max_m: {value: 10.0, unit: "m", source: "largest altitude gain above the forward-transition start that is accepted; a failure beyond it (analysis FT). Symmetric with the loss limit by default", status: assumed}
+  fwd_alt_loss_max_m: {value: 10.0, unit: "m", source: "largest altitude loss below the forward-transition start that is accepted; a failure beyond it (analysis FT)", status: assumed}
+  fwd_alt_gain_max_m: {value: 10.0, unit: "m", source: "largest altitude gain above the forward-transition start that is accepted; a failure beyond it (analysis FT)", status: assumed}
   vz_takeoff: {value: 2.0, unit: "m/s", source: "vertical climb rate in take-off", status: TBD}
   t_hover_pre: {value: 10.0, unit: "s", source: "hover on the pad before lift-off", status: TBD}
   a_fwd: {value: 1.5, unit: "m/s^2", source: "forward-transition acceleration; ASSUMED until analysis C", status: TBD}
