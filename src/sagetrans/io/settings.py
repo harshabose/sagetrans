@@ -301,13 +301,89 @@ class B2Cfg(_Strict):
     start: B2StartCfg = B2StartCfg()
 
 
+class B1VariantCfg(_Strict):
+    """One stated wing limit of B1: a margin on alpha_s or an angle, and the pitch limit."""
+
+    name: str
+    alpha_margin: float | None = Field(None, gt=0.0)  # |alpha_w| <= margin x alpha_s
+    alpha_max_deg: float | None = Field(None, gt=0.0)  # |alpha_w| <= this angle
+    theta_cmd_max_deg: float = Field(34.4, gt=0.0)  # pitch-command limit
+
+    @model_validator(mode="after")
+    def _one_limit(self) -> B1VariantCfg:
+        if (self.alpha_margin is None) == (self.alpha_max_deg is None):
+            raise ValueError(
+                f"B1 variant '{self.name}': give exactly one of alpha_margin and alpha_max_deg"
+            )
+        return self
+
+
+def _default_variants() -> list[B1VariantCfg]:
+    return [
+        B1VariantCfg(name="attached", alpha_margin=0.85, theta_cmd_max_deg=34.4),
+        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=30.0),
+    ]
+
+
+class B1BandSweepCfg(_Strict):
+    """Altitude bands run at the largest distance cap only, for one variant (a sensitivity)."""
+
+    eps_h_m: list[float] = [3.0, 10.0]
+    variant: str = "c_envelope"
+
+
+class B1SensCfg(_Strict):
+    """Sensitivity rows, first scenario only: each is skipped when false or null."""
+
+    rotor_start_flip: bool = True  # the other rotor start, first variant
+    end_vh_band_ms: float | None = 0.5  # the old end band on |v_h|, first variant
+    c_envelope_theta_cmd_deg: float | None = 34.4  # pitch limit of the first absolute-angle variant
+
+
+class B1GapCCfg(_Strict):
+    """The C parameters the same-problem gap evaluates (paste the optimum from `C_params`)."""
+
+    T_bt: float = Field(gt=0.0)  # s
+    theta_A_deg: float = Field(gt=0.0)
+    spin_min: float = Field(ge=0.0)
+    q: float = Field(gt=0.0)  # Q_TRANS_DECEL, m/s^2
+
+
 class B1Cfg(_Strict):
-    scenarios: list[str] = ["S-01", "S-02"]
-    eps_h_m: list[float] = [20.0, 10.0, 6.0, 3.0]
-    eps_x_m: float = 300.0
+    """B1 from the AIRBRAKE exit (docs/B1_fix_spec.md); the entry comes from the C and D blocks."""
+
+    scenarios: list[str] = ["S-01", "S-02", "S-03", "S-04", "S-05", "S-06"]
     intervals: int = Field(40, ge=10)
     refine_from: list[int] = [20]
     max_iter: int = Field(800, ge=10)
+    eps_h_m: list[float] = [1.0]  # headline altitude band (C holds about 0.5 to 1 m)
+    eps_x_m: list[float] = [40.0, 50.0, 60.0, 75.0, 100.0, 300.0]  # distance caps: the front
+    end_vh_band_ms: float | None = Field(None, gt=0.0)  # null = C.sink_tol_ms
+    variants: list[B1VariantCfg] = Field(default_factory=_default_variants, min_length=1)
+    band_sweep: B1BandSweepCfg = B1BandSweepCfg()
+    sens: B1SensCfg = B1SensCfg()
+    gap_c: B1GapCCfg | None = None  # null = the register values at q = 2.0, said in the table
+
+    @model_validator(mode="before")
+    @classmethod
+    def _old_scalars(cls, data: object) -> object:
+        if isinstance(data, dict) and isinstance(data.get("eps_x_m"), int | float):
+            raise ValueError(
+                "B1.eps_x_m is now a list (the distance caps of the front) and B1.eps_h_m a "
+                "list holding the headline band, see docs/B1_fix_spec.md section 7"
+            )
+        return data
+
+    @model_validator(mode="after")
+    def _consistent(self) -> B1Cfg:
+        names = [v.name for v in self.variants]
+        if len(set(names)) != len(names):
+            raise ValueError("B1.variants has duplicate names")
+        if self.band_sweep.variant not in names:
+            raise ValueError(f"B1.band_sweep.variant '{self.band_sweep.variant}' is not a variant")
+        if not self.eps_h_m or not self.eps_x_m:
+            raise ValueError("B1.eps_h_m and B1.eps_x_m must not be empty")
+        return self
 
 
 class SensCfg(_Strict):
