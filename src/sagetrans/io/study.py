@@ -26,7 +26,7 @@ from typing import Any
 
 import sagetrans
 from sagetrans.config.schema import DraftConfigError
-from sagetrans.io import gate
+from sagetrans.io import gate, record
 from sagetrans.io.assemble import assemble
 from sagetrans.io.inputs import InputError, StudyInputs, load_inputs, release_blockers
 from sagetrans.io.stages import TASK_COST, plan_tasks, run_task, task_selection
@@ -54,7 +54,11 @@ def _cache_path(work: Path, inp: StudyInputs, task: str) -> Path:
     safe = task.replace(":", "_")
     sel = task_selection(inp, task)
     tag = f".{sel}" if sel else ""
-    return work / f"{safe}{tag}.{inp.inputs_hash[:16]}.{sagetrans.__version__}.pkl"
+    # inputs hash: the register and the settings; source hash: the code that decides what a task
+    # computes. An entry written under another pair (or by a version before the source hash existed,
+    # which has no third field in its name) is never looked up, so it cannot be misread.
+    key = f"{inp.inputs_hash[:16]}.{sagetrans.__version__}.{record.source_hash()[:12]}"
+    return work / f"{safe}{tag}.{key}.pkl"
 
 
 def _load_cached(path: Path) -> dict[str, Any] | None:

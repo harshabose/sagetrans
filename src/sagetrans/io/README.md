@@ -27,7 +27,9 @@ absolute imports mean it does not shadow the standard library.)
 `inputs.load_inputs`, runs the planned tasks in parallel worker processes (CasADi objects cannot be
 shared, so each worker reloads the config folder itself), caches every task result under
 `<output>/<run_name>/_work/` keyed by `StudyInputs.inputs_hash` (register hash plus every
-result-relevant setting, but not run name, mode or parallelism), and hands everything to
+result-relevant setting, but not run name, mode or parallelism), the package version and `record.source_hash()` (the code that decides
+what a task computes: every package `.py` file except the output-only modules listed in `record.OUTPUT_ONLY`,
+so a change to the writer or the viewer keeps the cache; `run_record.json` carries it as `source_hash`), and hands everything to
 `assemble.assemble`. Exit codes: 0 ok, 1 a task failed, 2 unusable inputs or release mode refused,
 3 release-mode result blocked by the gate. `VehicleParams.released` is true only when the vehicle was
 built from a complete register (nothing TBD, nothing missing); only then can a run record say RELEASED.
