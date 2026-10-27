@@ -197,7 +197,7 @@ The `ardupilot` group uses the **real parameter names**.
 
 | Entry | Unit | Placeholder | Meaning |
 | --- | --- | --- | --- |
-| `AIRSPEED_MIN` | m/s | 14 | transition speed, read as an **equivalent** airspeed by D, C, B1 and FT (`D.entry_convention: eas`; ArduPilot compares EAS, O-14 and O-23). Q2 follows its own `feed_convention` (`tas` by default, open) |
+| `AIRSPEED_MIN` | m/s | 14 | transition speed, read as an **equivalent** airspeed by D, C, B1 and FT (`D.entry_convention: eas`; ArduPilot compares EAS, O-14 and O-23). E reads it the same way (`Q2.feed_convention: eas`) |
 | `Q_TRANSITION_MS` | ms | 5000 | rotor fade time after `AIRSPEED_MIN` (documented default) |
 | `Q_BACKTRANS_MS` | ms | 3000 | back-transition pitch-limit ramp |
 | `Q_A_ANGLE_MAX` | deg | 20 | maximum VTOL lean angle |

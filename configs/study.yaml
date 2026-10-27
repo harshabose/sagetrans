@@ -84,7 +84,7 @@ Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX
   mass_factors: [0.80, 1.0, 1.15]
   soc: [0.8, 0.6, 0.3]
   conventions: [tas, eas]   # AIRSPEED_MIN read as true or equivalent airspeed (DEC-1 open): both reported
-  feed_convention: tas      # the one E reads (the register compares AIRSPEED_MIN as TAS)
+  feed_convention: eas      # the one E reads: AIRSPEED_MIN is an equivalent airspeed (O-14, O-23), as in D, C, B1 and FT
 
 FT:                        # forward transition from hover (docs/FT_spec.md)
   # Start: mission.profile.clearance_agl_m above the site; limits mission.profile.fwd_alt_loss_max_m / fwd_alt_gain_max_m.
