@@ -68,8 +68,9 @@ def entry_airspeed(
 ) -> float:
     """True airspeed at the AIRBRAKE entry: the exit rule max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED).
 
-    The repo compares AIRSPEED_MIN as a true airspeed (`"tas"`, the rule's value is returned as
-    is); `"eas"` reads it as an equivalent airspeed and converts at the scenario density (RC5).
+    ArduPilot compares AIRSPEED_MIN as an equivalent airspeed (O-14, O-23), so `"eas"` (the value
+    in study.yaml) converts the rule's value at the scenario density. `"tas"` returns it as is and
+    is kept so runs made before 2026-10-27 reproduce (RC5).
     """
     v = max(airspeed_min - 2.0, q_assist_speed)
     if convention == "tas":

@@ -241,9 +241,10 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
   is the TECS/navigation pitch demand at the AIRBRAKE exit, from a SITL run or a flight log; each
   degree adds about 0.05 m/s² to `a_eq`). `airbrake_entry_state` builds that state.
 * **The entry speed comes from the airspeed exit rule only**: `entry_airspeed` returns
-  `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)` as a true airspeed. `entry_convention: tas` reads
-  `AIRSPEED_MIN` as a true airspeed (as the controller does today), `eas` as an equivalent one
-  (open question RC5). The ground speed is the air speed minus the headwind.
+  `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)` as a true airspeed. `entry_convention: eas` (set in
+  `study.yaml` since 2026-10-27, O-14/O-23) reads `AIRSPEED_MIN` as an equivalent airspeed and converts
+  it to the true airspeed the model integrates; `tas` reads it as a true airspeed and is kept so old
+  runs reproduce. The ground speed is the air speed minus the headwind.
 * **The pitch limit is ArduPilot's** (O-04): it ramps from `max(theta_fw0, 0)` to
   `min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG)` over `Q_BACKTRANS_MS`, clock from `t = 0`; the initial
   pitch is `theta_fw0`. `Q_BCK_PIT_LIM` is a constant cap by default; `pit_lim_mode: airspeed`
