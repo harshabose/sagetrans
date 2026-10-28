@@ -7,6 +7,17 @@
 > 1. **The repo's own `stage_d` run** with the real `study.yaml`, `scenarios.yaml`, `vehicle.yaml`, `controller.yaml` and `mission.yaml`, loaded with `io.inputs.load_inputs` in draft mode (one draft reason, no register fallbacks). Used in 4.3, 5.3 and 6.0. Ensemble: $n = 32$, seed 8, entry ground speeds 16 and 20.9 m/s, 5th percentile. Not edited, not tuned.
 > 2. **My single-case experiments** (section 6.1 onwards): one worked case, $\rho = 1.058$ kg/m³ (1500 m ISA, scenario S-07), SoC 0.8, nominal mass 26.664 kg, rotors spun at hover, pusher at zero, $\theta_A = 30°$, $\theta_P = 35°$ (effective cap 30°), $T_{bt} = 3$ s, entry **17 m/s** ground speed. Running this case through the repo loader gives the same numbers as my hand-copied setup (54.3 m, $a_{eq}$ = 2.65, gain 6.88 m, final $v_h$ −5.07 m/s). The ramp variants (6.2), the lift-aware controller and the gain sweeps (6.3, 7.2) are **experiments, not repo changes**. _Refreshed after the real configs became available. An earlier version of this note used my own assumed ensemble axes and a 17 m/s ground-speed entry; where that changed a conclusion it is stated in 4.3._
 
+> [!warning] Fix implemented on branch `feat/analysis-d-ardupilot-braking` (26 Oct 2026)
+> The redesign is written in [`D_fix_spec.md`](D_fix_spec.md) and has been implemented. Every result below describes the controller and ensemble before the fix; the new D tables read differently. The repo run on the real configs gives `a_rec_pct` 2.09 (TAS), `a_rec_min` 1.99 and 17 of 32 samples below their stall speed. Settled by the owner:
+>
+> - **Entry at AIRBRAKE exit** (rotors already spun and carrying what the wing does not, pusher off). The entry speed comes only from the airspeed exit rule `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`; no free entry-speed axis in the headline results.
+> - **Pitch limit as ArduPilot** (7.1, D-1): ramp from `max(last FW pitch, 0)` to the cap over `Q_BACKTRANS_MS`, clock from AIRBRAKE exit, default start pitch `theta_fw0 = 0` (placeholder, about 0.05 m/s^2 of `a_eq` per degree). `Q_BCK_PIT_LIM` stays a constant cap with a flag for the airspeed-scaled form.
+> - **Feed-forward** (7.3): `ff_mode: repo | lift_aware`, weak altitude gains left alone. At 17 m/s lift-aware gives altitude gain 0.65 m and end sink -0.5 m/s, against 6.9 m and -5.1 m/s today, with `a_eq` about unchanged (2.65). No spool dynamics or actuator lag by default.
+> - **Alpha**: reporting and rotor-load checks always on; enforcement is a flag, off by default. The default numbers describe a **stalled wing** (alpha up to 57 deg for 2.5 to 3.5 s); holding alpha to 9.1 deg gives `a_eq` about 1.3.
+> - **New ensemble** (Sobol plus corners, headwind carried through ground speed), `E.a_plan_fallback_ms2` and `a_plan_source` for E's interface. Expected with `"tas"`: `a_rec_pct` about 2.10 and 17 of 32 samples below their 1g stall speed; with `"eas"` about 2.19 and none.
+>
+> Open: DEC-3, DEC-1 (the entry convention moves the ensemble), where the real `theta_fw0` comes from (SITL or flight log), and whether AIRBRAKE really holds altitude without the wing term (O-03). Sections 7.1, 7.3 to 7.5 of this note are the problem statement the spec answers.
+
 ---
 
 ## 1. What question D answers, and where it sits

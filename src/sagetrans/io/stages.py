@@ -430,6 +430,13 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
             varies = len(set(xs)) > 1 and len(set(ys)) > 1
             rho_s = float(stats.spearmanr(xs, ys).statistic) if varies else math.nan
             spear[f"spearman_{ax}"] = _num(rho_s)
+        gs = [float(x["V0_ground_ms"]) for x in erows]
+        hw = [float(x["headwind_ms"]) for x in erows]
+        va = [float(x["V0_air_ms"]) for x in erows]
+        v_lo, v_hi = min(va), max(va)
+        air_txt = f"{v_lo:.1f}" if v_hi - v_lo < 0.05 else f"{v_lo:.1f} to {v_hi:.1f}"
+        covers = (f"ground speeds {min(gs):.1f} to {max(gs):.1f} m/s (air speed {air_txt}, "
+                  f"headwind {min(hw):+.1f} to {max(hw):+.1f})")  # fmt: skip
         out["tables"]["D_recommendation"] = [{
             "n": rec.ensemble_n, "seed": rec.ensemble_seed, "n_corners": len(corner),
             "convention": c.entry_convention, "percentile": rec.percentile,
@@ -441,9 +448,52 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
             "min_set_by": where(min(ok, key=by_a)),
             "worst_corner": where(min(ok_corner, key=by_a)) if ok_corner else "",
             **spear,
+            "ground_speed_min_ms": min(gs), "ground_speed_max_ms": max(gs),
+            "headwind_min_ms": min(hw), "headwind_max_ms": max(hw), "covers": covers,
+            "a_rec_design_ms2": "",
         }]  # fmt: skip
         out["a_rec"], out["a_rec_pct"], out["pct"] = a_min, pct, rec.percentile
         out["a_rec_ci"] = (lo, hi)
+
+        # -- a_rec as a curve over the ground speed at the AIRBRAKE exit: the air speed is the
+        # entry rule's, so the headwind is the air speed minus the ground speed (a negative value
+        # is a tailwind); every named scenario x mass factor runs at each speed
+        curve: Table = []
+        for vg in c.curve.ground_speeds_ms:
+            done: list[tuple[str, float, float, braking.BrakingResult, dict[str, Any]]] = []
+            n_runs = 0
+            for name in c.scenarios:
+                for mf in c.mass_factors:
+                    sc = dataclasses.replace(inp.scenarios[name], mass_kg=vp.m * mf)
+                    v_air = entry(sc)
+                    sc = dataclasses.replace(sc, headwind_ms=v_air - vg)
+                    r, fl, _ = run(sc, base_bp, v_air)
+                    n_runs += 1
+                    if not math.isnan(r.a_eq):
+                        done.append((f"{name} x{mf:g}", sc.headwind_ms, v_air, r, fl))
+            row: dict[str, Any] = {"ground_speed_ms": vg, "n_runs": n_runs,
+                                   "n_nan": n_runs - len(done)}  # fmt: skip
+            if not done:
+                curve.append({**row, "note": "no run reached the end speed"})
+                continue
+            a_all = [d[3].a_eq for d in done]
+            who, hw_min, v_air_min, r_min, _ = min(done, key=lambda d: d[3].a_eq)
+            curve.append({
+                **row, "headwind_ms": hw_min, "V0_air_ms": v_air_min, "a_rec_min_ms2": r_min.a_eq,
+                "set_by": who, "a_eq_median_ms2": float(np.median(a_all)),
+                "a_eq_max_ms2": max(a_all), "x_at_min_m": _num(r_min.x_actual),
+                "t_stop_at_min_s": r_min.t_stop,
+                "excursion_max_m": max(max(d[3].sim.metrics["altitude_gain"],
+                                           d[3].sim.metrics["altitude_loss"]) for d in done),
+                "n_sinking": sum(1 for d in done if d[4]["sinking"]), "note": "",
+            })  # fmt: skip
+        out["tables"]["D_a_rec_curve"] = curve
+        design = rec.design_ground_speed_ms
+        if design is not None:
+            have = [r for r in curve if r.get("a_rec_min_ms2", "") != ""]
+            out["tables"]["D_recommendation"][0]["a_rec_design_ms2"] = braking.curve_value(
+                [float(r["ground_speed_ms"]) for r in have],
+                [float(r["a_rec_min_ms2"]) for r in have], design)  # fmt: skip
 
         # -- trade curve: first named scenario, entry from the airspeed rule, ground = air - wind
         sc0 = inp.scenarios[c.scenarios[0]]
@@ -488,6 +538,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         cases += [("enforce_alpha", {"alpha_cap": alpha_cap})]
         with_ensemble = {"base", "ff_mode_repo", "enforce_alpha"}
         sens_rows: Table = []
+        # the vehicle model's own rotor lag at this density and SoC; rotor_lag_s adds in series
+        tau_model = braking.rotor_speed_tau(scn.vehicle_for(vp), scn.rho, scn.soc)
         for case, over in cases:
             bps = dataclasses.replace(base_bp, **over)
             r, fl, _ = run(scn, bps, v_air_n)
@@ -497,7 +549,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                 "alt_gain_m": m["altitude_gain"], "alt_loss_m": m["altitude_loss"],
                 **cells({k: fl[k] for k in ("vh_end_ms", "alpha_max_gated_deg",
                                             "t_above_alpha_08_s", "t_above_alpha_s_s")}),
-                "a_rec_pct_ensemble_ms2": "",
+                "a_rec_pct_ensemble_ms2": "", "rotor_lag_s": bps.rotor_lag_s,
+                "tau_rotor_model_s": tau_model, "tau_total_s": bps.rotor_lag_s + tau_model,
             }  # fmt: skip
             if case in with_ensemble:
                 _, ca, _ = ensemble(bps)

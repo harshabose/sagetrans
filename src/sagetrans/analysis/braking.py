@@ -20,7 +20,7 @@ from sagetrans.control.ardupilot_like import BackTransitionParams, LiftFF, Posit
 from sagetrans.dynamics import events as ev
 from sagetrans.dynamics import trim
 from sagetrans.dynamics.simulate import Result, simulate
-from sagetrans.physics import aero
+from sagetrans.physics import aero, motor, rotor
 from sagetrans.physics.params import VehicleParams
 from sagetrans.physics.vehicle import CasadiVehicle
 
@@ -98,6 +98,43 @@ def airbrake_entry_state(
     om0 = trim.rotor_speed_for_thrust(t0, 0.0, 0.0, scen.rho, vps)
     x0 = np.array([0.0, scen.altitude_amsl_m, v0_ground, 0.0, bp.theta_fw0, 0.0, om0, 0.0, 0.0])
     return x0, v0_ground
+
+
+def rotor_speed_tau(vp: VehicleParams, rho: float, soc: float) -> float:
+    """Time constant [s] of the rotor-speed response to a small throttle change at hover.
+
+    Linearises omega_dot = (Q_motor(omega, delta, V_bus) - Q_aero(omega)) / I_rot at the hover speed
+    (throttle and bus voltage from `trim.hover_state`, the bus voltage held) with a central
+    difference of relative size 1e-3, and returns -1 / d(omega_dot)/d(omega). It scales linearly
+    with I_rot. This is the vehicle model's own lag; `rotor_lag_s` adds to it in series.
+    """
+    hs = trim.hover_state(vp, soc=soc, rho=rho)
+    omega = trim.hover_omega(vp, rho)
+    d_eff = float(motor.effective_throttle(hs.delta_r_cmd, vp.motor_r))
+
+    def omega_dot(w: float) -> float:
+        q_m = float(motor.torque(motor.current(d_eff, hs.v_bus, w, vp.motor_r), vp.motor_r))
+        q_a = float(rotor.lift_rotor(w, 0.0, 0.0, rho, vp.rotor)[1])
+        return (q_m - q_a) / vp.rotor.I_rot
+
+    h = 1e-3 * omega
+    slope = (omega_dot(omega + h) - omega_dot(omega - h)) / (2.0 * h)
+    return -1.0 / slope
+
+
+def curve_value(ground_speeds: list[float], values: list[float], v_ground: float) -> float:
+    """Linear interpolation of the recommendation curve `a_rec(V_ground)` at `v_ground`.
+
+    `ground_speeds` need not be sorted. A speed outside the curve is an error: the curve says
+    nothing there, so there is no extrapolation.
+    """
+    if len(ground_speeds) != len(values) or not ground_speeds:
+        raise ValueError("curve_value needs equal, non-empty speed and value lists")
+    pts = sorted(zip(ground_speeds, values, strict=True))
+    lo, hi = pts[0][0], pts[-1][0]
+    if not lo <= v_ground <= hi:
+        raise ValueError(f"ground speed {v_ground:g} m/s is outside the curve ({lo:g} to {hi:g})")
+    return float(np.interp(v_ground, [p[0] for p in pts], [p[1] for p in pts]))
 
 
 def braking_flags(

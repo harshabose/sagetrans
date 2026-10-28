@@ -16,6 +16,10 @@ AnalysisName = Literal["A", "D", "F", "E", "Q2", "C", "B2", "B1", "sensitivity"]
 ALL_ANALYSES: tuple[str, ...] = ("A", "D", "F", "E", "Q2", "C", "B2", "B1", "sensitivity")
 
 
+# the ground speed at which D's runs end (braking.measure_a_eq `v_f`); a test keeps them equal
+END_SPEED_MS = 1.0
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -91,11 +95,32 @@ class DRecCfg(_Strict):
     percentile: float = Field(5.0, gt=0.0, lt=100.0)
     corners: bool = True  # also run the 8 vertices of altitude x mass x headwind
     n_boot: int = Field(1000, ge=10)  # bootstrap resamples for the percentile's interval
+    # the ground speed (m/s) at which the owner reads the curve for a single number; null = none.
+    # It must lie inside D.curve.ground_speeds_ms (checked in DCfg)
+    design_ground_speed_ms: float | None = Field(None, gt=0.0)
 
     @model_validator(mode="after")
     def _power_of_two(self) -> DRecCfg:
         if self.ensemble_n & (self.ensemble_n - 1):
             raise ValueError(f"ensemble_n must be a power of two, not {self.ensemble_n}")
+        return self
+
+
+class DCurveCfg(_Strict):
+    """`D_a_rec_curve`: the recommendation as a function of the ground speed at the exit."""
+
+    ground_speeds_ms: list[float] = [5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 15.0, 16.0, 18.0, 20.0]
+
+    @model_validator(mode="after")
+    def _above_end_speed(self) -> DCurveCfg:
+        if not self.ground_speeds_ms:
+            raise ValueError("D.curve.ground_speeds_ms is empty")
+        if min(self.ground_speeds_ms) <= END_SPEED_MS:
+            raise ValueError(
+                f"D.curve.ground_speeds_ms must all exceed the end speed {END_SPEED_MS:g} m/s"
+            )
+        if len(set(self.ground_speeds_ms)) != len(self.ground_speeds_ms):
+            raise ValueError("D.curve.ground_speeds_ms has duplicates")
         return self
 
 
@@ -108,7 +133,7 @@ class DSensCfg(_Strict):
     """Cases of `D_sensitivity`, on the first named scenario at nominal mass."""
 
     theta_fw0_deg_sweep: list[float] = [0.0, 4.0, 8.0, 12.0]
-    lag_s_sweep: list[float] = [0.0, 0.25, 0.5]
+    lag_s_sweep: list[float] = [0.0, 0.1, 0.25, 0.5]
     lift_tau_s_sweep: list[float] = [0.0, 0.5]
     lift_scale_sweep: list[float] = [0.8, 1.2]
 
@@ -128,12 +153,24 @@ class DCfg(_Strict):
     enforce_alpha: bool = False  # hold the wing angle of attack to the 0.8 C_L,max band top
     alpha_gate_ms: float = Field(5.0, ge=0.0)  # below this airspeed alpha is not judged
     sink_tol_ms: float = Field(0.5, ge=0.0)  # end sink rate that counts as sinking (placeholder)
-    rotor_lag_s: float = Field(0.0, ge=0.0)  # sensitivity only
+    rotor_lag_s: float = Field(0.0, ge=0.0)  # the lumped actuator lag; a sensitivity until measured
     # diagnostic speed grid (D_a_eq_speed), to set beside A's windows; not the headline
     v0_eas_ms: list[float] = [16.0, 22.0]
     sens: DSensCfg = DSensCfg()
     recommendation: DRecCfg = DRecCfg()
     trade: DTradeCfg = DTradeCfg()
+    curve: DCurveCfg = DCurveCfg()
+
+    @model_validator(mode="after")
+    def _design_speed_on_the_curve(self) -> DCfg:
+        v = self.recommendation.design_ground_speed_ms
+        lo, hi = min(self.curve.ground_speeds_ms), max(self.curve.ground_speeds_ms)
+        if v is not None and not lo <= v <= hi:
+            raise ValueError(
+                f"D.recommendation.design_ground_speed_ms {v:g} is outside the curve "
+                f"({lo:g} to {hi:g} m/s)"
+            )
+        return self
 
 
 class FCfg(_Strict):
