@@ -194,8 +194,13 @@ def q2_worst(cells: list[Q2Cell], conv: str) -> Q2Cell:
 
 
 def site_mission(inp: StudyInputs, site: float) -> energy.MissionProfile:
-    """The mission at a site, with `v_trans` as a true airspeed (Q2.feed_convention)."""
-    return energy.mission_at_site(inp.mission, site, inp.study.Q2.feed_convention)
+    """The mission at a site, with `v_trans` as a true airspeed (Q2.feed_convention) and the
+    rotor fade of the register's (or the recommended) `Q_TRANSITION_MS`."""
+    mp = energy.mission_at_site(inp.mission, site, inp.study.Q2.feed_convention)
+    return dataclasses.replace(
+        mp, q_transition_s=float(inp.start_params["q_transition"]),
+        wing_share_handover=inp.study.E.fade_wing_share,
+    )
 
 
 # ---- E: the mission budget per site -------------------------------------------------------------
@@ -1303,8 +1308,12 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
     }  # fmt: skip
 
 
-def with_settings(inp: StudyInputs, airspeed_min: float, tkoff_thr_max: float) -> StudyInputs:
-    """The inputs with `AIRSPEED_MIN` and `TKOFF_THR_MAX` replaced everywhere they are read."""
+def with_settings(
+    inp: StudyInputs, airspeed_min: float, tkoff_thr_max: float, q_transition_s: float | None = None
+) -> StudyInputs:
+    """The inputs with `AIRSPEED_MIN`, `TKOFF_THR_MAX` and (if given) `Q_TRANSITION_MS` replaced
+    everywhere they are read."""
+    q = inp.start_params["q_transition"] if q_transition_s is None else q_transition_s
     return dataclasses.replace(
         inp, airspeed_min=airspeed_min, tkoff_thr_max=tkoff_thr_max,
         tkoff_thr_max_raw=tkoff_thr_max,
@@ -1312,16 +1321,18 @@ def with_settings(inp: StudyInputs, airspeed_min: float, tkoff_thr_max: float) -
         forward=dataclasses.replace(inp.forward, airspeed_min_eas=airspeed_min,
                                     tkoff_thr_max=tkoff_thr_max),
         start_params={**inp.start_params, "airspeed_min": airspeed_min,
-                      "tkoff_thr_max": tkoff_thr_max},
+                      "tkoff_thr_max": tkoff_thr_max, "q_transition": q},
     )
 
 
 def rec_task_id(optimum: dict[str, float]) -> str:
-    """`basics_rec:<AIRSPEED_MIN m/s>:<TKOFF_THR_MAX %>`: D, E and Q2 at the recommended settings.
+    """`basics_rec:<AIRSPEED_MIN m/s>:<Q_TRANSITION_MS>:<TKOFF_THR_MAX %>`: D, E and Q2 at the
+    recommended settings (E's rotor fade reads `Q_TRANSITION_MS`).
 
     The FT optimum's values are in the id, so a changed optimum is a new cache key (a re-run).
     """
-    return f"basics_rec:{round(optimum['airspeed_min'])}:{round(optimum['tkoff_thr_max'] * 100)}"
+    return (f"basics_rec:{round(optimum['airspeed_min'])}:{round(optimum['q_transition'] * 1e3)}"
+            f":{round(optimum['tkoff_thr_max'] * 100)}")
 
 
 def task_basics_rec(inp: StudyInputs, arg: str) -> dict[str, Any]:
@@ -1331,18 +1342,19 @@ def task_basics_rec(inp: StudyInputs, arg: str) -> dict[str, Any]:
     `register` case stays the headline. The sensitivity is not repeated: it stays at the
     register values.
     """
-    v, thr = (int(x) for x in arg.split(":"))
+    v, q_ms, thr = (int(x) for x in arg.split(":"))
     keep = [a for a in inp.study.analyses if a in ("D", "E", "Q2")]
     study = inp.study.model_copy(update={"analyses": keep})
-    inp2 = dataclasses.replace(with_settings(inp, float(v), thr / 100.0), study=study)
+    inp2 = dataclasses.replace(with_settings(inp, float(v), thr / 100.0, q_ms / 1e3), study=study)
     out = task_basics(inp2)
     tables = {f"{k}_recommended": rows for k, rows in out["tables"].items()
               if k.startswith(("E_", "Q2_"))}
     return {"tables": tables, "errors": out.get("errors", []), "airspeed_min": float(v),
-            "tkoff_thr_max": thr / 100.0,
-            "notes": [f"E and Q2 at the FT optimum's AIRSPEED_MIN {v} m/s and TKOFF_THR_MAX "
-                       f"{thr} %: D is re-run at that entry speed, so E's back transition and its "
-                       "planned deceleration follow the recommended settings"]}
+            "q_transition_s": q_ms / 1e3, "tkoff_thr_max": thr / 100.0,
+            "notes": [f"E and Q2 at the FT optimum's AIRSPEED_MIN {v} m/s, Q_TRANSITION_MS "
+                       f"{q_ms} and TKOFF_THR_MAX {thr} %: D is re-run at that entry speed, so E's "
+                       "back transition and its planned deceleration follow the recommended "
+                       "settings"]}
 
 
 def forward_runs(

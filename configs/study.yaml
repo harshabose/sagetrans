@@ -78,6 +78,7 @@ E:                         # energy budget
   a_plan_fallback_ms2: 2.5    # Q_TRANS_DECEL used when D gives no recommendation
   a_fwd_mode: case            # forward-transition acceleration: case (Q2 at E's site) | worst (Q2 grid) | mission
   a_fwd_metric: min           # min (worst over speed) | equiv (distance-equivalent constant a)
+  fade_wing_share: 0.4        # ASSUMED: wing share of the weight at the hand-over (FT's simulated mean 0.39 to 0.44); the rotors carry the rest through the Q_TRANSITION_MS fade
 
 Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX, rest to AIRSPEED_MIN
   altitudes_m: [0, 1500, 2500, 5000]

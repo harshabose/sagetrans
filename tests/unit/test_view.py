@@ -381,13 +381,16 @@ def test_the_e_chapter_explains_what_the_fwd_energy_ratio_means(tmp_path):
     write_table(tmp_path, "E_cases", [
         {"case": "register", "site_amsl_m": 0.0, "mission": "one_way", "airspeed_min_ms": 17.0,
          "tkoff_thr_max": 0.8, "max_range_km": 92.0, "e_fwd_kJ": 37.4, "e_fwd_time_s": 10.0,
-         "e_fwd_distance_m": 85.0, "ft_mean_energy_kJ": 62.1, "e_fwd_over_ft": 0.60},
+         "e_fwd_distance_m": 85.0, "ft_site_energy_kJ": 46.4, "ft_site_members": 9,
+         "e_fwd_over_ft": 0.81},
         {"case": "register", "site_amsl_m": 5000.0, "mission": "one_way", "airspeed_min_ms": 17.0,
          "tkoff_thr_max": 0.8, "max_range_km": 94.1, "e_fwd_kJ": 124.4, "e_fwd_time_s": 36.7,
-         "e_fwd_distance_m": 404.0, "ft_mean_energy_kJ": 62.1, "e_fwd_over_ft": 2.0}])  # fmt: skip
+         "e_fwd_distance_m": 404.0, "ft_site_energy_kJ": 82.0, "ft_site_members": 12,
+         "e_fwd_over_ft": 1.5}])  # fmt: skip
     write_record(tmp_path, schema_version=2)
     html = build_html(load(tmp_path))
     e = html.split('id="e"')[1].split("</section>")[0]
-    assert "e_fwd_over_ft" in e and "0.6" in e and "2" in e
-    assert "averaged over FT" in e and "rises with the site altitude" in e
-    assert "not a like-for-like comparison" in e
+    assert "e_fwd_over_ft" in e and "ft_site_energy_kJ" in e and "ft_site_members" in e
+    assert "nearest to that site" in e and "rotor fade of Q_TRANSITION_MS" in e
+    assert "like-for-like size check by site" in e
+    assert "averaged over FT" not in e  # the all-altitude ensemble mean is gone

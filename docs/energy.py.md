@@ -22,13 +22,21 @@
 >   the two speeds at the register settings: 0.82 Wh at 0 m, 0.94 Wh at 1500 m, 1.05 Wh at 2500 m, 1.36 Wh at 5000 m
 >   (21.1 -> 15.0, 22.7 -> 16.2, 23.9 -> 17.0, 27.3 -> 19.4 m/s TAS), about 0.05 to 0.08 km of range; the distance
 >   covered while slowing is not estimated. Not fixed: how to count it (a glide that slows, or a level deceleration) is a
->   modelling choice for the owner.
+>   modelling choice for the owner. It is now a stated simplification in `energy.py` and
+>   `analysis/README.md` (kinetic energy dissipated by drag, not charged; distance not counted; at most 0.08 km).
 > - **The stopping run is D's (2026-10-28, review fix B3).** E's back transition used `inp.controller` (the register
 >   alone) and a level, rotors-at-hover start. It now runs `stages.d_exit_params` (the register plus the D block: exit pitch
 >   `theta_fw0`, `rotor_lag_s`, the lift feed-forward, the alpha gate and cap) from `braking.airbrake_entry_state`, the run D,
 >   C and B1 use. Back transition at the register settings, one way: 5.52 -> 5.38 Wh, 7.5 -> 6.8 s, 75.9 -> 72.5 m at
 >   0 m; 8.62 -> 8.49 Wh, 9.8 -> 8.9 s, 129.4 -> 121.9 m at 5000 m; maximum range +0.002 to +0.007 km. The sensitivity's
 >   budget uses the same controller.
+> - **Rotor fade in the forward transition (2026-10-29).** E's forward segment stopped at `AIRSPEED_MIN`; ArduPilot then
+>   freezes the rotor throttle and fades it linearly to zero over `Q_TRANSITION_MS`, and FT simulates that. `energy.fade_estimate`
+>   adds the fade's energy, time and distance to the segment: the rotors start from the throttle that carries `1 - E.fade_wing_share`
+>   of the weight (0.4 wing share, assumed from FT's mean 0.39 to 0.44; FT's measured `last_throttle` 0.44 to 0.55 agrees),
+>   the same rotor and motor model as FT, force balance at the hand-over speed (wing lift = W minus rotor thrust, pusher
+>   balances the drag). The register fades over 5 s, the recommended case over the FT optimum's value (`basics_rec` carries it
+>   in its id). `E_cases` compares E with FT's members grouped by the nearest site, same case: like-for-like by site.
 > - **Recommended case (2026-10-28).** When FT runs with E or Q2, `basics_rec:<AIRSPEED_MIN>:<TKOFF_THR_MAX %>` repeats
 >   D, E and Q2 at the FT optimum's snapped values (tables `E_*_recommended`, `Q2_*_recommended`, and `E_cases` side by
 >   side with the register case, which stays the headline). The values are in the task id, so a new FT optimum re-runs it.

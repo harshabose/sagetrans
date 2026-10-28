@@ -191,11 +191,42 @@ def grid_near_best(rows: list[dict[str, Any]], frac: float = NEAR_BEST) -> list[
     return sorted(q for q, j in costs if j <= best * (1.0 + frac) + 1e-12)
 
 
+def ft_site_energy(
+    runs: list[dict[str, Any]], case: str, sites: list[float]
+) -> dict[float, dict[str, float]]:
+    """FT's members of one case grouped by the nearest E site: mean energy of the whole simulated
+    transition (hover to the end of the fade), of its wait and fade parts, and the member count.
+
+    FT's ensemble spans altitudes 0 to 5000 m, so only the members near a site say anything about
+    E at that site; the other axes (mass, ISA, headwind, SoC) still vary inside a group.
+    """
+    out: dict[float, dict[str, float]] = {}
+    for site in sites:
+        members = [
+            r for r in runs
+            if r.get("case") == case and isinstance(r.get("altitude_m"), int | float)
+            and min(sites, key=lambda s: abs(s - float(r["altitude_m"]))) == site
+            and all(isinstance(r.get(k), int | float) and math.isfinite(float(r[k]))
+                    for k in ("energy_kJ", "E_wait_kJ", "E_fade_kJ"))
+        ]
+        if members:
+            n = len(members)
+            out[site] = {
+                "energy_kJ": sum(float(r["energy_kJ"]) for r in members) / n,
+                "wait_kJ": sum(float(r["E_wait_kJ"]) for r in members) / n,
+                "fade_kJ": sum(float(r["E_fade_kJ"]) for r in members) / n,
+                "members": float(n),
+            }
+    return out
+
+
 def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any]) -> Table:
     """E at the register and at the recommended settings, side by side, one row per case, site and
-    mission, with FT's mean energy of the whole forward transition at the same settings as an
-    information column (not a gate)."""
-    ft = {r["case"]: r for r in tables.get("FT_params", [])}
+    mission. E's forward transition (the wait to AIRSPEED_MIN plus the rotor fade) is set beside
+    FT's simulation of the same case, FT's members grouped by the nearest site, so the ratio is
+    like-for-like by site (information, not a gate)."""
+    sites = [float(s) for s in inp.study.E.sites_amsl_m]
+    runs = list(tables.get("FT_runs", []))
     rows: Table = []
     for case, suffix, ft_case, v, thr in (
         ("register", "", "register", inp.airspeed_min,
@@ -206,12 +237,14 @@ def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any
         for r in tables.get("E_segments" + suffix, []):
             if r.get("segment") == "fwd_transition":
                 fwd.setdefault((r["site_amsl_m"], r["mission"]), r)
-        ft_e = ft.get(ft_case, {}).get("mean_energy_kJ")
+        ft_site = ft_site_energy(runs, ft_case, sites)
         for s in tables.get("E_summary" + suffix, []):
             f = fwd.get((s["site_amsl_m"], s["mission"]), {})
             e_kj = f["energy_Wh"] * 3.6 if isinstance(f.get("energy_Wh"), int | float) else None
+            fs = ft_site.get(float(s["site_amsl_m"]), {})
+            ft_e = fs.get("energy_kJ")
             ratio: float | str = ""
-            if e_kj is not None and isinstance(ft_e, int | float) and ft_e:
+            if e_kj is not None and ft_e:
                 ratio = e_kj / ft_e
             rows.append({
                 "case": case, "site_amsl_m": s["site_amsl_m"], "mission": s["mission"],
@@ -219,7 +252,9 @@ def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any
                 "max_range_km": s.get("max_range_km", ""),
                 "e_fwd_kJ": "" if e_kj is None else e_kj, "e_fwd_time_s": f.get("time_s", ""),
                 "e_fwd_distance_m": f.get("distance_m", ""),
-                "ft_mean_energy_kJ": ft_e if ft_e is not None else "",
+                "ft_site_energy_kJ": ft_e if ft_e is not None else "",
+                "ft_site_wait_kJ": fs.get("wait_kJ", ""), "ft_site_fade_kJ": fs.get("fade_kJ", ""),
+                "ft_site_members": int(fs["members"]) if fs else "",
                 "e_fwd_over_ft": ratio,
             })
     return rows
@@ -428,11 +463,13 @@ def assemble(
         sections["E and Q2 at the recommended settings"] = (  # the register case stays the headline
             "AIRSPEED_MIN and TKOFF_THR_MAX of the FT optimum instead of the register's; the "
             "register case above stays the headline. D is re-run at the recommended entry speed. "
-            "`ft_mean_energy_kJ` is the mean energy of FT's whole simulated forward transition at "
-            "the same settings, averaged over FT's ensemble (altitudes 0 to 5000 m, masses, ISA, "
-            "headwinds, SoC); `e_fwd_over_ft` is E's quasi-steady estimate at ONE site divided by "
-            "it, so it rises with the site altitude by construction: information only, not a "
-            "like-for-like comparison and not a check."
+            "E's forward transition is the quasi-steady wait to AIRSPEED_MIN plus the rotor fade "
+            "of Q_TRANSITION_MS. `ft_site_energy_kJ` is the mean energy of FT's simulated "
+            "transition (hover to the end of the fade) over the FT members nearest to the "
+            "site, in the same case (`ft_site_wait_kJ` and `ft_site_fade_kJ` its parts, "
+            "`ft_site_members` how many); `e_fwd_over_ft` is E divided by it. The "
+            "members of a group still differ in mass, ISA, headwind, SoC and by up to "
+            "about 1 km of altitude: information, not a check."
             + "\n\n" + md_table(tables["E_cases"]))
 
     c_task = task_results.get("C", {})

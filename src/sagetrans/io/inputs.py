@@ -74,7 +74,8 @@ NATIVE_DIVISOR = {"vehicle.battery.capacity_Ah_pack": 3600.0}  # coulombs -> Ah
 
 MISSION_OPTIONAL = {"v_cruise", "v_climb", "v_glide"}  # absent: best-range / the cruise speed
 MISSION_FROM_CONTROLLER = {"v_trans"}  # taken from ardupilot.AIRSPEED_MIN, not mission.yaml
-MISSION_FROM_STUDY = {"cruise_amsl_m", "ground_amsl_m"}  # set per site by analysis E
+# set per site by analysis E (the fade fields: the register's Q_TRANSITION_MS, E.fade_wing_share)
+MISSION_FROM_STUDY = {"cruise_amsl_m", "ground_amsl_m", "q_transition_s", "wing_share_handover"}
 
 # controller.yaml: ardupilot name -> (BackTransitionParams / decision-dict key, kind)
 ARDUPILOT_PARAMS = (

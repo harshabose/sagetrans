@@ -187,6 +187,10 @@ class ECfg(_Strict):
     # grid ("worst"), or the value in mission.yaml ("mission")
     a_fwd_mode: Literal["case", "worst", "mission"] = "case"
     a_fwd_metric: Literal["min", "equiv"] = "min"  # worst over speed, or distance-equivalent
+    # share of the weight the wing carries at the hand-over; the rotors carry the rest through the
+    # fade of Q_TRANSITION_MS. ASSUMED: the mean of FT's simulated hand-overs (FT_runs,
+    # wing_share_handover 0.39 to 0.44 for the register and the recommended settings)
+    fade_wing_share: float = Field(0.4, gt=0.0, le=1.0)
 
 
 class Q2Cfg(_Strict):

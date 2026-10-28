@@ -742,18 +742,20 @@ def build_e(c: Ctx) -> Out:
     cases = c.rows("E_cases")
     if cases:
         cols = ["case", "site_amsl_m", "mission", "airspeed_min_ms", "tkoff_thr_max", "max_range_km",
-                "e_fwd_kJ", "e_fwd_time_s", "e_fwd_distance_m", "ft_mean_energy_kJ", "e_fwd_over_ft"]
+                "e_fwd_kJ", "e_fwd_time_s", "e_fwd_distance_m", "ft_site_energy_kJ",
+                "ft_site_wait_kJ", "ft_site_fade_kJ", "ft_site_members", "e_fwd_over_ft"]
         o.figures.append(panelbox(
             "Register against recommended settings",
             "E repeated at the AIRSPEED_MIN and TKOFF_THR_MAX of the FT optimum (D re-run at that entry "
             "speed). The register case is the headline above. The last two columns are information "
-            "only. ft_mean_energy_kJ is the mean energy of FT's whole simulated forward transition "
-            "(hover, wait, hand-over, fade) at the same settings, averaged over FT's ensemble: "
-            "altitudes 0 to 5000 m, masses, ISA offsets, headwinds and SoC. e_fwd_over_ft is E's "
-            "quasi-steady estimate at ONE site (pusher acceleration over the distance to the "
-            "transition speed) divided by that ensemble mean. It is below 1 at low sites and "
-            "rises with the site altitude because E is read at the site and FT is not; it is not "
-            "a like-for-like comparison and not a check. E is not changed for it.",
+            "only. e_fwd_kJ is E's forward transition: the quasi-steady wait to AIRSPEED_MIN plus "
+            "the rotor fade of Q_TRANSITION_MS (the rotors fade from the throttle that carries "
+            "the share of the weight the wing does not, E.fade_wing_share). ft_site_energy_kJ is "
+            "the mean energy of FT's simulated transition (hover to the end of the fade) over the "
+            "FT members nearest to that site in the same case, with its wait and fade parts and "
+            "the member count; e_fwd_over_ft is E divided by it. The members of a group still "
+            "differ in mass, ISA, headwind and SoC and in altitude by up to about 1 km, so the "
+            "ratio is a like-for-like size check by site, not a validation.",
             table_html("E_cases", [k for k in cols if any(k in r for r in cases)], cases),
         ))
         o.tables += [("E_summary_recommended", None), ("E_segments_recommended", None),

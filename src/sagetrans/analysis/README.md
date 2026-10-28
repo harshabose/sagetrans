@@ -443,6 +443,19 @@ E_total = E_to + E_ft + E_climb + E_cruise + E_desc + E_bt + E_land + E_reserve
 
 ### What E computes
 
+* **Stated simplification: the glide-to-exit deceleration.** The descent ends at the glide
+  (cruise) speed, the back transition starts at the AIRBRAKE exit `AIRSPEED_MIN - 2` (15.0 to
+  19.4 m/s TAS against 21.1 to 27.3). The slowing between them is in no segment: its kinetic
+  energy (0.82 to 1.36 Wh) is taken as dissipated by drag, not charged to the battery, and its
+  distance is not counted. At most 0.08 km of range. How to count it is an open modelling choice.
+* **The forward transition has two parts.** The quasi-steady wait to `AIRSPEED_MIN` (constant
+  `a_fwd` from Q2, rotors carrying `W - L`) and the rotor fade of `Q_TRANSITION_MS`: ArduPilot
+  freezes the rotor throttle at the hand-over and fades it linearly to zero. The fade starts from
+  the throttle that carries the share of the weight the wing does not (`E.fade_wing_share`, an
+  assumed 0.4, FT's measured mean at the hand-over), goes through the same rotor and motor model
+  as FT, holds the hand-over speed and keeps force balance (the wing carries `W` minus the rotor
+  thrust, the pusher balances its drag). Register: 5 s; recommended: the FT optimum's value.
+
 * **Two missions per site.** `round_trip`: a loaded outbound leg, the payload drop, an empty
   return leg (`vehicle mass - payload_kg`); each leg has its own take-off, forward transition,
   climb, cruise, glide, back transition and landing, so every fixed segment appears twice and the
