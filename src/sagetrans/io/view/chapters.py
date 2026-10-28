@@ -1399,6 +1399,35 @@ def build_ft(c: Ctx) -> Out:
                 _legend(*case_leg),
             )
         )
+    # 3b. the grid over Q_TRANSITION_MS: the cost of the snapped point at each value
+    grid = sorted((r for r in c.rows("FT_grid") if ok(num(r.get("J_snapped")))),
+                  key=lambda r: r["q_transition_s"])
+    if grid:
+        gtip = ["q_transition_s", "J_snapped", "J_continuous", "J_snapped_minus_continuous",
+                "airspeed_min_eas_ms", "tkoff_thr_max", "tran_pit_max_deg", "seed_spread", "n_flags"]
+        gseries = [ch.Series("best snapped J at each Q_TRANSITION_MS", "s1",
+                             [(r["q_transition_s"], r["J_snapped"]) for r in grid],
+                             [tip(r, gtip) for r in grid],
+                             hollow=[r.get("t12_ok") is False for r in grid])]
+        wins = [r for r in grid if r.get("winner") is True]
+        if wins:
+            gseries.append(ch.Series("winner", "s2", [(r["q_transition_s"], r["J_snapped"])
+                                                     for r in wins], [tip(r, gtip) for r in wins]))
+        failed = [f"{r['q_transition_s']:g} s ({num(r.get('seed_spread')):.1%})" for r in grid
+                  if r.get("t12_ok") is False]
+        o.figures.append(
+            panelbox(
+                "Cost against Q_TRANSITION_MS",
+                "The best snapped cost found with Q_TRANSITION_MS fixed at each value (the other "
+                "three searched, then snapped to ArduPilot's integers). The winner is marked; a "
+                "hollow mark is a point whose three-seed spread is above the T-12 limit"
+                + (": " + ", ".join(failed) if failed else ", none here") + ".",
+                ch.xy_chart(gseries, "Q_TRANSITION_MS [s]", "cost J",
+                            "Cost against Q_TRANSITION_MS"),
+                _legend(("s1", "line", "grid point"),
+                        ("s1", "hollow", "T-12 spread above limit"), ("s2", "line", "winner")),
+            )
+        )
     # 4. scan
     scan = c.rows("FT_scan")
     if scan:

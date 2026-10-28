@@ -324,6 +324,25 @@ class FTScanCfg(_Strict):
     maxiter: int = Field(12, ge=1)
 
 
+class FTGridCfg(_Strict):
+    """`FT_grid` (FT_spec Part 4): Q_TRANSITION_MS fixed on a grid, the other three searched."""
+
+    q_transition_s: list[float] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0]  # the coarse grid
+    # the fine pass: the best coarse point plus these offsets (those outside the bounds are skipped)
+    fine_offsets_s: list[float] = [-1.0, -0.5, 0.5, 1.0]
+    seeds: list[int] = [1, 2, 3]  # the T-12 spread of a point is taken over these
+    maxiter: int = Field(12, ge=1)
+    descent_max_rounds: int = Field(50, ge=1)  # moves of the lattice descent
+
+    @model_validator(mode="after")
+    def _grid(self) -> FTGridCfg:
+        if not self.q_transition_s or any(q < 0.5 or q > 30.0 for q in self.q_transition_s):
+            raise ValueError("FT.grid.q_transition_s: use 0.5 to 30 s (the ArduPilot range)")
+        if len(set(self.q_transition_s)) != len(self.q_transition_s):
+            raise ValueError("FT.grid.q_transition_s has a repeated value")
+        return self
+
+
 class FTSensCfg(_Strict):
     """`FT_sens`: one at a time at the optimum."""
 
@@ -367,6 +386,7 @@ class FTCfg(_Strict):
     weights: FTWeightsCfg = FTWeightsCfg()
     bounds: FTBoundsCfg = FTBoundsCfg()
     scan: FTScanCfg = FTScanCfg()
+    grid: FTGridCfg = FTGridCfg()
     history_scenarios: list[str] = ["S-07", "S-03"]  # histories: optimum and register start
     sens: FTSensCfg = FTSensCfg()
 
@@ -376,6 +396,9 @@ class FTCfg(_Strict):
             raise ValueError("FT.headwind_ms must be [low, high] with low <= high")
         if self.final_ensemble_n < self.ensemble_n:
             raise ValueError("FT.final_ensemble_n must be at least FT.ensemble_n")
+        lo, hi = self.bounds.q_transition_s
+        if any(not lo <= q <= hi for q in self.grid.q_transition_s):
+            raise ValueError("FT.grid.q_transition_s must lie inside FT.bounds.q_transition_s")
         return self
 
 

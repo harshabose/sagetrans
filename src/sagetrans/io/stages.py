@@ -43,6 +43,7 @@ from sagetrans.analysis.ensemble import (
 )
 from sagetrans.analysis.search import Bounds
 from sagetrans.control.ardupilot_like import BackTransitionParams
+from sagetrans.io.gate import T12_SPREAD_MAX
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.settings import END_SPEED_MS
 from sagetrans.physics import aero, battery, motor, rotor
@@ -52,7 +53,8 @@ RHO0 = float(atmosphere.density(0.0))
 Table = list[dict[str, Any]]
 
 # rough wall-clock seconds on a laptop, for scheduling and for the pre-flight estimate
-TASK_COST = {"basics": 60, "C": 330, "FT": 9000, "FT_scan": 2000, "B1": 400, "sensitivity": 220}
+TASK_COST = {"basics": 60, "C": 330, "FT": 300, "FT_grid": 3000, "FT_scan": 2000, "B1": 400,
+             "sensitivity": 220}
 
 
 def tas(eas: float, scen: Scenario) -> float:
@@ -1073,29 +1075,150 @@ def vehicle_with_cl_max(vp: VehicleParams, scale: float) -> VehicleParams:
     return dataclasses.replace(vp, wing=dataclasses.replace(vp.wing, alpha_s=0.5 * (lo + hi)))
 
 
-def task_ft(inp: StudyInputs) -> dict[str, Any]:
-    """Analysis FT: search the four forward-transition parameters, then report.
+# ---- FT: the grid over Q_TRANSITION_MS, the snap to ArduPilot's integers, the report ----------
+def ft_lattice_bounds(inp: StudyInputs) -> dict[str, tuple[float, float]]:
+    """The search bounds of the three lattice variables, by `forward.LATTICE_NAMES`."""
+    b = inp.study.FT.bounds
+    return {"airspeed_min": b.airspeed_min_eas_ms, "tkoff_thr_max": b.tkoff_thr_max,
+            "tran_pit_max": b.q_tran_pit_max_deg}  # fmt: skip
 
-    Tables: `FT_params` (the optimum, the register start and the ArduPilot default), `FT_search`,
-    `FT_runs` (every member of each case, Sobol core and corners), `FT_sens` (one at a time at the
-    optimum) and `FT_history` (time series of the named scenarios, each case). The search,
-    `FT_search`, `FT_sens` and `J_start` use the first `FT.ensemble_n` members; the three cases of
-    `FT_params`, `FT_runs` and `FT_history` are evaluated on the first `FT.final_ensemble_n`
-    (`ensemble_n` columns say which, and the notes of the task repeat it). The
-    `ardupilot_default` case (docs/DEFAULTS_spec.md 2.1) sets the four searched parameters to their
-    defaults, everything else to the register; no search is run for it.
+
+def ft_task_id(prm: dict[str, float]) -> str:
+    """`FT:<AIRSPEED_MIN m/s>:<Q_TRANSITION_MS>:<TKOFF_THR_MAX %>:<Q_TRAN_PIT_MAX deg>` of a lattice
+    point. The values are in the task id, so they are part of its cache key."""
+    return "FT:{}:{}:{}:{}".format(
+        round(prm["airspeed_min"]), round(prm["q_transition"] * 1e3),
+        round(prm["tkoff_thr_max"] * 100), round(prm["tran_pit_max"]),
+    )
+
+
+def parse_ft_id(arg: str) -> dict[str, float]:
+    v, q_ms, thr, pit = (int(x) for x in arg.split(":"))
+    return {"airspeed_min": float(v), "q_transition": q_ms / 1e3, "tkoff_thr_max": thr / 100.0,
+            "tran_pit_max": float(pit)}  # fmt: skip
+
+
+def grid_id(q_s: float) -> str:
+    return f"FT_grid:{round(q_s * 1e3)}"
+
+
+def task_ft_grid(inp: StudyInputs, q_ms_arg: str) -> dict[str, Any]:
+    """One `FT_grid` point (FT_spec Part 4): Q_TRANSITION_MS fixed, the other three searched.
+
+    The continuous CMA-ES result is snapped to ArduPilot's integers (AIRSPEED_MIN 1 m/s,
+    Q_TRAN_PIT_MAX 1 deg, TKOFF_THR_MAX 1 %), then a lattice descent moves to the best in-bound
+    3 x 3 x 3 neighbour until none is better, all on the search ensemble. The T-12 spread is the
+    three-seed spread of the continuous search. The row carries both results and the cost change.
     """
     f, vp = inp.study.FT, inp.vehicle
+    q = int(q_ms_arg) / 1e3
+    fev, start = ft_settings(inp)
+    core, _ = ft_scenarios(inp)
+    w = ft_weights(inp, core, fev, start)
+    fixed = {"q_transition": q}
+    r = forward.optimise_ft(
+        vp, core, fev, w, {**start, **fixed}, ft_bounds(inp, fixed), fixed=fixed,
+        seeds=tuple(f.grid.seeds), popsize=f.popsize, maxiter=f.grid.maxiter,
+    )  # fmt: skip
+    cont = r.params
+
+    def cost(p: dict[str, float]) -> float:
+        return forward.ft_cost(vp, core, fev, {**p, **fixed}, w)
+
+    lat = forward.lattice_descent(
+        cost, cont, ft_lattice_bounds(inp), max_rounds=f.grid.descent_max_rounds
+    )
+    snapped = {**lat.params, **fixed}
+    sm = forward.summarise_ft(forward_runs(vp, core, snapped, fev), w)
+    row = {
+        "q_transition_s": q,
+        **{FT_PARAM_COLUMNS[k] + "_continuous": cont[k] for k in forward.FT_NAMES},
+        "J_continuous": r.cost, "seed_spread": r.search.spread,
+        "t12_ok": r.search.spread <= T12_SPREAD_MAX,
+        "at_bound": ";".join(f"{k}:{x}" for k, x in r.at_bound.items()),
+        **{FT_PARAM_COLUMNS[k]: snapped[k] for k in forward.FT_NAMES},
+        "J_snap": lat.cost_start, "J_snapped": lat.cost,
+        "J_snapped_minus_continuous": lat.cost - r.cost,
+        "descent_moves": lat.rounds, "descent_evaluations": lat.evaluations,
+        "ensemble_n": len(core), **{k: _num(x) for k, x in sm.items() if k != "J"},
+    }  # fmt: skip
+    return {"result": r, "row": row, "q_transition_s": q, "snapped": snapped}
+
+
+def grid_coarse_ids(inp: StudyInputs) -> list[str]:
+    return [grid_id(q) for q in inp.study.FT.grid.q_transition_s]
+
+
+def grid_fine_ids(inp: StudyInputs, results: dict[str, dict[str, Any]]) -> list[str]:
+    """The fine pass: the best coarse point (lowest continuous `J_continuous`, the `J_search` of the
+    brief) plus the offsets, inside the search bounds, not already on the coarse grid."""
+    g = inp.study.FT.grid
+    coarse = [(results[i]["row"]["J_continuous"], results[i]["q_transition_s"])
+              for i in grid_coarse_ids(inp) if i in results]  # fmt: skip
+    if not coarse:
+        return []
+    q_best = min(coarse)[1]
+    lo, hi = inp.study.FT.bounds.q_transition_s
+    out = []
+    for off in g.fine_offsets_s:
+        q = round(q_best + off, 3)
+        if lo - 1e-9 <= q <= hi + 1e-9 and q not in g.q_transition_s:
+            out.append(grid_id(q))
+    return out
+
+
+def grid_winner(results: dict[str, dict[str, Any]]) -> str | None:
+    """The grid task with the lowest snapped cost (`J_snapped`) among those that ran."""
+    rows = {t: r["row"]["J_snapped"] for t, r in results.items() if t.startswith("FT_grid:")}
+    return min(rows, key=lambda t: (rows[t], t)) if rows else None
+
+
+def follow_up_tasks(
+    inp: StudyInputs, results: dict[str, dict[str, Any]], failed: dict[str, str]
+) -> list[str]:
+    """Tasks that can only be planned once earlier ones are done (a later phase of the run).
+
+    FT: the fine pass after the coarse grid, then the report of the winner. The task id carries
+    the winner's values, so they are part of the cache key.
+    """
+    out: list[str] = []
+    if "FT" not in inp.study.analyses:
+        return out
+    done = set(results) | set(failed)
+    coarse = grid_coarse_ids(inp)
+    if not all(i in done for i in coarse):
+        return out
+    fine = grid_fine_ids(inp, results)
+    out += [i for i in fine if i not in done]
+    if all(i in done for i in [*coarse, *fine]):
+        win = grid_winner(results)
+        if win is not None:
+            tid = ft_task_id(results[win]["snapped"])
+            if tid not in done:
+                out.append(tid)
+    return out
+
+
+def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
+    """Analysis FT, the report of the grid winner `arg` (see `ft_task_id`).
+
+    Tables: `FT_params` (the optimum, the register start and the ArduPilot default), `FT_runs`
+    (every member of each case, Sobol core and corners), `FT_sens` (one at a time at the optimum)
+    and `FT_history` (time series of the named scenarios, each case). The sensitivities, `base` and
+    `J_start` use the first `FT.ensemble_n` members; the three cases of `FT_params`, `FT_runs` and
+    `FT_history` are evaluated on the first `FT.final_ensemble_n` (`ensemble_n` columns say which,
+    and the notes repeat it). The `ardupilot_default` case (docs/DEFAULTS_spec.md 2.1) sets the
+    four variables to their defaults, everything else to the register; no search is run for it.
+    The search itself is `task_ft_grid`; `assemble` joins its row to the optimum's.
+    """
+    f, vp = inp.study.FT, inp.vehicle
+    best = parse_ft_id(arg)
     fev, start = ft_settings(inp)
     core, corners = ft_scenarios(inp)
     t0 = time.time()
     w = ft_weights(inp, core, fev, start)
+    j_start = forward.ft_cost(vp, core, fev, start, w)
     print(f"    FT E_ref {w.E_ref:.0f} J ({time.time() - t0:.0f} s, {len(core)} runs)", flush=True)
-    r = forward.optimise_ft(
-        vp, core, fev, w, start, ft_bounds(inp), seeds=tuple(f.seeds), popsize=f.popsize,
-        maxiter=f.maxiter,
-    )  # fmt: skip
-    best = r.params
     t1 = time.time()
     cases = {"optimum": best, "register": start}
     dflt, dflt_note = default_case(
@@ -1113,13 +1236,9 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
         opt = c == "optimum"
         params.append({
             "case": c, **{FT_PARAM_COLUMNS[k]: prm[k] for k in forward.FT_NAMES},
-            "ensemble_n": len(final), "J_start": r.cost_default if opt else "",
-            "seed_spread": r.search.spread if opt else "",
-            "at_bound": ";".join(f"{k}:{v}" for k, v in r.at_bound.items()) if opt else "",
+            "ensemble_n": len(final), "J_start": j_start if opt else "",
             **{k: _num(v) for k, v in forward.summarise_ft(core_runs[c], w).items()},
         })  # fmt: skip
-    search = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
-              for sr in r.search.seeds]  # fmt: skip
     run_rows: Table = []
     for c in cases:
         for kind, scens, results in (
@@ -1130,8 +1249,10 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
     notes = [
         "FT_params, FT_runs and FT_history evaluate the optimum, the register start and the "
         f"ArduPilot default on the first {len(final)} members of the Sobol sample and the "
-        f"{len(final_corners)} corners. The search, FT_search, FT_sens and J_start use the first "
-        f"{len(core)} members."
+        f"{len(final_corners)} corners. The grid search, FT_grid, FT_sens and J_start use the "
+        f"first {len(core)} members. The optimum is the best snapped point of FT_grid: whole m/s, "
+        "whole "
+        "degrees, whole percent and whole milliseconds, the values ArduPilot can take."
     ]
     # one at a time at the optimum, on the search ensemble; `base` is the unchanged evaluation there
     sens_rows: Table = []
@@ -1157,10 +1278,10 @@ def task_ft(inp: StudyInputs) -> dict[str, Any]:
             hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
     print(f"    FT reports: {time.time() - t1:.0f} s", flush=True)
     return {
-        "result": r, "scens": core, "E_ref": w.E_ref,
+        "optimum": best, "J_start": j_start, "scens": core, "E_ref": w.E_ref,
         "notes": [*notes, *([dflt_note] if dflt_note else [])],
-        "tables": {"FT_params": params, "FT_search": search, "FT_runs": run_rows,
-                   "FT_sens": sens_rows, "FT_history": hist},
+        "tables": {"FT_params": params, "FT_runs": run_rows, "FT_sens": sens_rows,
+                   "FT_history": hist},
     }  # fmt: skip
 
 
@@ -1446,7 +1567,7 @@ def plan_tasks(inp: StudyInputs) -> list[str]:
     if "C" in wanted:
         tasks.append("C")
     if "FT" in wanted:
-        tasks.append("FT")
+        tasks += grid_coarse_ids(inp)  # the report of the winner follows (`follow_up_tasks`)
         tasks += [f"FT_scan:{v:g}" for v in inp.study.FT.scan.airspeed_min_eas_ms]
     if "B1" in wanted:
         tasks += [f"B1:{n}" for n in inp.study.B1.scenarios]
@@ -1469,7 +1590,9 @@ def run_task(inp: StudyInputs, task: str) -> dict[str, Any]:
     if kind == "C":
         return task_c(inp)
     if kind == "FT":
-        return task_ft(inp)
+        return task_ft(inp, arg)
+    if kind == "FT_grid":
+        return task_ft_grid(inp, arg)
     if kind == "FT_scan":
         return task_ft_scan(inp, arg)
     if kind == "B1":

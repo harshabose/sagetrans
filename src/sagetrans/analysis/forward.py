@@ -17,7 +17,9 @@ lower bound on the loss (TECS builds pitch over seconds).
 
 from __future__ import annotations
 
+import itertools
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -54,6 +56,12 @@ FT_FLAGS = (
     "no_handover", "stall_margin", "stall", "alt_loss", "alt_gain", "proj_loss", "underspeed",
     "battery_cutoff", "touchdown",
 )  # fmt: skip
+# The executable values: ArduPilot takes AIRSPEED_MIN in whole m/s, Q_TRAN_PIT_MAX in whole degrees,
+# TKOFF_THR_MAX in whole percent and Q_TRANSITION_MS in whole milliseconds (500 to 30000).
+# Steps in the units of the search variables (m/s EAS, deg, throttle fraction); Q_TRANSITION is
+# fixed per grid point and given in whole milliseconds.
+LATTICE_STEP = {"airspeed_min": 1.0, "tran_pit_max": 1.0, "tkoff_thr_max": 0.01}
+LATTICE_NAMES = ("airspeed_min", "tkoff_thr_max", "tran_pit_max")
 A_REC_FLOOR = 0.05  # m/s^2: below it the wing cannot pull out and the projection is undefined
 
 
@@ -358,6 +366,106 @@ def ft_bounds(
     return Bounds(names, tuple(spec[n][0] for n in names), tuple(spec[n][1] for n in names))
 
 
+def _lattice_range(lo: float, hi: float, step: float) -> tuple[int, int]:
+    """The first and last lattice index inside [lo, hi] (a bound off the lattice is rounded in)."""
+    return math.ceil(lo / step - 1e-9), math.floor(hi / step + 1e-9)
+
+
+def snap_ft(prm: dict[str, float], bounds: dict[str, tuple[float, float]]) -> dict[str, float]:
+    """`prm` with AIRSPEED_MIN, TKOFF_THR_MAX and Q_TRAN_PIT_MAX on their integer steps (inside the
+    bounds); every other entry is copied. Q_TRANSITION is rounded to whole milliseconds."""
+    out = dict(prm)
+    for n in LATTICE_NAMES:
+        step = LATTICE_STEP[n]
+        i_lo, i_hi = _lattice_range(*bounds[n], step)
+        out[n] = round(min(max(round(prm[n] / step), i_lo), i_hi) * step, 10)
+    if "q_transition" in out:
+        out["q_transition"] = round(round(out["q_transition"] * 1e3) / 1e3, 10)
+    return out
+
+
+def on_lattice(prm: dict[str, float]) -> bool:
+    """Are the three lattice variables whole steps and Q_TRANSITION whole milliseconds?"""
+    ok = all(abs(prm[n] / LATTICE_STEP[n] - round(prm[n] / LATTICE_STEP[n])) < 1e-6
+             for n in LATTICE_NAMES)
+    q = prm.get("q_transition")
+    return ok and (q is None or abs(q * 1e3 - round(q * 1e3)) < 1e-6)
+
+
+def lattice_neighbours(
+    prm: dict[str, float], bounds: dict[str, tuple[float, float]]
+) -> list[dict[str, float]]:
+    """The up to 26 points one step away on the lattice (3 x 3 x 3 without the centre), those
+    inside the bounds. `prm` must be on the lattice."""
+    out = []
+    for delta in itertools.product((-1, 0, 1), repeat=len(LATTICE_NAMES)):
+        if not any(delta):
+            continue
+        cand = dict(prm)
+        ok = True
+        for n, d in zip(LATTICE_NAMES, delta, strict=True):
+            step = LATTICE_STEP[n]
+            i_lo, i_hi = _lattice_range(*bounds[n], step)
+            i = round(prm[n] / step) + d
+            if not i_lo <= i <= i_hi:
+                ok = False
+                break
+            cand[n] = round(i * step, 10)
+        if ok:
+            out.append(cand)
+    return out
+
+
+@dataclass(frozen=True)
+class LatticeResult:
+    params: dict[str, float]  # the lattice point no neighbour improves on
+    cost: float
+    start: dict[str, float]  # the snapped start
+    cost_start: float
+    rounds: int  # moves made
+    evaluations: int  # distinct points evaluated
+
+
+def lattice_descent(
+    cost: Callable[[dict[str, float]], float], start: dict[str, float],
+    bounds: dict[str, tuple[float, float]], max_rounds: int = 50,
+) -> LatticeResult:
+    """Snap `start` to the lattice, then move to the best of its in-bound 3 x 3 x 3 neighbours
+    while one is better, so the result has no better neighbour (a local minimum on the lattice).
+
+    `cost` scores a full parameter dict; each distinct point is evaluated once.
+    """
+    seen: dict[tuple[float, ...], float] = {}
+
+    def score(p: dict[str, float]) -> float:
+        key = tuple(round(p[n], 10) for n in LATTICE_NAMES)
+        if key not in seen:
+            seen[key] = float(cost(p))
+        return seen[key]
+
+    cur = snap_ft(start, bounds)
+    first = cur
+    f_cur = f_first = score(cur)
+    rounds = 0
+    while rounds < max_rounds:
+        scored = [(score(c), c) for c in lattice_neighbours(cur, bounds)]
+        if not scored:
+            break
+        f_best, best = min(scored, key=lambda t: t[0])
+        if not f_best < f_cur - 1e-12:
+            break
+        cur, f_cur, rounds = best, f_best, rounds + 1
+    return LatticeResult(cur, f_cur, first, f_first, rounds, len(seen))
+
+
+def ft_cost(
+    vp: VehicleParams, scens: list[Scenario], cfg: FTEval, prm: dict[str, float],
+    weights: CostWeights,
+) -> float:
+    """The cost (10.1) of one full parameter set on an ensemble."""
+    return ensemble_cost([evaluate_ft(vp, s, prm, cfg) for s in scens], weights)
+
+
 def optimise_ft(
     vp: VehicleParams,
     scens: list[Scenario],
@@ -408,7 +516,8 @@ def mean_energy(
 
 
 __all__ = [
-    "FT_FLAGS", "FT_NAMES", "FTEval", "FTRun", "evaluate_ft", "ft_bounds",
-    "ft_ensemble", "ft_scenario", "history_rows", "mean_energy", "optimise_ft",
-    "projected_loss", "recovery_accel", "run_ft", "summarise_ft",
+    "FT_FLAGS", "FT_NAMES", "LATTICE_NAMES", "LATTICE_STEP", "FTEval", "FTRun", "LatticeResult",
+    "evaluate_ft", "ft_bounds", "ft_cost", "ft_ensemble", "ft_scenario", "history_rows",
+    "lattice_descent", "lattice_neighbours", "mean_energy", "on_lattice", "optimise_ft",
+    "projected_loss", "recovery_accel", "run_ft", "snap_ft", "summarise_ft",
 ]  # fmt: skip

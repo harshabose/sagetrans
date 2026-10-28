@@ -30,7 +30,7 @@ from sagetrans.config.schema import DraftConfigError
 from sagetrans.io import gate, record
 from sagetrans.io.assemble import assemble
 from sagetrans.io.inputs import InputError, StudyInputs, load_inputs, release_blockers
-from sagetrans.io.stages import TASK_COST, plan_tasks, run_task, task_selection
+from sagetrans.io.stages import TASK_COST, follow_up_tasks, plan_tasks, run_task, task_selection
 
 EXIT_OK, EXIT_TASK_FAILED, EXIT_INPUTS, EXIT_GATE = 0, 1, 2, 3
 
@@ -117,6 +117,9 @@ def preflight(inp: StudyInputs, work: Path | None = None) -> list[str]:
         est = 0.0 if cached else TASK_COST.get(t.split(":")[0], 100)
         total += est
         lines.append(f"  - {t:<14} {'cached' if cached else f'~{est:.0f} s'}")
+    if "FT" in inp.study.analyses:
+        lines.append("  then (planned from these): the fine pass around the best FT_grid point, "
+                     "and the FT report of the winner")
     workers = _n_workers(inp, len(tasks), None)
     if total:
         mins = total / max(1, workers) / 60
@@ -189,35 +192,26 @@ def run_study(
     for line in preflight(inp, work):
         log(line)
 
-    tasks = plan_tasks(inp)
     results: dict[str, dict[str, Any]] = {}
     failed: dict[str, str] = {}
-    pending: list[str] = []
-    for t in tasks:
-        cached = None if force else _load_cached(_cache_path(work, inp, t))
-        if cached is not None:
-            results[t] = cached
-            outcome.tasks[t] = "cached"
-            log(f"[cached] {t}")
-        else:
-            pending.append(t)
-
     sel = tuple(sorted(only)) if only else ()
-    n_workers = _n_workers(inp, len(pending), workers)
-    if pending:
-        log(f"running {len(pending)} task(s) on {n_workers} worker(s) ...")
-    if pending and n_workers == 1:
-        for t in pending:
-            _record(_worker(str(inp.config_dir), inp.mode, sel, t, str(_cache_path(work, inp, t))),
-                    inp, work, results, failed, outcome, log)
-    elif pending:
-        _one_blas_thread_per_worker()
-        ctx = multiprocessing.get_context("spawn")
-        with cf.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
-            futs = [pool.submit(_worker, str(inp.config_dir), inp.mode, sel, t,
-                                str(_cache_path(work, inp, t))) for t in pending]  # fmt: skip
-            for fut in cf.as_completed(futs):
-                _record(fut.result(), inp, work, results, failed, outcome, log)
+    planned: set[str] = set()
+    wave = plan_tasks(inp)
+    n_wave = 1
+    while wave:  # a later wave is planned from the results of the earlier ones
+        planned.update(wave)
+        pending: list[str] = []
+        for t in wave:
+            cached = None if force else _load_cached(_cache_path(work, inp, t))
+            if cached is not None:
+                results[t] = cached
+                outcome.tasks[t] = "cached"
+                log(f"[cached] {t}")
+            else:
+                pending.append(t)
+        _run_wave(inp, work, pending, sel, workers, n_wave, results, failed, outcome, log)
+        wave = [t for t in follow_up_tasks(inp, results, failed) if t not in planned]
+        n_wave += 1
 
     verification: dict[str, bool] = {}
     if verify:
@@ -240,8 +234,31 @@ def run_study(
     return outcome
 
 
-def _record(
-    res: tuple[str, bool, float, str], inp: StudyInputs, work: Path,
+def _run_wave(
+    inp: StudyInputs, work: Path, pending: list[str], sel: tuple[str, ...],
+    workers: int | None, n_wave: int, results: dict[str, dict[str, Any]],
+    failed: dict[str, str], outcome: StudyOutcome, log: Callable[[str], None],
+) -> None:
+    """Run the pending tasks of one wave, in worker processes unless there is one worker."""
+    n_workers = _n_workers(inp, len(pending), workers)
+    if pending:
+        later = f" (wave {n_wave})" if n_wave > 1 else ""
+        log(f"running {len(pending)} task(s) on {n_workers} worker(s){later} ...")
+    if pending and n_workers == 1:
+        for t in pending:
+            _record(_worker(str(inp.config_dir), inp.mode, sel, t, str(_cache_path(work, inp, t))),
+                    inp, work, results, failed, outcome, log)
+    elif pending:
+        _one_blas_thread_per_worker()
+        ctx = multiprocessing.get_context("spawn")
+        with cf.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
+            futs = [pool.submit(_worker, str(inp.config_dir), inp.mode, sel, t,
+                                str(_cache_path(work, inp, t))) for t in pending]  # fmt: skip
+            for fut in cf.as_completed(futs):
+                _record(fut.result(), inp, work, results, failed, outcome, log)
+
+
+def _record(    res: tuple[str, bool, float, str], inp: StudyInputs, work: Path,
     results: dict[str, dict[str, Any]], failed: dict[str, str], outcome: StudyOutcome,
     log: Callable[[str], None],
 ) -> None:

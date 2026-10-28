@@ -92,7 +92,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
   final_ensemble_n: 32     # the optimum, the register start and the ArduPilot default are reported on the first 32 points (the search uses ensemble_n)
   ensemble_seed: 8
   headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed
-  seeds: [1, 2, 3, 4, 5, 6, 7, 8]
+  seeds: [1, 2, 3, 4, 5, 6, 7, 8]   # the older 4-variable search only; the grid has its own seeds and iterations
   popsize: 8
   maxiter: 20
   rotor_lag_s: 0.25        # as C
@@ -112,6 +112,12 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
     airspeed_min_eas_ms: [15.0, 16.0, 17.0, 18.0, 19.0, 20.0]
     seeds: [1, 2, 3]
     maxiter: 12            # the 20 m/s point reaches a 0.004 % seed spread at 12 (checked at the 12 s bound)
+  grid:                    # FT_grid (FT_spec Part 4): Q_TRANSITION_MS fixed per point, the other three searched, then snapped to ArduPilot's integers
+    q_transition_s: [2, 3, 4, 5, 6, 8, 10, 12]   # coarse grid; the best point gets a fine pass
+    fine_offsets_s: [-1.0, -0.5, 0.5, 1.0]       # neighbours of the best coarse point; those outside bounds.q_transition_s are skipped
+    seeds: [1, 2, 3]                             # the T-12 seed spread is taken per point over these
+    maxiter: 12
+    descent_max_rounds: 50                       # moves of the 3 x 3 x 3 lattice descent after the snap
   history_scenarios: [S-07, S-03]      # time histories at the optimum and at the register values
   sens:                    # FT_sens: one at a time at the optimum
     TECS_TIME_CONST: [3.0, 5.0, 8.0]

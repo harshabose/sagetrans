@@ -474,3 +474,42 @@ Acceptance (author, on a real run):
 6. E reading `a_fwd` from FT (6.1).
 7. `Q_OPTIONS` LEVEL_TRANSITION is not modelled (`level_transition` stays False).
 8. The weights of `J` are a policy choice; the three terms are printed so the owner can see them.
+
+## 11. Part 4: grid search and executable values (2026-10-28)
+
+Why. The first full runs put `Q_TRANSITION_MS` on the top of its range (8 s, then 12 s) and the eight-seed
+CMA-ES of all four variables disagreed by 5.9 % (T-12 allows 1 %), so the optimum was neither interior nor
+repeatable. The variables are also continuous in the search while ArduPilot takes integers: `AIRSPEED_MIN`
+in 1 m/s, `Q_TRAN_PIT_MAX` in 1 deg, `TKOFF_THR_MAX` in 1 % and `Q_TRANSITION_MS` in 1 ms (500 to 30000).
+
+Design. `Q_TRANSITION_MS` is the one variable the cost is flat or slowly rising in, so it goes on a grid and
+the other three are searched at each value (a three-variable CMA-ES, as `FT_scan` does for `AIRSPEED_MIN`).
+
+1. `FT.grid` in `study.yaml`: `q_transition_s: [2, 3, 4, 5, 6, 8, 10, 12]` (inside `FT.bounds.q_transition_s`),
+   `seeds: [1, 2, 3]`, `maxiter: 12`. One task per point, `FT_grid:<Q_TRANSITION_MS in ms>`, cached on its own.
+2. The fine pass. The coarse point with the lowest continuous cost gets its neighbours at `fine_offsets_s`
+   (default -1, -0.5, +0.5, +1 s). A neighbour outside `FT.bounds.q_transition_s` is skipped: the range is
+   not extended silently, and a winner on the bound is reported as such (`FT_grid` context in the run record).
+   The reported `Q_TRANSITION_MS` is the best snapped point of all of them, in whole milliseconds.
+3. The snap. After each point's continuous search, `AIRSPEED_MIN`, `Q_TRAN_PIT_MAX` and `TKOFF_THR_MAX` are
+   rounded to their integer steps (inside the bounds), then a lattice descent moves to the best of the
+   in-bound 3 x 3 x 3 neighbours while one is better, all on the search ensemble. The result has no better
+   in-bound neighbour. `FT_grid` carries the continuous values, the cost of each stage and
+   `J_snapped_minus_continuous`. Everything reported as a recommendation (the `FT_params` optimum row,
+   `settings_recommended.csv`, the viewer) is the snapped value; the optimum row also carries the continuous
+   values it came from.
+4. T-12 per grid point, on the continuous result: `seed_spread` and `t12_ok` in `FT_grid`. The gate is not
+   weakened. The run record's FT spread is the winner's; the points that fail are listed in the notes and in
+   `context.ft_grid.t12_failed`. A winner that fails says so in the notes and the gate blocks the release.
+5. The register start and the ArduPilot default are unchanged and are evaluated, with the winner, on the
+   final `FT.final_ensemble_n` members. `ardupilot_default` values are already integers.
+6. Task graph. The grid points run first; the fine pass is planned from their results (a second wave of
+   `run_study`) and the report of the winner, `FT:<AIRSPEED_MIN>:<ms>:<percent>:<deg>`, from all of them (a
+   third wave). The winner's values are in the task id, so they are in its cache key. The older
+   four-variable search (`FT.seeds`, `FT.maxiter`) is no longer run.
+7. Viewer: the FT chapter shows the snapped cost against `Q_TRANSITION_MS` with the winner marked and every
+   point above the T-12 limit hollow and named.
+
+Tests: the snapped optimum is on the lattice and its cost is not worse than any of its in-bound lattice
+neighbours (re-evaluated, the in-bound subset of the 26); the fine pass skips out-of-bound neighbours; the
+task ids carry the values.

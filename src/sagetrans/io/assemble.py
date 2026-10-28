@@ -12,6 +12,7 @@ from typing import Any
 from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
+from sagetrans.io.stages import grid_winner
 
 Table = list[dict[str, Any]]
 
@@ -258,12 +259,58 @@ def assemble(
                                                     "v_end_tas_ms", "a_min_ms2", "a_equiv_ms2",
                                                     "reachable", "current_limited"]))  # fmt: skip
 
-    ft_task = task_results.get("FT", {})
-    ft_res = ft_task.get("result")
-    if ft_res is not None:
+    ft_key = next((t for t in task_results if t.startswith("FT:")), None)
+    ft_task = task_results.get(ft_key, {}) if ft_key else {}
+    win = grid_winner(dict(task_results))
+    ft_res = None
+    ft_grid_context: dict[str, Any] = {}
+    if ft_task and win is not None:
+        gw = task_results[win]
+        wrow = gw["row"]
+        # the optimum is the snapped winner; its search is the winner's (a three-seed search
+        # at the winner's fixed Q_TRANSITION_MS), its cost_default the register start's
+        ft_res = dataclasses.replace(
+            gw["result"], params=dict(gw["snapped"]), cost=float(wrow["J_snapped"]),
+            cost_default=float(ft_task["J_start"]))
         spreads["FT"] = ft_res.search.spread
         analyses["FT"] = ft_res.record
         tables.update(ft_task["tables"])
+        grid_rows = sorted((r["row"] for t, r in task_results.items()
+                            if t.startswith("FT_grid:")), key=lambda r: r["q_transition_s"])
+        coarse = set(inp.study.FT.grid.q_transition_s)
+        for r in grid_rows:
+            r["point"] = "coarse" if r["q_transition_s"] in coarse else "fine"
+            r["winner"] = r is wrow
+        tables["FT_grid"] = [{"point": r["point"], "winner": r["winner"],
+                              **{k: v for k, v in r.items() if k not in ("point", "winner")}}
+                             for r in grid_rows]
+        tables["FT_search"] = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
+                               for sr in ft_res.search.seeds]
+        # the optimum row also carries the continuous result it was snapped from
+        extra = {k: wrow[k] for k in wrow if k.endswith("_continuous")}
+        extra.update(J_snapped_minus_continuous=wrow["J_snapped_minus_continuous"],
+                     seed_spread=wrow["seed_spread"], at_bound=wrow["at_bound"])
+        for prow in tables["FT_params"]:
+            for k in ("seed_spread", "at_bound", *[k for k in extra if k.endswith("continuous")]):
+                prow[k] = extra[k] if prow["case"] == "optimum" else ""
+        t12_failed = [(r["q_transition_s"], r["seed_spread"]) for r in grid_rows
+                      if not r["t12_ok"]]
+        lo, hi = inp.study.FT.bounds.q_transition_s
+        q_win = float(wrow["q_transition_s"])
+        ft_grid_context = {"winner_q_transition_s": q_win,
+                           "winner_t12_ok": bool(wrow["t12_ok"]),
+                           "winner_on_q_bound": min(abs(q_win - lo), abs(q_win - hi)) < 1e-9,
+                           "t12_failed": [{"q_transition_s": q, "seed_spread": s}
+                                          for q, s in t12_failed]}
+        ft_task = {**ft_task, "notes": [*ft_task.get("notes", []),
+            f"T-12 on the grid: {len(grid_rows) - len(t12_failed)} of {len(grid_rows)} points "
+            f"have a three-seed spread within {gate.T12_SPREAD_MAX:.0%}"
+            + (", the others (Q_TRANSITION_MS in s, spread): " + ", ".join(
+                f"{q:g} ({s:.1%})" for q, s in t12_failed) if t12_failed else "")
+            + f". The winner ({q_win:g} s) " + ("passes." if wrow["t12_ok"] else "FAILS it.")
+            + (" The winner is on a Q_TRANSITION_MS search bound." if ft_grid_context[
+                "winner_on_q_bound"] else "")]}
+    if ft_res is not None:
         scan = sorted((res["row"] for t, res in task_results.items() if t.startswith("FT_scan:")),
                       key=lambda r: r["airspeed_min_eas_ms"])  # fmt: skip
         if scan:
@@ -296,12 +343,20 @@ def assemble(
             "",
             md_table(tables["FT_params"], ["case", "airspeed_min_eas_ms", "q_transition_s",
                                            "tkoff_thr_max", "tran_pit_max_deg", "J", "J_exc",
-                                           "J_E", "J_pen", "J_start", "seed_spread", "at_bound"]),
+                                           "J_E", "J_pen", "J_start", "J_snapped_minus_continuous",
+                                           "seed_spread", "at_bound"]),
             "", md_table(tables["FT_params"], ["case", "p95_excursion_m", "mean_energy_kJ",
                                                "worst_sink_ms", "worst_stall_margin", "n_flags",
                                                *n_flag_cols]),
             *([""] + [f"_{n}_" for n in ft_task["notes"]] if ft_task.get("notes") else []),
-            "", "Search:", "", md_table(tables["FT_search"]), "",
+            "", "Search of the winning grid point:", "", md_table(tables["FT_search"]), "",
+            "The grid over `Q_TRANSITION_MS` (each point searched with `Q_TRANSITION_MS` fixed, "
+            "then snapped to whole m/s, degrees, percent and milliseconds and descended on the "
+            "lattice):", "",
+            md_table(tables["FT_grid"], ["point", "winner", "q_transition_s", "J_continuous",
+                                         "seed_spread", "t12_ok", "J_snapped",
+                                         "J_snapped_minus_continuous", "airspeed_min_eas_ms",
+                                         "tkoff_thr_max", "tran_pit_max_deg", "n_flags"]), "",
             *(["`AIRSPEED_MIN` held fixed, the other three re-searched:", "",
                md_table(tables["FT_scan"], ["airspeed_min_eas_ms", "q_transition_s",
                                             "tkoff_thr_max", "tran_pit_max_deg", "J", "J_exc",
@@ -498,7 +553,10 @@ def assemble(
         "limitations": limitations,
         "mission": {"fwd_alt_loss_max_m": inp.mission.fwd_alt_loss_max_m,
                     "fwd_alt_gain_max_m": inp.mission.fwd_alt_gain_max_m},
-        "notes": {n: list(t["notes"]) for n, t in task_results.items() if t.get("notes")},
+        "notes": {("FT" if n.startswith("FT:") else n): list(t["notes"])
+                  for n, t in {**task_results, **({ft_key: ft_task} if ft_key else {})}.items()
+                  if t.get("notes")},
+        "ft_grid": ft_grid_context,
         "study": {a: getattr(inp.study, a).model_dump(mode="json")
                   for a in ("A", "D", "F", "E", "Q2", "C", "FT", "B1", "sensitivity")
                   if a in inp.study.analyses},

@@ -98,6 +98,8 @@ FT:
   maxiter: 1
   history_scenarios: [S-01]
   scan: {airspeed_min_eas_ms: [16.0, 18.0], seeds: [1], maxiter: 1}
+  grid: {q_transition_s: [4.0, 6.0], fine_offsets_s: [-0.5, 0.5, 2.0], seeds: [1], maxiter: 1,
+         descent_max_rounds: 20}
   sens:
     TECS_TIME_CONST: [3.0]
     TECS_INTEG_GAIN: [0.3]
@@ -117,13 +119,15 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
     with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
         fh.write(FT_TINY)
     inp = load_inputs(cfg, only={"FT"})
-    assert stages.plan_tasks(inp) == ["FT", "FT_scan:16", "FT_scan:18"]
-    out = stages.run_task(inp, "FT")
+    assert stages.plan_tasks(inp) == ["FT_grid:4000", "FT_grid:6000", "FT_scan:16", "FT_scan:18"]
+    out = stages.run_task(inp, "FT:18:5000:100:3")  # the report of a (snapped) winner
+    assert out["optimum"] == {"airspeed_min": 18.0, "q_transition": 5.0, "tkoff_thr_max": 1.0,
+                              "tran_pit_max": 3.0}
     tables = out["tables"]
-    assert set(tables) == {"FT_params", "FT_search", "FT_runs", "FT_sens", "FT_history"}
+    assert set(tables) == {"FT_params", "FT_runs", "FT_sens", "FT_history"}
     params = tables["FT_params"]
     assert [r["case"] for r in params] == ["optimum", "register"]
-    for col in ("J", "J_exc", "J_E", "J_pen", "J_start", "seed_spread", "at_bound"):
+    for col in ("J", "J_exc", "J_E", "J_pen", "J_start"):
         assert col in params[0]
     assert abs(params[0]["J"] - (params[0]["J_exc"] + params[0]["J_E"] + params[0]["J_x"]
                                  + params[0]["J_pen"])) < 1e-6
@@ -131,7 +135,6 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
     assert {(r["case"], r["set"]) for r in runs} == {
         (c, k) for c in ("optimum", "register") for k in ("core", "corner")
     }
-    assert out["result"].search.spread >= 0.0
     # the search ensemble is 2; the three cases are reported on the first 4 members (a prefix)
     assert all(r["ensemble_n"] == 4 for r in params)
     members = {r["member"] for r in runs if r["set"] == "core" and r["case"] == "optimum"}
@@ -170,3 +173,122 @@ def test_cl_max_sensitivity_moves_only_alpha_s():
         assert runs.cl_max(v.wing) == pytest.approx(scale * runs.cl_max(vp.wing), rel=2e-3)
         assert dataclasses.replace(v.wing, alpha_s=vp.wing.alpha_s) == vp.wing  # only alpha_s
         assert v.m == vp.m and v.rotor == vp.rotor
+
+
+# ---- the grid, the snap and the lattice (FT_spec Part 4) -----------------------------------------
+BOUNDS = {"airspeed_min": (14.0, 20.0), "tkoff_thr_max": (0.5, 1.0), "tran_pit_max": (1.0, 10.0)}
+
+
+def test_snap_puts_the_values_on_ardupilots_integers_inside_the_bounds():
+    from sagetrans.analysis import forward
+
+    s = forward.snap_ft({"airspeed_min": 17.67, "q_transition": 11.99982, "tkoff_thr_max": 0.99982,
+                         "tran_pit_max": 2.78}, BOUNDS)
+    assert s == {"airspeed_min": 18.0, "q_transition": 12.0, "tkoff_thr_max": 1.0,
+                 "tran_pit_max": 3.0}
+    assert forward.on_lattice(s)
+    # a value just outside a bound rounds back in
+    s2 = forward.snap_ft(
+        {"airspeed_min": 20.4, "tkoff_thr_max": 0.496, "tran_pit_max": 10.4}, BOUNDS)
+    assert (s2["airspeed_min"], s2["tkoff_thr_max"], s2["tran_pit_max"]) == (20.0, 0.5, 10.0)
+    assert not forward.on_lattice(
+        {"airspeed_min": 17.5, "tkoff_thr_max": 0.8, "tran_pit_max": 3.0})
+
+
+def test_lattice_neighbours_are_the_in_bound_3x3x3_without_the_centre():
+    from sagetrans.analysis import forward
+
+    mid = {"airspeed_min": 17.0, "tkoff_thr_max": 0.8, "tran_pit_max": 5.0}
+    assert len(forward.lattice_neighbours(mid, BOUNDS)) == 26
+    corner = {"airspeed_min": 20.0, "tkoff_thr_max": 1.0, "tran_pit_max": 10.0}
+    nb = forward.lattice_neighbours(corner, BOUNDS)
+    assert len(nb) == 7 and all(forward.on_lattice(n) for n in nb)  # 2 x 2 x 2 - 1
+
+
+def test_lattice_descent_finds_a_point_no_neighbour_beats():
+    from sagetrans.analysis import forward
+
+    target = {"airspeed_min": 16.0, "tkoff_thr_max": 0.9, "tran_pit_max": 6.0}
+
+    def bowl(p):  # a convex stand-in with a minimum on the lattice
+        return (sum(((p[k] - target[k]) / forward.LATTICE_STEP[k]) ** 2 for k in target)
+                + 0.1 * (p["airspeed_min"] - target["airspeed_min"]))  # tilts it, no tie
+
+    res = forward.lattice_descent(
+        bowl, {"airspeed_min": 18.4, "tkoff_thr_max": 0.97, "tran_pit_max": 3.2}, BOUNDS)
+    assert forward.on_lattice(res.params)
+    assert all(bowl(n) >= res.cost for n in forward.lattice_neighbours(res.params, BOUNDS))
+    assert res.cost <= res.cost_start and res.evaluations > 1
+
+
+def test_grid_task_snaps_and_its_optimum_is_not_worse_than_its_lattice_neighbours(tmp_path):
+    from sagetrans.analysis import forward
+
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY)
+    inp = load_inputs(cfg, only={"FT"})
+    out = stages.run_task(inp, "FT_grid:5000")
+    row, snapped = out["row"], out["snapped"]
+    assert forward.on_lattice(snapped) and snapped["q_transition"] == 5.0
+    assert row["J_snapped"] == pytest.approx(
+        row["J_continuous"] + row["J_snapped_minus_continuous"])
+    assert row["J_snapped"] <= row["J_snap"] + 1e-12  # the descent never makes it worse
+    assert {"airspeed_min_eas_ms_continuous", "seed_spread", "t12_ok", "at_bound"} <= set(row)
+    # re-evaluate the in-bound subset of the 26 neighbours on the same ensemble and weights
+    fev, start = stages.ft_settings(inp)
+    core, _ = stages.ft_scenarios(inp)
+    w = stages.ft_weights(inp, core, fev, start)
+    vp = inp.vehicle
+
+    def cost(p):
+        return forward.ft_cost(vp, core, fev, {**p, "q_transition": 5.0}, w)
+
+    assert cost(snapped) == pytest.approx(row["J_snapped"])
+    nbs = forward.lattice_neighbours(snapped, stages.ft_lattice_bounds(inp))
+    assert nbs and all(cost(n) >= row["J_snapped"] - 1e-9 for n in nbs)
+
+
+def test_the_fine_pass_and_the_winner_follow_the_grid_results(tmp_path):
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY)
+    inp = load_inputs(cfg, only={"FT"})
+
+    def fake(q, j_cont, j_snap):
+        return {"q_transition_s": q, "row": {"J_continuous": j_cont, "J_snapped": j_snap},
+                "snapped": {"airspeed_min": 18.0, "q_transition": q, "tkoff_thr_max": 1.0,
+                            "tran_pit_max": 3.0}}
+
+    res = {"FT_grid:4000": fake(4.0, 1.0, 1.1), "FT_grid:6000": fake(6.0, 0.9, 1.0)}
+    assert stages.follow_up_tasks(inp, {"FT_grid:4000": res["FT_grid:4000"]}, {}) == []  # not yet
+    # the best coarse point is 6 s: 5.5 and 6.5 are new, 8.0 is outside no bound but 2 s is not
+    # offered (the offsets are -0.5, 0.5, 2.0 -> 5.5, 6.5, 8.0, all inside 2 to 12)
+    assert stages.follow_up_tasks(inp, res, {}) == [
+        "FT_grid:5500", "FT_grid:6500", "FT_grid:8000"]
+    res["FT_grid:5500"] = fake(5.5, 0.95, 0.8)  # the lowest snapped cost
+    res["FT_grid:6500"] = fake(6.5, 1.2, 1.3)
+    res["FT_grid:8000"] = fake(8.0, 1.3, 1.4)
+    assert stages.grid_winner(res) == "FT_grid:5500"
+    assert stages.follow_up_tasks(inp, res, {}) == ["FT:18:5500:100:3"]  # the report of the winner
+    res["FT:18:5500:100:3"] = {}
+    assert stages.follow_up_tasks(inp, res, {}) == []
+    # a failed grid point is not retried and does not hold the later phases back
+    part = {k: v for k, v in res.items() if k != "FT_grid:8000" and not k.startswith("FT:")}
+    assert stages.follow_up_tasks(inp, part, {"FT_grid:8000": "boom"}) == ["FT:18:5500:100:3"]
+    assert stages.ft_task_id(stages.parse_ft_id("18:5500:100:3")) == "FT:18:5500:100:3"
+
+
+def test_a_fine_offset_outside_the_bounds_is_skipped(tmp_path):
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY.replace("q_transition_s: [4.0, 6.0]", "q_transition_s: [11.5, 12.0]")
+                 .replace("[-0.5, 0.5, 2.0]", "[-1.0, 0.5, 1.0]"))
+    inp = load_inputs(cfg, only={"FT"})
+    res = {"FT_grid:11500": {"q_transition_s": 11.5, "row": {"J_continuous": 2.0}},
+           "FT_grid:12000": {"q_transition_s": 12.0, "row": {"J_continuous": 1.0}}}
+    # the best coarse point is on the 12 s bound: 12.5 and 13 s are not searched (no widening)
+    assert stages.grid_fine_ids(inp, res) == ["FT_grid:11000"]
