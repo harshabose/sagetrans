@@ -5,9 +5,9 @@ free final time, IPOPT. Throttle and pitch-command histories are the unknowns; t
 at zero. Two objectives: minimum bus energy under an altitude band and a distance cap, or the
 smallest altitude excursion (the epsilon_h* of the Pareto front) under a distance cap.
 
-B1 keeps operational limits that B2 and C do not respect (|v_h| <= vh_max at the nodes, a stall
+B1 keeps operational limits that C does not respect (|v_h| <= vh_max at the nodes, a stall
 margin, throttle and pitch-command slew limits). It is therefore the best trajectory UNDER THOSE
-LIMITS, not a strict lower bound on the baseline or the free-form law: a controller that breaks
+LIMITS, not a strict lower bound on the baseline: a controller that breaks
 them can be cheaper at the same excursion. Relaxing the limits makes the NLP much harder.
 
 Every result must be replayed in `simulate()` (T-11); an optimiser that finds control dither or
@@ -15,7 +15,8 @@ a stall-cliff the mesh cannot resolve returns a solution whose replay disagrees,
 solution is not `verified`. Controls are EFFECTIVE rotor throttles (ESC dead zone removed from
 the NLP model and re-applied in the replay).
 
-Entry. `make_problem` starts at level cruise (the legacy entry that B2 still starts from);
+Entry. `make_problem` starts at level cruise (the legacy level-cruise entry, used by
+`bound_check` and the unit tests);
 `make_problem_exit` starts at the AIRBRAKE exit like analysis D and C
 (`braking.airbrake_entry_state`).
 The study's B1 is the exit problem: the least bus energy from the AIRBRAKE exit to the stop as a
@@ -24,7 +25,7 @@ an energy-against-distance front to set beside C's `C_q_curve`, not a strict low
 
 Not modelled here: a sourced vortex-ring-state exclusion (no boundary available), and a free
 rotor start condition is an option (`prespin_max`) whose spin-up energy before entry is NOT
-counted, so comparisons with B2 and C use the default of rotors at rest.
+counted, so comparisons with C use the default of rotors at rest.
 """
 
 from __future__ import annotations
@@ -624,7 +625,7 @@ def with_options(prob: Problem, **kw: float | None) -> Problem:
     )  # fmt: skip
 
 
-# ---- comparison with the baseline, C and B2 ----------------------------------------------------
+# ---- comparison with the baseline and C ----------------------------------------------------
 
 
 @dataclass
@@ -697,21 +698,19 @@ def compare(
     prob: Problem,
     b1: B1Solution,
     c_params: dict[str, float] | None = None,
-    b2_params: object = None,
     *,
     c_eval: object = None,
     c_base: BackTransitionParams | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Excursion, energy and distance of B1, C (`restricted.evaluate_c`) and the free-form law (B2).
+    """Excursion, energy and distance of B1 and C (`restricted.evaluate_c`).
 
     The C row is C's run from the AIRBRAKE exit at the problem's own entry air speed. `c_params`
     are C's four variables (default: the register values at q = 2); `c_eval` is a
     `restricted.CEval` and `c_base` the C controller parameters (defaults: the entry rule reduced
     to the problem's air speed, the ArduPilot Z loop, rotor lag 0.25 s, the problem's controller
-    gains). The B2 row is the free-form law at the level-cruise entry, which is not the AIRBRAKE
-    exit yet: it is not comparable with the others (B-9 stays open until B2 migrates).
+    gains).
     """
-    from sagetrans.analysis import freeform_opt, restricted
+    from sagetrans.analysis import restricted
 
     v0_air = float(prob.x0[2] + prob.scen.headwind_ms)
     out = {"B1": {"excursion": b1.excursion, "energy": b1.energy, "distance": b1.distance}}
@@ -731,7 +730,4 @@ def compare(
     }  # fmt: skip
     c = restricted.evaluate_c(prob.vp, prob.scen, prm, cev, c_base)
     out["C"] = {"excursion": c.excursion, "energy": c.energy, "distance": c.distance}
-    if b2_params is not None:
-        b = freeform_opt.evaluate(prob.vp, prob.scen, b2_params, v0_air)  # type: ignore[arg-type]
-        out["B2"] = {"excursion": b.excursion, "energy": b.energy, "distance": b.distance}
     return out

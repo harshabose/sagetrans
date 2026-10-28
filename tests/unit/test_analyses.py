@@ -132,17 +132,6 @@ def test_a_feasible_window_agrees_with_the_path_check_and_names_its_edges():
     assert zero_loss.closest_to_feasible(VP, SC, 30.0)[1] == ["thrust_sign"]
 
 
-def test_a_legacy_limits_keep_the_old_non_monotone_verdict_that_b2_relies_on():
-    # regression: with no band (the legacy path) the verdict at 12 m/s is feasible up to about
-    # 1 m/s^2, infeasible 1.0 to 1.4, feasible again 1.6 to 2.0, infeasible above
-    leg = zero_loss.LEGACY_LIMITS
-    verdict = {
-        a: analyse(VP, SC, 12.0, DecelProfile(a), leg, n=60).feasible for a in (0.8, 1.2, 1.8, 2.6)
-    }
-    assert verdict == {0.8: True, 1.2: False, 1.8: True, 2.6: False}
-    assert zero_loss.max_feasible_decel(VP, SC, 12.0, leg) >= 1.8
-
-
 def test_a_feasibility_map_shape_and_violations_are_consistent():
     m = zero_loss.feasibility_map(VP, SC, [10.0, 14.0], [0.5, 1.5, 3.0], n=40)
     assert m["feasible"].shape == (2, 3)
@@ -168,7 +157,7 @@ def test_a_limit_is_the_same_at_altitude_in_equivalent_airspeed_but_throttle_is_
 
 
 def test_a_vrs_ratio_is_always_reported_and_the_default_is_report_only():
-    assert zero_loss.DEFAULT_LIMITS.vrs_limit is None and zero_loss.LEGACY_LIMITS.vrs_limit is None
+    assert zero_loss.DEFAULT_LIMITS.vrs_limit is None
     r = analyse(VP, SC, 12.0, DecelProfile(0.8), n=60)
     assert math.isfinite(r.vrs_min) and r.vrs_min < 0.0  # nose-up: flow comes up through the discs
     assert 0.0 <= r.vrs_min_t <= r.t[-1]

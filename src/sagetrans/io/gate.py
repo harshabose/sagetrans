@@ -15,7 +15,7 @@ REQUIRED_TESTS = tuple(f"T-{i:02d}" for i in range(1, 16))
 # Analyses that use a stochastic search must register under these names in the run record and
 # carry their three-seed cost spread; T-12 must hold on the REAL problem, not only on the analytic
 # cost the unit test uses.
-SEARCH_ANALYSES = ("B2", "C")
+SEARCH_ANALYSES = ("C",)
 T12_SPREAD_MAX = 0.01
 # a dominating input may be quoted as released only if measured, or flagged as an assumption
 MEASURED = ("measured",)

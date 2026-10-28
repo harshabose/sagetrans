@@ -1,5 +1,7 @@
 # Analysis D fix specification (`braking.py`, `ardupilot_like.py`): hand-off for an implementing agent
 
+> B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
+
 Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: implemented** (branch `feat/analysis-d-ardupilot-braking`; **sections 14 and 15 are addenda, specified and not implemented**; section 11 checks 1 to 3 and 5 to 11 were run, check 4 within about 0.05 at 15 m/s and about 0.08 at 17 m/s with 8 and 12 deg; tests are left to the owner, as in section 0). Written 26 Oct 2026 after the owner settled the points in section 0. The reference numbers in sections 1 and 11 come from my scratch scripts with a **hand-copied** vehicle (m = 26.664 kg, S = 1.617, CL0 0.4, CL_alpha 4.75, alpha_s 0.274, CD0 0.066, k 0.042, i_w 0, CN 1.5, M 70, 1500 m, SoC 0.8, controller from `controller.yaml`: Q_A_ANGLE_MAX 30 deg, T_bt 3 s, gains K_h 0.5, K_vh 0.02, K_i 0.01, a_lim 3.0); re-baseline with `load_inputs("configs", "draft", ...)` before trusting any of them. Nothing here was run against a repo change; every "expected" number is a scratch experiment that subclasses the controller.
 
 ## 0. Decisions already taken by the project owner (do not re-open)

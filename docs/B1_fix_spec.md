@@ -1,5 +1,7 @@
 # Analysis B1 fix specification (`collocation.py`, `stages.py`): hand-off for an implementing agent
 
+> B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
+
 Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: specified, not implemented.** It is written against the code that `C_fix_spec.md` produces: `braking.airbrake_entry_state(..., rotor_start=...)`, `LiftFF.thrust_for_delta`, `restricted.evaluate_c`, the shared AIRBRAKE-exit `BackTransitionParams` helper (C spec 4.2) and the `C` config block. Implement C first, or add those pieces as C spec sections 3.3, 4.1 and 4.2 describe. Branch from the tip of the C branch. The numbers below come from scratch scripts that are not in the repo (section 12); S-01 only.
 
 ## 0. Decisions already taken by the project owner (do not re-open)

@@ -13,7 +13,7 @@ absolute imports mean it does not shadow the standard library.)
 | `gate.py` | `release_gate`, `GateResult`, `verification_from_junit`, `REQUIRED_TESTS`, `SEARCH_ANALYSES` |
 | `settings.py` | strict pydantic models for the plain files `study.yaml` and `scenarios.yaml` |
 | `inputs.py` | `load_inputs`: reads the five config files, converts units once, builds `VehicleParams` and friends from the register, records fallbacks, reports every problem (`InputError`); `StudyInputs` |
-| `stages.py` | the study as independent tasks (`basics`, `C`, `B2`, `B1:<scenario>`, `sensitivity`): `plan_tasks`, `run_task` |
+| `stages.py` | the study as independent tasks (`basics`, `C`, `B1:<scenario>`, `sensitivity`): `plan_tasks`, `run_task` |
 | `assemble.py` | turns task results into tables, figures, `report.md`, `inputs_used.md`, the run record and the gate verdict |
 | `study.py` | `run_study`: load, check, run tasks in a spawn process pool with a per-task disk cache, assemble |
 | `cli.py` | `python run.py` / `python -m sagetrans`: `--check --mode --only --force --serial --verify` |
@@ -43,7 +43,7 @@ Written as `run_record.json` next to every output (FR-09, NFR-07). A `FullRunRec
 | `code_version`, `git_commit`, `git_dirty`, `date` | where the numbers came from |
 | `analyses` | name → the input hash of each contributing analysis's own `RunRecord` |
 | `seeds` | seeds used by stochastic searches |
-| `search_spreads` | for each analysis that used a stochastic search (`"B2"`, `"C"`): the three-seed cost spread, i.e. the **real-problem T-12 evidence** the gate checks |
+| `search_spreads` | for each analysis that used a stochastic search (`"C"`): the three-seed cost spread, i.e. the **real-problem T-12 evidence** the gate checks |
 | `override` | `True` if the DRAFT refusal was overridden for this write |
 | `outputs` | file name → SHA-256 of every file written |
 
@@ -117,10 +117,9 @@ and `.summary()` prints it.
 3. **T-12 holds on the real problem for every analysis that used a stochastic search.** This is a
    separate rule because the `test_t12_…` unit test only exercises the search machinery on an
    analytic cost, so "T-12 passes" in step 2 says nothing about whether an actual optimum is
-   repeatable. If the record lists analysis `"C"` or `"B2"` (`gate.SEARCH_ANALYSES`), it must also
+   repeatable. If the record lists analysis `"C"` (`gate.SEARCH_ANALYSES`), it must also
    carry that analysis's three-seed spread in `search_spreads`, and the spread must be at most 1 %
-   (`gate.T12_SPREAD_MAX`). A missing or NaN spread blocks. With the A-based start B2's seeds
-   disagreed by 4–9 %, so a record containing B2 is blocked until that is fixed.
+   (`gate.T12_SPREAD_MAX`). A missing or NaN spread blocks.
 4. **The evidence-grade summary is attached** (non-zero counts).
 5. **The sensitivity ranking is stable** across the two sample sizes (Spearman ≥ 0.8 and top-3
    overlap ≥ 2/3 for every output), **and every dominating input is either measured or flagged as an
@@ -157,7 +156,7 @@ vp, scen = placeholder_vehicle(), Scenario(100.0)
 cfg = Config.from_yaml("configs/vehicle.yaml")
 model = S.HeadlineModel(vp, scen, S.default_inputs(vp, scen))
 sens = S.run_sensitivity(model, r_small=6, r_large=12)
-# if an optimisation (analysis C or B2) fed the result, register its three-seed spread too:
+# if an optimisation (analysis C) fed the result, register its three-seed spread too:
 #   build_record(cfg, {..., "C": res.record}, search_spreads={"C": res.search.spread})
 rec = build_record(cfg, {"sensitivity": sens.record}, seeds=(0,))
 text = report.build_report(report.ReportInputs("Study", rec, cfg, model({}), sens=sens))

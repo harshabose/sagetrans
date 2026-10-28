@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from sagetrans.analysis import collocation as K  # noqa: N812
-from sagetrans.analysis import freeform_opt
 from sagetrans.analysis.common import Scenario
 from sagetrans.physics.params import placeholder_vehicle
 
@@ -108,9 +107,8 @@ def test_b1_beats_the_baseline_at_the_baselines_own_excursion_and_distance(prob:
     chk = K.replay(prob, bc.b1)
     assert chk.passes()
     # same scenario, same cost definitions: the comparison table
-    b2 = freeform_opt.decode(freeform_opt.init_from_zero_loss(VP, SC, 22.0))
-    table = K.compare(prob, bc.b1, None, b2)
-    assert set(table) == {"B1", "C", "B2"}
+    table = K.compare(prob, bc.b1)
+    assert set(table) == {"B1", "C"}
     assert table["B1"]["energy"] < table["C"]["energy"]
     assert all(set(v) == {"excursion", "energy", "distance"} for v in table.values())
 
@@ -121,21 +119,6 @@ def test_replay_check_rejects_a_solution_that_cheats_between_nodes(
     chk = K.replay(prob, sol10)
     doctored = replace(chk, collocated={**chk.collocated, "excursion": 0.0})
     assert chk.passes() and not doctored.passes()  # a 0 m claim against a ~10 m replay
-
-
-def test_b2_can_start_from_the_b1_solution(prob: K.Problem, sol10: K.B1Solution):
-    prm = freeform_opt.init_from_collocation(prob, sol10)
-    assert set(prm) == set(freeform_opt.BOUNDS.names)
-    u = freeform_opt.BOUNDS.to_unit(prm)
-    assert np.all((0.0 <= u) & (u <= 1.0))
-    fp = freeform_opt.decode(prm)
-    # the free-form law runs from this start; it is a start, not a claim that it is good
-    m = freeform_opt.evaluate(VP, SC, fp, 22.0)
-    assert np.isfinite([m.excursion, m.energy, m.distance]).all()
-    # the rotors are off above the speed where B1 first switches them on, and the rotor knots at
-    # high V/V_s carry B1's near-idle command (the ESC dead zone), not an invented value
-    assert fp.s_on <= freeform_opt.S_KNOTS[-1]
-    assert fp.delta_r[-1] >= prob.dead_zone - 1e-6
 
 
 def test_solve_verified_and_sweep_report_all_attempts():

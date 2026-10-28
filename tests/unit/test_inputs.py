@@ -201,7 +201,7 @@ def test_only_selects_analyses_and_partial_results_are_never_reused(cfgdir, tmp_
     full = load_inputs(cfgdir)
     part = load_inputs(cfgdir, only={"A", "F"})
     assert stages.plan_tasks(part) == ["basics"]
-    expected = {"basics", "C", "B2", "B1:S-01", "B1:S-02", "sensitivity"}
+    expected = {"basics", "C", "B1:S-01", "B1:S-02", "sensitivity"}
     assert set(stages.plan_tasks(full)) == expected
     assert stages.plan_tasks(full)[0] in ("B1:S-01", "B1:S-02")  # most expensive first
     work = tmp_path / "w"

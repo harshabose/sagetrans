@@ -12,8 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-AnalysisName = Literal["A", "D", "F", "E", "Q2", "C", "B2", "B1", "sensitivity"]
-ALL_ANALYSES: tuple[str, ...] = ("A", "D", "F", "E", "Q2", "C", "B2", "B1", "sensitivity")
+AnalysisName = Literal["A", "D", "F", "E", "Q2", "C", "B1", "sensitivity"]
+ALL_ANALYSES: tuple[str, ...] = ("A", "D", "F", "E", "Q2", "C", "B1", "sensitivity")
 
 
 # the ground speed at which D's runs end (braking.measure_a_eq `v_f`); a test keeps them equal
@@ -285,22 +285,6 @@ class CCfg(_Strict):
         return data
 
 
-class B2StartCfg(_Strict):
-    scenario_index: int = Field(0, ge=0)
-    eps_h_m: float = 10.0
-    eps_x_m: float = 300.0
-
-
-class B2Cfg(_Strict):
-    ensemble_n: int = Field(4, ge=1)
-    ensemble_seed: int = 1
-    seeds: list[int] = [1, 2, 3]
-    popsize: int = Field(12, ge=4)
-    maxiter: int = Field(15, ge=1)
-    sigma0: float = Field(0.1, gt=0.0)
-    start: B2StartCfg = B2StartCfg()
-
-
 class B1VariantCfg(_Strict):
     """One stated wing limit of B1: a margin on alpha_s or an angle, and the pitch limit."""
 
@@ -412,7 +396,6 @@ class StudyCfg(_Strict):
     E: ECfg = ECfg()
     Q2: Q2Cfg = Q2Cfg()
     C: CCfg = CCfg()
-    B2: B2Cfg = B2Cfg()
     B1: B1Cfg = B1Cfg()
     sensitivity: SensCfg = SensCfg()
 

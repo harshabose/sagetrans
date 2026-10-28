@@ -267,8 +267,7 @@ def assemble(
             "`theta_A` against its bound is a stalled-wing brake as in D (check D's alpha and VRS "
             "columns in `C_runs`); it is not a recommendation to fly at that angle. `rotor_start` "
             "idle is read from the ArduPilot source and not checked in SITL or a log (O-13); the "
-            "Z-loop defaults are master 4.8.0-dev, not a pinned tag (O-08). B and C are not "
-            "comparable yet: B1 and B2 still start at level cruise.",
+            "Z-loop defaults are master 4.8.0-dev, not a pinned tag (O-08).",
             "",
             md_table(tables["C_params"]), "", "Search:", "", md_table(tables["C_search"]), "",
             "Energy against distance with the optimum's ramp and q varied:", "",
@@ -280,24 +279,6 @@ def assemble(
                               "excursion_m", "end_sink_ms", "flags", "a_cap_ms2", "q_over_a_cap",
                               "alpha_max_gated_deg", "vrs_min"]),
         ])  # fmt: skip
-
-    b2 = task_results.get("B2", {})
-    b2_res = b2.get("result")
-    if b2_res is not None:
-        spreads["B2"] = b2_res.search.spread
-        analyses["B2"] = b2_res.record
-        tables["B2_search"] = [{"seed": s.seed, "best_cost": s.f, "evaluations": s.n_evals}
-                               for s in b2_res.search.seeds]  # fmt: skip
-        tables["B2_ensemble_runs"] = [
-            {"scenario": i, "excursion_m": m.excursion, "energy_J": m.energy,
-             "distance_m": m.distance, "failures": ",".join(m.failures)}
-            for i, m in enumerate(b2_res.runs)]  # fmt: skip
-        met = b2_res.search.spread <= gate.T12_SPREAD_MAX
-        sections["B2 — speed-scheduled law (started from a B1 solution)"] = "\n".join([
-            f"Cost {b2_res.cost_initial:.3f} (B1-based start) → **{b2_res.cost:.3f}**; three-seed "
-            f"spread **{b2_res.search.spread:.2%}**. **T-12 is {'met' if met else 'NOT met'} for "
-            f"B2**{'' if met else ', so this result is not reproducible'}.", "",
-            md_table(tables["B2_search"]), "", md_table(tables["B2_ensemble_runs"])])  # fmt: skip
 
     # B1 from the AIRBRAKE exit: one table per kind over every scenario that ran
     b1_runs = [(n, task_results[f"B1:{n}"]) for n in inp.study.B1.scenarios
@@ -325,7 +306,7 @@ def assemble(
             "a strict lower bound (B-2). The end band on the vertical speed is "
             f"{bc.end_vh_band_ms or inp.study.C.sink_tol_ms:g} m/s (C's sink tolerance; B1 bounds "
             "climb as well as sink). The entry, the sink tolerance and the rotor start are C's and "
-            "D's. B2 still starts at level cruise, so B2 and B1 are not comparable yet.", "",
+            "D's.", "",
             "**Front** (`J_point` is C's cost of the point; `j_best` marks the least per scenario "
             "and variant):", "",
             md_table(front, ["scenario", "variant", "eps_x_m", "converged", "replay_verified",
@@ -377,7 +358,7 @@ def assemble(
         fallbacks=inp.fallbacks, extra_reasons=inp.draft_reasons,
     )  # fmt: skip
     limitations = [
-        "Back-transition only for B1, B2 and C; the forward transition is not optimised.",
+        "Back-transition only for B1 and C; the forward transition is not optimised.",
         "The forward transition in the energy budget is a quasi-steady estimate.",
         "AIRSPEED_MIN: the simulated controller compares true airspeed; Q2 reads it as an "
         "equivalent airspeed. Which one ArduPilot uses is open (O-02).",

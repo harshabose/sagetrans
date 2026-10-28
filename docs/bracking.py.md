@@ -1,3 +1,5 @@
+> B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
+
 ## analysis/braking.py (Analysis D)
 
 > [!abstract] What this file is Analysis D: **Position1 braking and the `Q_TRANS_DECEL` calibration**. It flies the ArduPilot-structured back-transition controller ([[ardupilot_like.py]]) from the switch point to a ground speed of 1 m/s, measures the deceleration the controller actually achieves when pitch is held at its envelope limit, and recommends the smallest of those as the planning value `a_rec`. Section 10D of the proposal; equation (10.5). Unlike A it **is a simulation**: `simulate()` integrates the full vehicle ([[vehicle.py]]) with the controller in the loop. The controller is what is being judged, not the hardware.

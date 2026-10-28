@@ -289,8 +289,8 @@ parallel:
   enabled: true
   max_workers: 0           # 0 = one per CPU core (capped by the number of tasks)
 
-# Which analyses to run. Names: A D F E Q2 C B2 B1 sensitivity
-analyses: [A, D, F, E, Q2, C, B2, B1, sensitivity]
+# Which analyses to run. Names: A D F E Q2 C B1 sensitivity
+analyses: [A, D, F, E, Q2, C, B1, sensitivity]
 
 switch_test: ground        # speed used in the Position1 switch test: ground | air  (O-02)
 
@@ -326,24 +326,22 @@ C:                         # ArduPilot-parameter optimisation (back-transition)
   seeds: [1, 2, 3]
   popsize: 8
   maxiter: 15
-  a_plan_source: simulated         # simulated | ideal
 
-B2:                        # speed-scheduled law, started from a B1 solution
-  ensemble_n: 4
-  ensemble_seed: 1
-  seeds: [1, 2, 3]
-  popsize: 12
-  maxiter: 15
-  sigma0: 0.1
-  start: {scenario_index: 0, eps_h_m: 10, eps_x_m: 300}
-
-B1:                        # open-loop optimum by direct collocation
+B1:                        # open-loop least-energy back-transition from the AIRBRAKE exit (docs/B1_fix_spec.md)
+  # The entry (rotor start, sink tolerance) comes from the C block, the entry speed rule from the D block.
   scenarios: [S-01, S-02]
-  eps_h_m: [20, 10, 6, 3]
-  eps_x_m: 300
   intervals: 40
   refine_from: [20]
   max_iter: 800
+  eps_h_m: [1.0]                       # headline altitude band (C holds about 0.5 to 1 m)
+  eps_x_m: [40, 50, 60, 75, 100, 300]  # distance caps swept: the energy-against-distance front
+  end_vh_band_ms: null                 # null = C.sink_tol_ms
+  variants:                            # the wing limit is stated, never silent; no "no limit" variant
+    - {name: attached,   alpha_margin: 0.85,  theta_cmd_max_deg: 34.4}   # |alpha_w| <= 0.85 alpha_s
+    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: 30.0}   # what C's ramp can reach
+  band_sweep: {eps_h_m: [3.0, 10.0], variant: c_envelope}   # sensitivity at the largest distance cap
+  sens: {rotor_start_flip: true, end_vh_band_ms: 0.5, c_envelope_theta_cmd_deg: 34.4}   # first scenario only
+  gap_c: null                          # C parameters for the gap: {T_bt, theta_A_deg, spin_min, q}; null = register at q = 2
 
 sensitivity:
   scenario: S-01                   # the scenario the sensitivity is run in
