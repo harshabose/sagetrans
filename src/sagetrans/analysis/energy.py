@@ -151,15 +151,31 @@ class BudgetResult:
 # ---- segment models -----------------------------------------------------------------------------
 
 
-def _wing_polar_drag(vp: VehicleParams, rho: float, V: float, lift: float) -> float:
+def wing_polar_drag(vp: VehicleParams, rho: float, V: float, lift: float) -> float:
     """Drag [N] for a given lift in the linear region: D = q S (C_D0 + k C_L^2)."""
     q_s = 0.5 * rho * V * V * vp.wing.S
     cl = lift / q_s
     return q_s * (vp.wing.CD0 + vp.wing.k * cl**2)
 
 
+_wing_polar_drag = wing_polar_drag  # the old private name
+
+
 def stall_speed_1g(vp: VehicleParams, rho: float) -> float:
     return aero.stall_speed(vp.m, rho, vp.wing)
+
+
+LIFT_FRACTION_AT_V_LW = 0.8  # the wing carries the weight at this fraction of C_L,max at V_lw
+
+
+def rotor_share(vp: VehicleParams, rho: float, V: float) -> float:
+    """Fraction of the weight the lift rotors carry at airspeed V (analyses E and Q2).
+
+    The wing carries the share (V / V_lw)^2, with V_lw the speed where it carries the whole
+    weight at 80% of C_L,max; the rotors carry the rest.
+    """
+    v_lw = stall_speed_1g(vp, rho) / math.sqrt(LIFT_FRACTION_AT_V_LW)
+    return max(0.0, 1.0 - (V / v_lw) ** 2)
 
 
 def cruise_sweep(
@@ -204,21 +220,21 @@ def takeoff_segment(vp: VehicleParams, mp: MissionProfile, soc: float) -> Segmen
 
 
 def forward_transition_estimate(
-    vp: VehicleParams, mp: MissionProfile, soc: float, n: int = 40
+    vp: VehicleParams, mp: MissionProfile, soc: float, n: int = 40, source: str | None = None
 ) -> SegmentResult:
     """Quasi-steady ESTIMATE: constant acceleration a_fwd to V_trans, rotors carrying W - L.
 
     The wing lift is the share (V/V_lw)^2 of the weight with V_lw the speed where the wing
-    carries the weight at 80% of C_L,max; the pusher supplies m a_fwd + D. To be replaced by
+    carries the weight at 80% of C_L,max (`rotor_share`); the pusher supplies m a_fwd + D.
+    a_fwd comes from analysis Q2 (`E.a_fwd_mode`) or the mission file. To be replaced by
     the simulated transition of analyses B/C.
     """
     rho = float(atmosphere.density(mp.clearance_amsl, mp.isa_offset_k))
-    v_lw = stall_speed_1g(vp, rho) / math.sqrt(0.8)
     speeds = np.linspace(0.0, mp.v_trans, n)
     powers = np.zeros(n)
     w_n = vp.m * G
     for i, v in enumerate(speeds):
-        share = max(0.0, 1.0 - (v / v_lw) ** 2)
+        share = rotor_share(vp, rho, float(v))
         t_r = share * w_n
         w_r = trim.rotor_speed_for_thrust(t_r, 0.0, float(v), rho, vp)
         q_r = float(rotor.lift_rotor(w_r, 0.0, float(v), rho, vp.rotor)[1]) if t_r > 0 else 0.0
@@ -232,7 +248,7 @@ def forward_transition_estimate(
     e = float(np.trapezoid(powers, t))
     return SegmentResult(
         e, mp.v_trans / mp.a_fwd, mp.v_trans**2 / (2.0 * mp.a_fwd),
-        "quasi-steady estimate, a_fwd ASSUMED",
+        "quasi-steady estimate, a_fwd ASSUMED" if source is None else source,
     )  # fmt: skip
 
 
@@ -337,6 +353,7 @@ def build_budget(
     window: BatteryWindow,
     limits: descent.DescentLimits,
     a_plan: float = 2.5,
+    a_fwd_source: str | None = None,
 ) -> BudgetResult:
     """First-pass mission budget from the component models and analyses D and F."""
     soc = mp.soc_mean
@@ -346,7 +363,7 @@ def build_budget(
     e_cruise = tr.elec.power / v_cruise
     segs = {
         "takeoff": takeoff_segment(vp, mp, soc),
-        "fwd_transition": forward_transition_estimate(vp, mp, soc),
+        "fwd_transition": forward_transition_estimate(vp, mp, soc, source=a_fwd_source),
         "climb": climb_segment(vp, mp, soc),
         "descent": descent_segment(vp, mp, soc),
         "back_transition": back_transition_segment(vp, mp, v_cruise, soc, a_plan),

@@ -15,6 +15,7 @@ scenario and options to a results object. Analysis letters follow the proposal's
 | `restricted.py` | **C** — ArduPilot-parameter optimisation | What can the autopilot be *configured* to do? |
 | `braking.py` | **D** — Position1 braking and `Q_TRANS_DECEL` | How far does the aircraft need to brake, and what deceleration should the planner assume? |
 | `energy.py` | **E** — mission energy budget and reserve | Does the mission fit in the usable pack energy at 100 and 113 km (Q1, Q7)? |
+| `pusher.py` | **Q2** — pusher forward acceleration | What forward acceleration can the pusher deliver at `TKOFF_THR_MAX` from rest to `AIRSPEED_MIN`? |
 | `descent.py` | **F** — landing descent profile | How fast may it descend, and what does the landing hover cost (Q6)? |
 | `sensitivity.py` | FR-08 | Which uncertain inputs drive each headline result? |
 | `common.py`, `ensemble.py`, `search.py`, `runs.py` | shared | scenarios, run records, ensembles and cost, CMA-ES wrapper, run helpers |
@@ -402,7 +403,7 @@ E_total = E_to + E_ft + E_climb + E_cruise + E_desc + E_bt + E_land + E_reserve
 | Segment | How it is computed |
 | --- | --- |
 | Take-off | hover power times (pre-lift-off hover + vertical climb to clearance) plus `m g h` divided by the electrical-to-lift efficiency |
-| Forward transition | **a quasi-steady estimate** (constant acceleration `a_fwd`, rotors carrying `W − L`, pusher supplying `m a + D`); to be replaced by the simulated transition |
+| Forward transition | **a quasi-steady estimate** (constant acceleration `a_fwd`, rotors carrying `W − L`, pusher supplying `m a + D`); `a_fwd` comes from Q2 (`E.a_fwd_mode`: `case` is the pusher at `TKOFF_THR_MAX` at E's own site, `worst` the minimum over the Q2 grid, `mission` the value in `mission.yaml`); to be replaced by the simulated transition |
 | Climb | steady-climb trim with the pusher model; power × time |
 | Cruise | level trim at the best-range speed (minimum energy per metre); energy per metre × distance |
 | Descent | pusher-off glide trim; avionics power × time |
@@ -422,7 +423,7 @@ for the hand-calculated reference case).
 **Assumptions to know about:** one leg at one mass (a return leg is a second call); every segment
 uses one **mean state of charge** (`soc_mean`) rather than tracking the open-circuit voltage; the
 usable-energy window (`BatteryWindow`: `eta_usable 0.8`, `SoH 1`, temperature factor 1) is assumed
-(open question O-15); the forward transition is an estimate.
+(open question O-15); the forward transition is an estimate. `E_summary` carries `a_fwd_used_ms2`, `a_fwd_case_ms2`, `a_fwd_worst_ms2` and `a_fwd_mode`. If the acceleration is not positive (the pusher cannot reach the speed) the stage records an error and writes no budget; it never falls back to the mission value. `E.a_fwd_metric` is `min` (worst over speed, default) or `equiv` (the constant acceleration covering the same distance).
 
 **What it found (placeholder).** Hover is about 1.2 kW (it was 3.5 kW before the ESC bus-current
 correction — see `physics/README.md`). The placeholder budget comes out at several hundred km maximum
@@ -435,6 +436,53 @@ and 268 Wh at 113 km), hover and cruise trims reproducing zero acceleration and 
 and current in the simulated vehicle, hover power above the momentum-theory ideal, climb energy above
 the potential energy, the glide balance, best-range speed minimising energy per metre, reserve
 scaling, and an end-to-end budget.
+
+---
+
+## Q2 — pusher forward acceleration (`pusher.py`)
+
+**Question.** The controller matches the rotors to whatever lift the wing does not provide until
+`AIRSPEED_MIN` is reached, however the wing produces it. So what forward acceleration can the pusher
+deliver at `TKOFF_THR_MAX`, from rest to `AIRSPEED_MIN`, at each site (altitude, state of charge,
+mass)? It replaces the old "full throttle, L = W, one speed" thrust margin.
+
+**Model** (`forward_accel(vp, rho, v_end, soc, cmd, n)`), at each speed on `linspace(0, v_end, n)`:
+
+* the wing carries the share `(V / V_lw)^2` of the weight, `V_lw = V_stall,1g / sqrt(0.8)`, **E's own
+  rule** (`energy.rotor_share`), so Q2 and E agree; the rotors carry the rest, at forward-flight
+  inflow `V`, and load the same battery bus (a fixed-point on the bus voltage);
+* the pusher command `TKOFF_THR_MAX` goes through the ESC dead zone (0.8 is an effective 0.789); its
+  speed solves motor torque = propeller torque at the loaded bus voltage;
+* net acceleration `(T_p - D - H_r) / m`, with wing drag for the lift the wing carries.
+
+Quasi-steady: level flight, no spool dynamics, no wind. It is the available acceleration, not a
+trajectory. `FwdAccel` gives the profile, `a_min` (worst over speed, where E and the worst-case table
+read), `a_equiv` (constant acceleration covering the same distance), time and distance, `v_reach`
+(how far the pusher gets with positive acceleration), `reachable`, and flags for rotor saturation and
+current limits. An unreachable cell keeps a row with `a_min <= 0` and NaN `a_equiv`, `t_s`, `x_m`.
+
+**Tables.** `Q2_pusher_margin` (one row per altitude x mass factor x SoC x convention), `Q2_worst`
+(the smallest `a_min` per convention), and `Q2_profile` (`Q2.write_profile`, off by default). Every row
+records `tkoff_thr_max` and its status; if the register entry is absent the 0.7 built-in is used and
+the row says `fallback (placeholder)`.
+
+**Airspeed convention.** `AIRSPEED_MIN` is registered as a true airspeed, so `tas` is the default feed
+to E, but the old Q2 read it as equivalent; both are tabulated until DEC-1 is settled. At 5000 m the
+two differ by 29 percent (17 EAS is 21.9 TAS).
+
+**What it found (register values, `TKOFF_THR_MAX` 0.8, 17 m/s).** At E's own site (30 m, SoC 0.6,
+nominal mass) `a_min` is 1.24 m/s² (distance-equivalent 1.86, 7.9 s, 78 m); the command matters a
+great deal: 2.68 / 1.94 / 1.24 / 0.59 at 1.0 / 0.9 / 0.8 / 0.7. Over the grid with TAS the global
+worst is 0.48 m/s² (5000 m, mass x1.15, SoC 0.3). With EAS that cell cannot reach 21.9 m/s TAS (the
+acceleration reaches zero near 20.3 m/s). Neither current limit nor rotor saturation is active
+anywhere on the grid. In E the choice of `a_fwd` moves the forward-transition energy by a factor of
+2.4 (10.0 to 26.5 Wh) and the 1500 m maximum range by under 1 km; the distance it needs (78 to
+304 m) matters more. `worst` is pessimistic on purpose: a constant minimum overstates the time and
+distance of the real profile.
+
+**Caveats.** The battery is a placeholder (linear open-circuit voltage, assumed R0/R1/C1, no pack
+current limit; the pusher and rotor `I_lim` are the only current limits). `TKOFF_THR_MAX` is a TBD
+register value and the result is very sensitive to it. The lift share is E's rule, not the wing polar.
 
 ---
 

@@ -190,13 +190,27 @@ def assemble(
             analyses[f"E:{k}"] = b.record
             figs[f"E_range_margin_{k}"] = figures.range_margin_figure(b, inp.requirements_km)
     if "Q2_pusher_margin" in tables:
-        sections["Q2 — pusher thrust margin at AIRSPEED_MIN"] = (
-            f"Full-throttle pusher thrust against wing drag at the transition speed "
-            f"({inp.mission.v_trans:g} m/s, read here as an equivalent airspeed). "
-            "`margin_N < 0` means the pusher cannot reach the speed.\n\n"
-            + md_table(tables["Q2_pusher_margin"], ["altitude_m", "mass_kg", "V_trans_tas_ms",
-                                                    "T_max_N", "D_N", "margin_N", "accel_ms2",
-                                                    "current_limited"]))  # fmt: skip
+        q2c = inp.study.Q2
+        sections["Q2 — pusher forward acceleration to AIRSPEED_MIN"] = (
+            "Forward acceleration the pusher can deliver at `TKOFF_THR_MAX` "
+            f"({inp.tkoff_thr_max:g}, through the ESC dead zone) from rest to `AIRSPEED_MIN` "
+            f"({inp.airspeed_min:g} m/s). The wing carries E's share (V/V_lw)^2 of the weight, the "
+            "rotors carry the rest and load the same battery bus. `a_min_ms2` is the worst over "
+            "speed, `a_equiv_ms2` the constant acceleration covering the same distance. A cell "
+            "with `reachable = no` cannot reach the speed (`a_min_ms2` <= 0, `v_reach_ms` says how "
+            "far it gets). `AIRSPEED_MIN` is registered as a true airspeed; both readings are "
+            "tabulated (DEC-1 is open) and E reads "
+            f"`{q2c.feed_convention}`. The battery is a placeholder (linear open-circuit voltage, "
+            "assumed resistances, no pack current limit).\n\n"
+            "Worst cell in each convention:\n\n"
+            + md_table(tables.get("Q2_worst", []), ["convention", "altitude_m", "mass_factor",
+                                                    "soc", "v_end_tas_ms", "a_min_ms2",
+                                                    "a_equiv_ms2", "t_s", "x_m", "v_reach_ms",
+                                                    "reachable"])
+            + "\n\nAll cells:\n\n"
+            + md_table(tables["Q2_pusher_margin"], ["convention", "altitude_m", "mass_kg", "soc",
+                                                    "v_end_tas_ms", "a_min_ms2", "a_equiv_ms2",
+                                                    "reachable", "current_limited"]))  # fmt: skip
 
     c_res = task_results.get("C", {}).get("result")
     if c_res is not None:

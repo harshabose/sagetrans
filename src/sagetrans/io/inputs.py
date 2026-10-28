@@ -125,6 +125,7 @@ class StudyInputs:
     requirements_km: tuple[float, float]
     entry_eas: float
     airspeed_min: float  # AIRSPEED_MIN, m/s (also `mission.v_trans`)
+    tkoff_thr_max: float  # TKOFF_THR_MAX, the pusher command in AUTO
     scenarios: dict[str, Scenario]
     ensemble_axes: EnsembleAxes
     study: StudyCfg
@@ -421,6 +422,7 @@ def load_inputs(
         window=window, descent=descent, controller=controller,
         controller_overrides=gains, baseline_overrides=baseline_overrides, start_params=start,
         theta_p=theta_p, requirements_km=(r1, r2), entry_eas=entry_eas, airspeed_min=airspeed_min,
+        tkoff_thr_max=tkoff,
         scenarios=scenarios,
         ensemble_axes=axes, study=study, fallbacks=tuple(rd.fallbacks),
         draft_reasons=tuple(draft_reasons),

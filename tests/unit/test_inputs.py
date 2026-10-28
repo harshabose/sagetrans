@@ -263,7 +263,7 @@ def test_one_command_produces_a_complete_traceable_result_and_reuses_the_cache(c
     assert rec["mode"] == "draft" and rec["label"] == "DRAFT" and rec["settings_hash"]
     assert rec["config_hash"] and rec["outputs"] and all(check_outputs(f).values())
     report = (f / "report.md").read_text(encoding="utf-8")
-    assert "DRAFT" in report and "Q2 — pusher thrust margin" in report
+    assert "DRAFT" in report and "Q2 — pusher forward acceleration" in report
     assert "TBD" in (f / "inputs_used.md").read_text(encoding="utf-8")
     # second run: unchanged inputs are served from the cache and the outputs are byte-identical
     before = rec["outputs"]
