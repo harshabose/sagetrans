@@ -136,7 +136,7 @@ class StudyInputs:
     requirements_km: tuple[float, float]
     entry_eas: float
     airspeed_min: float  # AIRSPEED_MIN, m/s (also `mission.v_trans`)
-    tkoff_thr_max: float  # TKOFF_THR_MAX, the pusher command in AUTO
+    tkoff_thr_max: float  # TKOFF_THR_MAX as flown: the pusher command in AUTO (0 -> THR_MAX)
     scenarios: dict[str, Scenario]
     ensemble_axes: EnsembleAxes
     study: StudyCfg
@@ -146,6 +146,7 @@ class StudyInputs:
     forward: ForwardParams
     defaults: dict[str, float] = field(default_factory=dict)  # ArduPilot defaults, SI, by name
     notes: tuple[str, ...] = field(default=())
+    tkoff_thr_max_raw: float | None = None  # TKOFF_THR_MAX as the register states it (display)
 
     @property
     def is_draft(self) -> bool:
@@ -424,7 +425,14 @@ def load_inputs(
     stub = "controller.cruise_stub."
     q_transition_s = rd.get(ap + "Q_TRANSITION_MS", bl0.q_transition_s)
     q_fail = rd.get(ap + "Q_TRANS_FAIL", 0.0)
-    tkoff = rd.get(ap + "TKOFF_THR_MAX", bl0.tkoff_thr_max)
+    tkoff_raw = rd.get(ap + "TKOFF_THR_MAX", bl0.tkoff_thr_max)
+    tkoff = tkoff_raw
+    if tkoff_raw == 0.0:  # ArduPilot: 0 means THR_MAX (O-17). Resolved here, once, for everyone.
+        if not cfg_has(cfg, ap + "THR_MAX"):
+            raise InputError([
+                "controller.ardupilot.TKOFF_THR_MAX is 0 (= THR_MAX) but THR_MAX is not in the "
+                "register; give THR_MAX or a TKOFF_THR_MAX above 0"])
+        tkoff = rd.get(ap + "THR_MAX", 1.0)
     baseline_overrides: dict[str, Any] = {
         "v_cruise": rd.get(stub + "v_cruise", bl0.v_cruise),
         "r_tecs": rd.get(stub + "r_tecs", bl0.r_tecs),
@@ -510,7 +518,7 @@ def load_inputs(
         ensemble_axes=axes, study=study, fallbacks=tuple(rd.fallbacks),
         draft_reasons=tuple(draft_reasons),
         settings_hash=hashlib.sha256(settings_blob.encode()).hexdigest(),
-        forward=forward, defaults=_defaults(cfg),
+        forward=forward, defaults=_defaults(cfg), tkoff_thr_max_raw=tkoff_raw,
     )  # fmt: skip
 
 

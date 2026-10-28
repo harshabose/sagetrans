@@ -333,3 +333,34 @@ def test_vrs_enforce_setting_reaches_analysis_a(cfgdir, tmp_path):
     out2 = study.run_study(cfgdir, out_dir=tmp_path / "res2", workers=1, log=lambda s: None)
     report = (out2.folder / "report.md").read_text(encoding="utf-8") if out2.folder else ""
     assert "vrs_enforce needs mission.descent.kappa" in report
+
+
+def test_tkoff_thr_max_zero_means_thr_max_for_every_reader(cfgdir):
+    ctl = cfgdir / "controller.yaml"
+    edit(ctl, "TKOFF_THR_MAX: {value: 0.7,", "TKOFF_THR_MAX: {value: 0.0,")
+    edit(ctl, "THR_MAX: {value: 1.0,", "THR_MAX: {value: 0.9,")
+    inp = load_inputs(cfgdir)
+    # one resolution at load: E, Q2, soc_trace and the controllers all read the resolved value
+    assert inp.tkoff_thr_max == pytest.approx(0.9) and inp.tkoff_thr_max_raw == 0.0
+    assert inp.forward.tkoff_thr_max == pytest.approx(0.9)
+    assert inp.start_params["tkoff_thr_max"] == pytest.approx(0.9)
+    from sagetrans.analysis import pusher
+
+    mp = stages.site_mission(inp, 0.0)
+    a = stages._fwd_accel_by_leg(inp, inp.vehicle, mp, {"leg": inp.vehicle.m}, {"leg": 0.6}, 0.0)
+    v_end = mp.v_trans
+    ref = pusher.forward_accel(inp.vehicle, float(stages.atmosphere.density(mp.clearance_amsl)),
+                               v_end, 0.6, 0.9, inp.study.Q2.n_speed)
+    want = ref.a_min if inp.study.E.a_fwd_metric == "min" else ref.a_equiv
+    assert a["leg"] == pytest.approx(want)
+    assert a["leg"] > 0.0  # not the false "unreachable" of a zero throttle
+
+
+def test_tkoff_thr_max_zero_without_thr_max_is_an_error_not_a_fallback(cfgdir):
+    ctl = cfgdir / "controller.yaml"
+    edit(ctl, "TKOFF_THR_MAX: {value: 0.7,", "TKOFF_THR_MAX: {value: 0.0,")
+    text = ctl.read_text(encoding="utf-8")
+    kept = [ln for ln in text.splitlines(True) if "  THR_MAX:" not in ln]
+    ctl.write_text("".join(kept), encoding="utf-8")
+    with pytest.raises(InputError, match="THR_MAX"):
+        load_inputs(cfgdir)

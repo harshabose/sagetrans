@@ -51,7 +51,7 @@ PARAMS: tuple[_Param, ...] = (
            "airspeed_min_eas_ms", 1.0, ft_name="airspeed_min"),
     _Param("Q_TRANSITION_MS", "ms", 1e3, lambda i: i.start_params["q_transition"], None, 1.0,
            "q_transition_s", 1e3, ft_name="q_transition"),
-    _Param("TKOFF_THR_MAX", "-", 1.0, lambda i: i.tkoff_thr_max, None, 1.0, "tkoff_thr_max", 1.0,
+    _Param("TKOFF_THR_MAX", "-", 1.0, lambda i: _register_tkoff(i), None, 1.0, "tkoff_thr_max", 1.0,
            ft_name="tkoff_thr_max"),
     _Param("Q_TRAN_PIT_MAX", "deg", DEG, lambda i: math.radians(i.forward.tran_pit_max_deg), None,
            1.0, "tran_pit_max_deg", 1.0, ft_name="tran_pit_max"),
@@ -73,6 +73,11 @@ def _bound_flag(at_bound: str, name: str | None) -> str:
         if name is not None and key == name:
             return "at upper bound" if side == "hi" else "at lower bound"
     return ""
+
+
+def _register_tkoff(inp: StudyInputs) -> float:
+    """TKOFF_THR_MAX as the register states it (0 stays 0: it means THR_MAX)."""
+    return inp.tkoff_thr_max if inp.tkoff_thr_max_raw is None else inp.tkoff_thr_max_raw
 
 
 def _default_text(inp: StudyInputs, name: str, unit: str, scale: float) -> str:
