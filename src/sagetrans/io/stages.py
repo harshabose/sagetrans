@@ -20,7 +20,7 @@ import numpy as np
 from scipy import stats
 from scipy.optimize import brentq
 
-from sagetrans import atmosphere
+from sagetrans import atmosphere, progress
 from sagetrans.analysis import (
     braking,
     descent,
@@ -53,8 +53,13 @@ RHO0 = float(atmosphere.density(0.0))
 Table = list[dict[str, Any]]
 
 # rough wall-clock seconds on a laptop, for scheduling and for the pre-flight estimate
-TASK_COST = {"basics": 60, "C": 330, "FT": 300, "FT_grid": 3000, "FT_scan": 2000, "B1": 400,
-             "sensitivity": 220}
+# Seconds per task as observed in the last full clean run (2026-10-29: 24 workers on a 24-core
+# machine, all busy, so they include the slowdown of running side by side; one worker alone is
+# about 1.7 times faster). The run took 4.1 h: C 10269 s, FT_grid 6.7 to 8.6 ks, FT_scan 6.4 to
+# 9.1 ks, B1 1.0 to 1.7 ks, the fine-pass FT_grid points 3.9 to 4.0 ks, basics 848 s.
+# "FT_fine" is the fine pass (a FT_grid point planned after the first wave).
+TASK_COST = {"basics": 850, "C": 10300, "FT": 370, "FT_grid": 7700, "FT_fine": 4000,
+             "FT_scan": 7700, "B1": 1400, "sensitivity": 420, "basics_rec": 110}
 
 
 def tas(eas: float, scen: Scenario) -> float:
@@ -70,14 +75,15 @@ def _num(x: float) -> float | str:
 def _attempt(label: str, fn: Callable[[], Any], errors: list[str]) -> Any:
     """Run one piece of a task; a failure is recorded in `errors` with its traceback tail."""
     t = time.time()
+    progress.phase(label)
     try:
         out = fn()
-        print(f"    ok   {label} ({time.time() - t:.0f} s)", flush=True)
+        progress.note(f"ok   {label} ({time.time() - t:.0f} s)")
         return out
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc().strip().splitlines()[-3:]
         errors.append(f"{label}: {type(exc).__name__}: {exc}")
-        print(f"    FAIL {label}: {exc}\n      " + "\n      ".join(tb), flush=True)
+        progress.note(f"FAIL {label}: {exc}\n      " + "\n      ".join(tb), warn=True)
         return None
 
 
@@ -309,7 +315,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         maps: dict[str, Any] = {}
         rows: Table = []
         win: Table = []
-        for name in c.scenarios:
+        for k_sc, name in enumerate(c.scenarios, start=1):
+            progress.step(f"A: feasibility map of {name}", k_sc - 1, len(c.scenarios))
             sc = inp.scenarios[name]
             vps = sc.vehicle_for(vp)
             v_grid = [tas(v, sc) for v in c.v0_eas_ms]
@@ -376,8 +383,12 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
             return braking.entry_airspeed(inp.airspeed_min, sc.rho, c.entry_convention)
 
         Run = tuple[braking.BrakingResult, dict[str, Any], float]
+        d_part = ["headline table"]  # progress: the part of D that is running and its run count
+        d_runs = [0]
 
         def run(sc: Scenario, bp: Any, v_air: float) -> Run:
+            d_runs[0] += 1
+            progress.phase(f"D: {d_part[0]} (run {d_runs[0]})")
             x0, v_ground = braking.airbrake_entry_state(vp, sc, bp, v_air)
             r = braking.measure_a_eq(vp, sc, v_ground, bp, x0=x0)
             fl = braking.braking_flags(
@@ -411,6 +422,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         out["tables"]["D_a_eq"] = rows
 
         # -- diagnostic: the old speed grid, air speed = TAS of the grid EAS, ground = air - wind
+        d_part[0] = "speed grid"
         grid: Table = []
         for name in c.scenarios:
             for mf in c.mass_factors:
@@ -430,6 +442,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         out["tables"]["D_a_eq_speed"] = grid
 
         # -- recommendation: Sobol ensemble + corners, entry fixed in air speed per scenario
+        d_part[0] = "recommendation ensemble"
+
         def ensemble(bp: Any) -> tuple[Table, list[float], list[float]]:
             core, corners = braking_ensemble(rec.ensemble_n, vp, rec.ensemble_seed,
                                              inp.ensemble_axes, rec.corners)  # fmt: skip
@@ -507,6 +521,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         # entry rule's, so the headwind is the air speed minus the ground speed (a negative value
         # is a tailwind); every named scenario x mass factor runs at each speed
         curve: Table = []
+        d_part[0] = "a_rec curve"
         for vg in c.curve.ground_speeds_ms:
             done: list[tuple[str, float, float, braking.BrakingResult, dict[str, Any]]] = []
             n_runs = 0
@@ -547,9 +562,11 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         sc0 = inp.scenarios[c.scenarios[0]]
         v_air0 = entry(sc0)
         trade: Table = []
+        d_part[0] = "trade curve"
         for a_plan in c.trade.a_plan_ms2:
             for wind in c.trade.headwinds_ms:
                 for test in ("ground", "air") if wind > 0 else ("ground",):
+                    progress.phase(f"D: trade curve (a_plan {a_plan:g}, headwind {wind:g}, {test})")
                     for a_lim in sorted({base_bp.a_lim, a_plan}):
                         scw = dataclasses.replace(sc0, headwind_ms=wind)
                         bpw = dataclasses.replace(base_bp, a_lim=a_lim)
@@ -588,6 +605,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         sens_rows: Table = []
         # the vehicle model's own rotor lag at this density and SoC; rotor_lag_s adds in series
         tau_model = braking.rotor_speed_tau(scn.vehicle_for(vp), scn.rho, scn.soc)
+        d_part[0] = "sensitivities"
         for case, over in cases:
             bps = dataclasses.replace(base_bp, **over)
             r, fl, _ = run(scn, bps, v_air_n)
@@ -887,6 +905,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         + ("the 30 deg limit (DEC-7) is now the pitch limit." if theta_hi < c.bounds.theta_A_deg[1]
            else "the pitch limit does not bind the search.")
     )
+    progress.phase("C: searching (CMA-ES)")
     r = restricted.optimise_c(
         vp, scens, cev, base, w, start, bounds=bounds, seeds=tuple(c.seeds),
         popsize=c.popsize, maxiter=c.maxiter,
@@ -901,13 +920,18 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     def run_all(
         prm: dict[str, float], ev: restricted.CEval = cev, bp: BackTransitionParams = base
     ) -> list[restricted.CRun]:
-        return [restricted.run_c(vp, s, prm, ev, bp) for s in scens]
+        out: list[restricted.CRun] = []
+        for i, s in enumerate(scens, start=1):
+            out.append(restricted.run_c(vp, s, prm, ev, bp))
+            progress.step(f"C runs: member {i}", i, len(scens))
+        return out
 
     def deg(prm: dict[str, float]) -> dict[str, Any]:
         return {"T_bt_s": prm["T_bt"], "theta_A_deg": math.degrees(prm["theta_A"]),
                 "spin_min": prm["spin_min"], "Q_TRANS_DECEL_ms2": prm["q"]}  # fmt: skip
 
     t0 = time.time()
+    progress.phase("C: final ensemble (optimum, register, default)")
     opt = run_all(best)
     reg_runs = run_all(reg)
     s_opt, s_reg = restricted.summarise_c(opt, w), restricted.summarise_c(reg_runs, w)
@@ -932,6 +956,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
               for sr in r.search.seeds]  # fmt: skip
 
     # per member and case: the run, the capability ceiling, D's alpha and VRS checks (report only)
+    progress.phase("C: per-member tables")
     lim, alpha_hi = alpha_limits(inp)
     run_rows: Table = []
 
@@ -945,6 +970,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                 kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
             )  # fmt: skip
             a_cap = restricted.capability_ceiling(vp, s, prm, cev, base)
+            progress.step(f"C tables, {case}: member {i}", i + 1, len(scens))
             run_rows.append({
                 "case": case, "member": i, "altitude_m": s.altitude_amsl_m,
                 "isa_offset_k": s.isa_offset_k, "mass_kg": s.mass_kg, "soc": s.soc,
@@ -961,6 +987,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     if dflt is not None and dflt_runs is not None:
         member_rows("ardupilot_default", dflt, dflt_runs)
 
+    progress.phase("C: histories and the q curve")
     history: Table = _c_trace(opt[0].sim, vp.wing.i_w, "C optimum", 0)
     history += _c_trace(reg_runs[0].sim, vp.wing.i_w, "C register", 0)
     if dflt_runs is not None:
@@ -970,6 +997,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                for q in c.q_curve]  # fmt: skip
 
     sens_rows: Table = []
+    progress.phase("C: one-at-a-time sensitivities")
 
     def sens_case(name: str, value: Any, ev: restricted.CEval = cev,
                   bp: BackTransitionParams = base) -> None:  # fmt: skip
@@ -989,7 +1017,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         sens_case("theta_fw0_deg", v, bp=dataclasses.replace(base, theta_fw0=math.radians(v)))
     for row in sens_rows:
         row.pop("case", None)
-    print(f"    C reports: {time.time() - t0:.0f} s", flush=True)
+    progress.note(f"C reports: {time.time() - t0:.0f} s")
     return {
         "result": r, "scens": scens, "notes": [theta_note, *([dflt_note] if dflt_note else [])],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
@@ -1141,11 +1169,13 @@ def task_ft_grid(inp: StudyInputs, q_ms_arg: str) -> dict[str, Any]:
     core, _ = ft_scenarios(inp)
     w = ft_weights(inp, core, fev, start)
     fixed = {"q_transition": q}
+    progress.phase(f"FT_grid {q:g} s: searching (CMA-ES)")
     r = forward.optimise_ft(
         vp, core, fev, w, {**start, **fixed}, ft_bounds(inp, fixed), fixed=fixed,
         seeds=tuple(f.grid.seeds), popsize=f.popsize, maxiter=f.grid.maxiter,
     )  # fmt: skip
     cont = r.params
+    progress.phase(f"FT_grid {q:g} s: lattice descent")
 
     def cost(p: dict[str, float]) -> float:
         return forward.ft_cost(vp, core, fev, {**p, **fixed}, w)
@@ -1154,6 +1184,7 @@ def task_ft_grid(inp: StudyInputs, q_ms_arg: str) -> dict[str, Any]:
         cost, cont, ft_lattice_bounds(inp), max_rounds=f.grid.descent_max_rounds
     )
     snapped = {**lat.params, **fixed}
+    progress.phase(f"FT_grid {q:g} s: summary of the snapped point")
     sm = forward.summarise_ft(forward_runs(vp, core, snapped, fev), w)
     row = {
         "q_transition_s": q,
@@ -1247,9 +1278,10 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
     fev, start = ft_settings(inp)
     core, corners = ft_scenarios(inp)
     t0 = time.time()
+    progress.phase("FT report: reference energy and start cost")
     w = ft_weights(inp, core, fev, start)
     j_start = forward.ft_cost(vp, core, fev, start, w)
-    print(f"    FT E_ref {w.E_ref:.0f} J ({time.time() - t0:.0f} s, {len(core)} runs)", flush=True)
+    progress.note(f"FT E_ref {w.E_ref:.0f} J ({time.time() - t0:.0f} s, {len(core)} runs)")
     t1 = time.time()
     cases = {"optimum": best, "register": start}
     dflt, dflt_note = default_case(
@@ -1260,8 +1292,13 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
     if dflt is not None:
         cases["ardupilot_default"] = dflt
     final, final_corners = ft_scenarios(inp, f.final_ensemble_n)
-    core_runs = {c: forward_runs(vp, final, prm, fev) for c, prm in cases.items()}
-    corner_runs = {c: forward_runs(vp, final_corners, prm, fev) for c, prm in cases.items()}
+    progress.phase("FT report: final ensemble (core and corners, each case)")
+    core_runs: dict[str, Any] = {}
+    corner_runs: dict[str, Any] = {}
+    for i, (c, prm) in enumerate(cases.items(), start=1):
+        core_runs[c] = forward_runs(vp, final, prm, fev)
+        corner_runs[c] = forward_runs(vp, final_corners, prm, fev)
+        progress.step(f"final ensemble, case {c}", i, len(cases))
     params: Table = []
     for c, prm in cases.items():
         opt = c == "optimum"
@@ -1287,6 +1324,8 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
     ]
     # one at a time at the optimum, on the search ensemble; `base` is the unchanged evaluation there
     sens_rows: Table = []
+    progress.phase("FT report: one-at-a-time sensitivities")
+    n_sens = sum(len(v) for v in f.sens.model_dump().values())
     base_sm = forward.summarise_ft(forward_runs(vp, core, best, fev), w)
     sens_rows.append({"parameter": "base", "value": "", "ensemble_n": len(core),
                       "cl_max": runs.cl_max(vp.wing), "alpha_s_rad": vp.wing.alpha_s,
@@ -1301,13 +1340,15 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
             sens_rows.append({"parameter": key, "value": v, "ensemble_n": len(core),
                               "cl_max": runs.cl_max(vp_s.wing), "alpha_s_rad": vp_s.wing.alpha_s,
                               **{k: _num(x) for k, x in sm.items()}})  # fmt: skip
+            progress.step(f"sensitivity {key}={v}", len(sens_rows) - 1, n_sens)
+    progress.phase("FT report: histories")
     hist: Table = []
     for name in f.history_scenarios:
         sc = forward.ft_scenario(inp.scenarios[name], inp.mission.clearance_agl_m)
         for c, prm in cases.items():
             rr = forward.run_ft(vp, sc, prm, fev)
             hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
-    print(f"    FT reports: {time.time() - t1:.0f} s", flush=True)
+    progress.note(f"FT reports: {time.time() - t1:.0f} s")
     return {
         "optimum": best, "J_start": j_start, "scens": core, "E_ref": w.E_ref,
         "notes": [*notes, *([dflt_note] if dflt_note else [])],
@@ -1379,10 +1420,12 @@ def task_ft_scan(inp: StudyInputs, v_arg: str) -> dict[str, Any]:
     core, _ = ft_scenarios(inp)
     w = ft_weights(inp, core, fev, start)
     fixed = {"airspeed_min": v}
+    progress.phase(f"FT_scan {v:g} m/s: searching (CMA-ES)")
     r = forward.optimise_ft(
         vp, core, fev, w, {**start, **fixed}, ft_bounds(inp, fixed), fixed=fixed,
         seeds=tuple(f.scan.seeds), popsize=f.popsize, maxiter=f.scan.maxiter,
     )  # fmt: skip
+    progress.phase(f"FT_scan {v:g} m/s: summary")
     sm = forward.summarise_ft(forward_runs(vp, core, r.params, fev), w)
     row = {
         "airspeed_min_eas_ms": v, **{FT_PARAM_COLUMNS[k]: r.params[k] for k in forward.FT_NAMES},
@@ -1482,6 +1525,20 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         })  # fmt: skip
         return r
 
+    n_front = len(b.variants) * len(b.eps_h_m) * len(b.eps_x_m)
+    n_total = (n_front + len(b.band_sweep.eps_h_m) + len(b.variants)
+               + (3 if scen_name == b.scenarios[0] else 0))  # an upper bound: the first scenario
+    n_done = [0]  # also has the rotor-start, band and ceiling sensitivities
+
+    def solved(
+        kind: str, what: str, ok: bool, verified: bool, e_kj: float | None, t0: float
+    ) -> None:  # fmt: skip
+        n_done[0] += 1
+        state = "verified" if verified else ("converged, replay differs" if ok else "no solution")
+        e = f" E={e_kj:.2f} kJ" if e_kj is not None else ""
+        progress.step(f"{scen_name} {kind} {what}: {state}{e} ({time.time() - t0:.0f} s)",
+                      n_done[0], max(n_total, n_done[0]))  # fmt: skip
+
     def solve_point(
         v: Any, eh: float, ex: float, *, rs: str | None = None, band: float | None = None,
         theta_deg: float | None = None,
@@ -1489,13 +1546,12 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         rs, band = rs or c.rotor_start, band or end_band
         theta = theta_deg or b1_ceiling_deg(inp, v)
         t0 = time.time()
+        progress.phase(f"B1 {scen_name}: solving {v.name} eps_h={eh:g} eps_x={ex:g}")
         prob = problem(options(v, band, theta), rs)
         ver = coll.solve_verified(prob, eh, ex, "energy", ns=tuple(b.refine_from))
         rw = row(prob, ver, v.name, eh, ex, rs, band, theta)
         e = rw.get("energy_kJ")
-        print(f"    {scen_name} {v.name} eps_h={eh:g} eps_x={ex:g}: ok={ver.sol.ok} "
-              f"verified={ver.verified}" + (f" E={e:.2f} kJ" if e is not None else "")
-              + f" ({time.time() - t0:.0f} s)", flush=True)  # fmt: skip
+        solved("solve", f"{v.name} eps_h={eh:g} eps_x={ex:g}", ver.sol.ok, ver.verified, e, t0)
         ser = series(prob, ver.check) if ver.verified and ver.check is not None else []
         return rw, ser, ver.sol
 
@@ -1606,8 +1662,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
                         "b1_energy_kJ": s_.energy / 1e3, "b1_excursion_m": s_.excursion,
                         "b1_distance_m": s_.distance, "energy_margin": res.energy_margin,
                     })  # fmt: skip
-                print(f"    {scen_name} gap {v.name}: ok={s_.ok} verified={res.verified} "
-                      f"({time.time() - t0:.0f} s)", flush=True)  # fmt: skip
+                solved("gap", v.name, s_.ok, res.verified, None, t0)
             out["gap"].append(g)
     return out
 
@@ -1636,8 +1691,10 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
 
 def task_sensitivity(inp: StudyInputs) -> dict[str, Any]:
     c = inp.study.sensitivity
+    progress.phase("sensitivity: building the model")
     model = sensitivity_model(inp)
     res = sens.run_sensitivity(model, r_small=c.r_small, r_large=c.r_large)
+    progress.phase("sensitivity: nominal run")
     return {"result": res, "nominal": model({}), "outputs": model.outputs}
 
 

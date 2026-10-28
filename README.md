@@ -68,6 +68,9 @@ python run.py --fresh-cache      delete the task cache of this run, then compute
 python run.py --serial           one process (easier to debug)
 python run.py --verify           also run the test suite and feed the release gate
 python run.py --view [FOLDER]    open existing results as report.html (+ tables.xlsx); runs nothing
+python run.py --status [FOLDER]  what a running (or the last) study is doing; runs nothing
+python run.py --log-level quiet|normal|verbose    how much a run prints (default normal)
+python run.py --heartbeat SECONDS                 seconds between heartbeats (default 60)
 ```
 
 `--view` is a viewer: it reads a results folder that already exists (default: `output_dir/run_name` of
@@ -76,6 +79,48 @@ python run.py --view [FOLDER]    open existing results as report.html (+ tables.
 
 Results are cached per task and keyed by a hash of every result-relevant input, so an unchanged re-run
 only rebuilds the report and changing one value only re-runs what depends on it.
+
+## Watching a run
+
+A full study takes hours, so it reports what it is doing. Every line is plain ASCII, `HH:MM:SS  message`
+(no colour, no `\r` progress bars, flushed), so it reads the same in PyCharm, in Git Bash and in a file
+(`python run.py > study_console.txt 2>&1`).
+
+| line | meaning |
+|---|---|
+| banner | git commit (`dirty` = tracked files differ), Python and library versions, mode, workers, the cache folder, tasks to run and cached, the time estimate, and the wave plan (which tasks wait for which) |
+| `wave 2 starts: ...` / `wave 2 ends ...` | a wave is the set of tasks that run together; the next one is planned from the results of the last |
+| `start`, `done`, `cached`, `FAILED  <task>` | one line per task, with its seconds; `start` is when the worker opened its state file |
+| `FT_grid:12000  seed 3/3 done  J=0.7741  96 evals  18.4 min` | one finished CMA-ES seed (`search done` adds the seed spread) |
+| `B1:S-03  9/17  S-03 solve attached ...: verified E=25.5 kJ (41 s)` | progress of a task that works in steps (B1 solves, sensitivity samples), printed at each quarter; `verbose` prints every one |
+| `heartbeat  1.2 h elapsed  tasks: 9 done, 22 running, 3 waiting` | followed by one line per running task: phase, seed `k/n`, iteration, best `J`, the task's elapsed time and a rough `~N min left` (from the pace so far, so only an estimate), or `no update for N min` when it has been silent for 5 min |
+| summary | every task with its seconds, the slowest task and the critical path (the slowest task of each wave, added), wall time against the estimate, failed tasks with the path of their log, and the next command |
+
+"Silent" means no progress event of any kind: a search reports every cost evaluation (the
+state file takes it at once, the log at most every 5 s), so a long first generation no longer
+looks stuck. The banner's time estimate is built from the times observed in the last full run
+(`TASK_COST` in `io/stages.py`): the longest task of the first wave plus the follow-up waves.
+
+The terminal shows a heartbeat block every 15 minutes at `normal` (every heartbeat at `verbose`, none at
+`quiet`), so a full clean study prints a few hundred lines. This is a deliberate limit: a line every
+60 s for 3.5 h would be 210 lines on its own. The heartbeat itself still runs every `--heartbeat` seconds
+and goes to the files below, and `--status` shows the same thing at any moment.
+
+Where things are (`<run>` is `output_dir/run_name`, `results/study` by default):
+
+* `<run>/_logs/run_<date>_<time>.log` the parent's whole timestamped log, everything the terminal got and
+  more (every heartbeat, in full); its path is the first line printed;
+* `<run>/_logs/<task>.log` one task's events with times, every search iteration included;
+* `<run>/_logs/<task>.state.json` the latest state of a task (replaced atomically about every 5 s);
+* `<run>/_logs/status.json` the whole run, written at every heartbeat.
+
+`python run.py --status [FOLDER]` reads these from any other terminal and prints what is going on now;
+with no logs in the folder it prints `no status in <folder>`, exits 2 and writes nothing. It cannot be
+combined with a run (`--only`, `--force`, ...), like `--view`. None of `--log-level`, `--heartbeat` and
+`--status` is part of any hash: another level is the same cache key.
+
+A task that fails prints the last lines of its traceback and the path of its log. If a worker process is
+killed (usually out of memory) the run prints one line saying so; use fewer `--workers`.
 
 ## Acceptance run
 

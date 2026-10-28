@@ -10,6 +10,9 @@
     python run.py --serial                 # one process (easier to debug)
     python run.py --verify                 # also run the test suite and feed the release gate
     python run.py --view [FOLDER]          # open the results as report.html (+ tables.xlsx); no run
+    python run.py --status [FOLDER]        # what a running (or the last) study is doing; no run
+    python run.py --log-level verbose      # quiet | normal (default) | verbose
+    python run.py --heartbeat 30           # seconds between heartbeats (default 60)
 
 Exit codes: 0 ok, 1 a task failed, 2 the inputs are unusable (or release mode refused),
 3 release mode finished but the release gate blocked the result.
@@ -22,6 +25,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from sagetrans.io import runlog
 from sagetrans.io.inputs import InputError, load_inputs
 from sagetrans.io.settings import ALL_ANALYSES
 from sagetrans.io.study import EXIT_INPUTS, EXIT_OK, preflight, run_study
@@ -54,6 +58,16 @@ def build_parser() -> argparse.ArgumentParser:
                         "study.yaml): writes report.html and tables.xlsx there and opens the page; "
                         "runs nothing")
     p.add_argument("--no-open", action="store_true", help="with --view: do not open the browser")
+    p.add_argument("--log-level", choices=runlog.LEVELS, default="normal",
+                   help="how much a run prints: quiet (banner, failures, summary), normal, or "
+                        "verbose (every search iteration); the files always have everything")
+    p.add_argument("--heartbeat", type=float, default=60.0, metavar="SECONDS",
+                   help="seconds between heartbeats (status.json and the run log; the terminal "
+                        "block at `normal` comes every 15 min, at `verbose` every heartbeat)")
+    p.add_argument("--status", nargs="?", const="", default=None, metavar="FOLDER",
+                   help="print what a running (or the last) study in FOLDER is doing, from "
+                        "another terminal (default: output_dir/run_name of study.yaml); runs and "
+                        "writes nothing; exit 2 when there is no status")
     return p
 
 
@@ -61,6 +75,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = Path(args.config)
+    if args.heartbeat <= 0:
+        parser.error("--heartbeat must be a positive number of seconds")
+    if args.status is not None:
+        clash = [f for f, on in (("--only", args.only), ("--force", args.force),
+                                 ("--verify", args.verify), ("--check", args.check),
+                                 ("--fresh-cache", args.fresh_cache),
+                                 ("--view", args.view is not None), ("--serial", args.serial),
+                                 ("--workers", args.workers)) if on]
+        if clash:
+            parser.error(f"--status only reads a running or finished study; it cannot be "
+                         f"combined with {', '.join(clash)}")
+        from sagetrans.io.view import default_folder
+
+        folder = Path(args.status) if args.status else default_folder(config, args.out)
+        lines = runlog.read_status(folder)
+        if lines is None:
+            print(f"no status in {folder}")
+            return EXIT_INPUTS
+        print("\n".join(lines))
+        return EXIT_OK
     if args.view is not None:
         clash = [f for f, on in (("--only", args.only), ("--force", args.force),
                                  ("--verify", args.verify), ("--check", args.check),
@@ -95,17 +129,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     outcome = run_study(
         config, mode=args.mode, only=only, force=args.force, fresh_cache=args.fresh_cache,
         workers=1 if args.serial else args.workers, out_dir=args.out, junit=args.junit,
-        verify=args.verify,
+        verify=args.verify, log_level=args.log_level, heartbeat=args.heartbeat,
     )  # fmt: skip
     for m in outcome.messages:
-        print(m, file=sys.stderr)
+        print(runlog.ascii_line(m), file=sys.stderr)
     if outcome.folder is not None:
-        print(f"\nresults: {outcome.folder}")
-        print(f"  report:       {outcome.folder / 'report.md'}")
-        print(f"  run record:   {outcome.folder / 'run_record.json'}  [{outcome.label}]")
+        out = [f"\nresults: {outcome.folder}",
+               f"  report:       {outcome.folder / 'report.md'}",
+               f"  run record:   {outcome.folder / 'run_record.json'}  [{outcome.label}]"]
         if outcome.gate is not None:
-            print(outcome.gate.summary())
-        print(f"done in {outcome.seconds / 60:.1f} min")
+            out.append(outcome.gate.summary())
+        out.append(f"done in {outcome.seconds / 60:.1f} min")
+        for line in out:
+            print(runlog.ascii_line(line))
     return outcome.exit_code
 
 

@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 
-from sagetrans import atmosphere
+from sagetrans import atmosphere, progress
 from sagetrans.analysis import restricted, runs
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
 from sagetrans.analysis.ensemble import (
@@ -436,17 +436,18 @@ def lattice_descent(
     `cost` scores a full parameter dict; each distinct point is evaluated once.
     """
     seen: dict[tuple[float, ...], float] = {}
+    rounds = 0
 
     def score(p: dict[str, float]) -> float:
         key = tuple(round(p[n], 10) for n in LATTICE_NAMES)
         if key not in seen:
             seen[key] = float(cost(p))
+            progress.phase(f"lattice descent: round {rounds + 1}, {len(seen)} point(s) scored")
         return seen[key]
 
     cur = snap_ft(start, bounds)
     first = cur
     f_cur = f_first = score(cur)
-    rounds = 0
     while rounds < max_rounds:
         scored = [(score(c), c) for c in lattice_neighbours(cur, bounds)]
         if not scored:
@@ -497,7 +498,7 @@ def optimise_ft(
         return ensemble_cost(metrics(bounds.to_physical(u)), weights)
 
     u0 = bounds.to_unit({n: start[n] for n in bounds.names})
-    res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter)
+    res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter, name="ft")
     best = full(bounds.to_physical(res.best_x))
     record: RunRecord = make_record(
         vp, scens, "ft", cfg, weights, bounds, pin, seeds, popsize, maxiter, start

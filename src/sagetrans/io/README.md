@@ -17,6 +17,7 @@ absolute imports mean it does not shadow the standard library.)
 | `recommended.py` | `settings_recommended.csv`: the ArduPilot parameters, the register, the recommended and the default values |
 | `assemble.py` | turns task results into tables, figures, `report.md`, `inputs_used.md`, the run record and the gate verdict |
 | `study.py` | `run_study`: load, check, run tasks in a spawn process pool with a per-task disk cache, assemble |
+| `runlog.py` | run logging: `WorkerLog` (a worker's progress sink: task log and state file), `RunLog` (the terminal lines, heartbeat, `status.json`, summary), `read_status` (`--status`) |
 | `cli.py` | `python run.py` / `python -m sagetrans`: `--check --mode --only --force --serial --verify`, and `--view [FOLDER] --no-open` |
 | `view/` | the results viewer (below): `report.html` and `tables.xlsx` from a results folder |
 | `ci_check.py` | `python -m sagetrans.io.ci_check junit.xml`: fails CI if any of T-01…T-15 is missing or failing |
