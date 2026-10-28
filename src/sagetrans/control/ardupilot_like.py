@@ -73,6 +73,24 @@ class BackTransitionParams:
     # filtering, throttle smoothing and any rotor inertia beyond I_rot, which adds in series.
     # A sensitivity until a bench value is set; not ArduPilot's spool law
     rotor_lag_s: float = 0.0
+    # the vertical loop of analysis C: "repo" is the altitude hold above (K_h, K_vh, K_i);
+    # "ardupilot" is ArduPilot's structure with its default values (position P -> velocity P ->
+    # acceleration PID on the measured vertical acceleration; open question O-12): master
+    # 4.8.0-dev Plane defaults, not a pinned tag (O-08). In "ardupilot" mode K_h, K_vh, K_i,
+    # i_max, v_dem_max, delta_hover and ff_mode are not read
+    z_mode: str = "repo"  # "repo" | "ardupilot"
+    z_pos_p: float = 1.0  # Q_P_POSZ_P, 1/s
+    z_vel_p: float = 5.0  # Q_P_VELZ_P, (m/s^2) per (m/s)
+    z_acc_p: float = 0.03  # Q_P_ACCZ_P, thrust_norm per (m/s^2)
+    z_acc_i: float = 0.1  # Q_P_ACCZ_I, thrust_norm per (m/s^2) per s
+    z_acc_imax: float = 0.8  # Q_P_ACCZ_IMAX, thrust_norm
+    z_vmax: float = 2.5  # Q_PILOT_SPD_UP, m/s (applied symmetrically)
+    z_vel_flt_hz: float = 5.0  # velocity-error filter
+    z_acc_flt_hz: float = 10.0  # acceleration-error filter
+
+    def __post_init__(self) -> None:
+        if self.z_mode not in ("repo", "ardupilot"):
+            raise ValueError(f"unknown z_mode {self.z_mode!r}")
 
     @classmethod
     def for_vehicle(
@@ -119,20 +137,30 @@ class LiftFF:
     """Throttle for a rotor thrust, tabulated once, for the lift-aware altitude-hold feed-forward.
 
     Built from the scenario vehicle (mass applied), the density at the start altitude and the
-    state of charge, so the control loop interpolates instead of solving for a rotor speed.
+    state of charge, so the control loop interpolates instead of solving for a rotor speed. The
+    table spans thrust 0 to `t_max_factor` x W (default 1.3); the ArduPilot-structured Z loop needs
+    the thrust at full command and is built with 3.0 and 70 points.
     """
 
-    def __init__(self, vps: VehicleParams, rho: float, soc: float) -> None:
+    def __init__(
+        self, vps: VehicleParams, rho: float, soc: float, t_max_factor: float = 1.3, n: int = 40
+    ) -> None:
         self.weight = vps.m * G
-        self.T = np.linspace(0.0, 1.3 * self.weight, 40)
+        self.T = np.linspace(0.0, t_max_factor * self.weight, n)
         d = [0.0]
         for thrust in self.T[1:]:
             om = trim.rotor_speed_for_thrust(float(thrust), 0.0, 0.0, rho, vps)
             d.append(trim.required_rotor_command(om, 0.0, 0.0, 0.0, rho, vps, soc).delta_cmd)
         self.delta = np.array(d)
+        # rotor thrust is monotone in the command; the accumulate only guards table noise
+        self._delta_up = np.maximum.accumulate(self.delta)
 
     def delta_for_thrust(self, thrust: float) -> float:
         return float(np.interp(thrust, self.T, self.delta))
+
+    def thrust_for_delta(self, delta: float) -> float:
+        """Rotor thrust [N] for a throttle command (the inverse table)."""
+        return float(np.interp(delta, self._delta_up, self.T))
 
 
 class Position1Controller:
@@ -151,15 +179,72 @@ class Position1Controller:
     in series with the model's own lag (`braking.rotor_speed_tau`, small at the placeholder
     `I_rot`). It is not MOT_SPOOL_TIME (the rotors are already spooled in AIRBRAKE); its value is
     set from a bench step test, so until then the excursions it produces are a sensitivity.
+
+    `z_mode="ardupilot"` swaps the vertical channel for ArduPilot's loop (O-12): position P gives a
+    climb-rate target (limited to `z_vmax`), a velocity P gives an acceleration target, and an
+    acceleration PID acts on the measured vertical acceleration and gives a normalised thrust. It
+    has no lift or hover feed-forward (`ff_mode` is ignored); the integrator starts at the entry
+    thrust (`z_i0`, as ArduPilot starts it at the current throttle). Everything outside the
+    vertical channel (pitch law, cascade, pitch limit, `rotor_lag_s`) is unchanged. The defaults
+    are ArduPilot master (4.8.0-dev) values, not a pinned tag (O-08). Assumptions carried:
+
+    * `thrust_norm` is linear in rotor thrust (thr = T / T(delta_max)); `MOT_THST_EXPO` is ignored.
+    * The measured acceleration is the exact vertical acceleration of the state (finite difference
+      of the climb rate over the controller step): no IMU noise, bias or delay.
+    * The integrator limit is max(`z_acc_imax`, W / T(delta_max)), so the hover thrust always fits.
+    * Tilt compensation is 1 / cos(theta), clamped at 0.5, as in `lift_aware`.
+    * `rotor_lag_s` is the lumped first-order lag applied after the throttle mapping.
     """
 
-    def __init__(self, p: BackTransitionParams, ff: LiftFF | None = None) -> None:
+    def __init__(
+        self, p: BackTransitionParams, ff: LiftFF | None = None, z_i0: float | None = None
+    ) -> None:
         if p.ff_mode not in ("repo", "lift_aware"):
             raise ValueError(f"unknown ff_mode {p.ff_mode!r}")
-        if p.ff_mode == "lift_aware" and ff is None:
+        if p.ff_mode == "lift_aware" and ff is None and p.z_mode == "repo":
             raise ValueError("ff_mode 'lift_aware' needs a LiftFF")
+        if p.z_mode == "ardupilot":
+            if ff is None:
+                raise ValueError("z_mode 'ardupilot' needs a LiftFF (its thrust map)")
+            if z_i0 is None:
+                raise ValueError("z_mode 'ardupilot' needs z_i0 (entry thrust over T(delta_max))")
         self.p = p
         self.ff = ff
+        self.z_i0 = z_i0
+        self._t_max = ff.thrust_for_delta(p.delta_max) if ff is not None else 0.0
+
+    def _z_loop(
+        self, dt: float, h: float, vh: float, theta: float, prev: dict[str, float]
+    ) -> tuple[float, dict[str, float]]:
+        """ArduPilot's vertical loop (C spec section 3.2): the rotor command and its memory."""
+        p = self.p
+        ff, t_max = self.ff, self._t_max
+        assert ff is not None and self.z_i0 is not None  # checked in __init__
+        boost = 1.0 / max(0.5, math.cos(theta))
+        if "z_I" not in prev:  # first call: integrator at the entry thrust, no update
+            integ, d_eff = self.z_i0, ff.delta_for_thrust(self.z_i0 * t_max)
+            delta = min(max(ff.delta_for_thrust(integ * t_max * boost), p.delta_min), p.delta_max)
+            cmd = d_eff if p.rotor_lag_s > 0.0 else delta
+            mem = {"z_I": integ, "z_vf": 0.0, "z_ef": 0.0, "z_vh": vh, "z_d": d_eff, "z_cmd": cmd}
+            return cmd, mem
+        integ, vf, ef, vh_prev, d_eff = (prev[k] for k in ("z_I", "z_vf", "z_ef", "z_vh", "z_d"))
+        if dt <= 0.0:  # no time has passed: nothing to update
+            return prev["z_cmd"], prev
+        a_meas = (vh - vh_prev) / dt  # gravity-compensated vertical acceleration
+        v_t = min(max(p.z_pos_p * (p.h_tgt - h), -p.z_vmax), p.z_vmax)
+        ka = dt / (dt + 1.0 / (2.0 * math.pi * p.z_vel_flt_hz))
+        vf += ka * ((v_t - vh) - vf)
+        a_t = p.z_vel_p * vf
+        ke = dt / (dt + 1.0 / (2.0 * math.pi * p.z_acc_flt_hz))
+        ef += ke * ((a_t - a_meas) - ef)
+        integ = min(max(integ + p.z_acc_i * ef * dt, 0.0), max(p.z_acc_imax, ff.weight / t_max))
+        thr = min(max(integ + p.z_acc_p * ef, 0.0), 1.0)  # thrust_norm
+        delta = min(max(ff.delta_for_thrust(thr * t_max * boost), p.delta_min), p.delta_max)
+        cmd = delta
+        if p.rotor_lag_s > 0.0:
+            d_eff += (1.0 - math.exp(-dt / p.rotor_lag_s)) * (delta - d_eff)
+            cmd = d_eff
+        return cmd, {"z_I": integ, "z_vf": vf, "z_ef": ef, "z_vh": vh, "z_d": d_eff, "z_cmd": cmd}
 
     def command(
         self, t: float, x: np.ndarray, aux: dict[str, float], mode: ModeState | None
@@ -170,20 +255,24 @@ class Position1Controller:
         dt = t - mode.t_last  # integrator advanced by elapsed time, not a stored step size
         h, vx, vh = float(x[1]), float(x[2]), float(x[3])
         mem: dict[str, float] = {}  # filter states, carried because the memory is rebuilt each step
-        p_alt = p
-        if self.ff is not None and p.ff_mode == "lift_aware":
-            l_hat = p.ff_lift_scale * aux["L"]
-            if p.ff_lift_tau_s > 0.0 and "L_f" in mode.memory:
-                l_f = mode.memory["L_f"]
-                l_hat = l_f + (1.0 - math.exp(-dt / p.ff_lift_tau_s)) * (l_hat - l_f)
-            mem["L_f"] = l_hat
-            t_ff = max(0.0, self.ff.weight - l_hat) / max(0.5, math.cos(float(x[4])))
-            p_alt = replace(p, delta_hover=self.ff.delta_for_thrust(t_ff))
-        delta, integ = altitude_hold(p_alt, h, vh, mode.memory["integ"], dt)
-        if p.rotor_lag_s > 0.0:
-            d_prev = mode.memory.get("d_eff", delta)
-            delta = d_prev + (1.0 - math.exp(-dt / p.rotor_lag_s)) * (delta - d_prev)
-            mem["d_eff"] = delta
+        integ = mode.memory["integ"]
+        if p.z_mode == "ardupilot":
+            delta, mem = self._z_loop(dt, h, vh, float(x[4]), mode.memory)
+        else:
+            p_alt = p
+            if self.ff is not None and p.ff_mode == "lift_aware":
+                l_hat = p.ff_lift_scale * aux["L"]
+                if p.ff_lift_tau_s > 0.0 and "L_f" in mode.memory:
+                    l_f = mode.memory["L_f"]
+                    l_hat = l_f + (1.0 - math.exp(-dt / p.ff_lift_tau_s)) * (l_hat - l_f)
+                mem["L_f"] = l_hat
+                t_ff = max(0.0, self.ff.weight - l_hat) / max(0.5, math.cos(float(x[4])))
+                p_alt = replace(p, delta_hover=self.ff.delta_for_thrust(t_ff))
+            delta, integ = altitude_hold(p_alt, h, vh, integ, dt)
+            if p.rotor_lag_s > 0.0:
+                d_prev = mode.memory.get("d_eff", delta)
+                delta = d_prev + (1.0 - math.exp(-dt / p.rotor_lag_s)) * (delta - d_prev)
+                mem["d_eff"] = delta
         eas = aux["V"] * math.sqrt(aux["rho"] / RHO0)
         lim = p.theta_limit(t - mode.t_enter, eas)
         if p.alpha_cap is not None and aux["V"] >= p.alpha_cap_vmin:

@@ -573,45 +573,98 @@ register value and the result is very sensitive to it. The lift share is E's rul
 
 **Question.** What can the autopilot be *configured* to do, and how far is that from the bound?
 
-Decision vector, with bounds:
+**Entry.** C starts at the AIRBRAKE exit, like D: the same entry state (`braking.airbrake_entry_state`),
+the same entry speed rule (`braking.entry_airspeed`, `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`) and
+t = 0 at the exit. `theta_fw0_deg`, `pit_lim_mode`, `q_assist_speed_ms` and `entry_convention` are
+read from the **D block** (they describe the exit, not C); `io.stages.exit_params` builds the
+controller parameters for both so they cannot drift. There is no forward transition, no cruise and
+no planner simulation. The position cascade runs (`brake_at_limit = False`); the at-limit run is
+used only to report a ceiling (below).
+
+**Four variables** (`restricted.C_BOUNDS`, widened or narrowed in `C.bounds`):
 
 | Name | ArduPilot parameter | Range |
 | --- | --- | --- |
 | `T_bt` | `Q_BACKTRANS_MS` | 1–6 s |
-| `theta_A` | `Q_A_ANGLE_MAX` | 10°–30° |
+| `theta_A` | `Q_A_ANGLE_MAX` | 10°–30° (30° is DEC-7 and binding) |
 | `spin_min` | `Q_M_SPIN_MIN` | 0.06–0.25 |
-| `airspeed_min` (full scope) | `AIRSPEED_MIN` | 11–18 m/s |
-| `q_transition` (full scope) | `Q_TRANSITION_MS` | 2–8 s |
-| `tkoff_thr_max` (full scope) | `TKOFF_THR_MAX` | 0.5–1.0 |
+| `q` | `Q_TRANS_DECEL` | 1.0–3.0 m/s² |
 
-**Two scopes.** `back` evaluates the back-transition only from an idealised level cruise (directly
-comparable with B2). `full` flies the whole sequence from hover (`evaluate_full`): forward
-transition, cruise stub, back-transition, with the cost taken as the worst excursion of the two
-transitions, summed energy, and the back-transition distance.
+**`q` does both jobs it does in ArduPilot.** It places the stopping point, `x_tgt = V_ground² /
+(2 q)` (O-02), and it is the cascade's velocity-profile acceleration limit `a_lim = q` (O-11). The
+old split (a planner run placing the target, a fixed `a_lim` braking along it) is gone. Left alone the
+search would pick a `q` above what the pitch ramp can deliver, so two flags are added to the usual
+failures (cost penalty 10 each): **`overshoot`** (the run stopped more than `C.os_tol_m` past
+`x_tgt`) and **`sinking`** (the end climb rate is below `-C.sink_tol_ms`). Both tolerances are
+proposals, and **the overshoot tolerance decides the answer**: the optimum sits on it. The ramp is
+time-driven, so what it can deliver depends on the ground speed; `capability_ceiling` runs the same
+case with the pitch at the ramp limit and reports `a_cap = (V_ground² - 1) / (2 x_end)`, D's `a_eq`
+under the same Z loop and lag, once per ensemble member at the optimum. `C_runs` has `a_cap_ms2` and
+`q_over_a_cap` so `q` can be read against D's `a_rec` curve (`D_a_rec_curve`) by eye; C's `q` does
+not feed E, which keeps taking D's recommendation.
 
-**Not in the decision vector:** `PTCH_LIM_MAX_DEG` (fixed at 35° so `Q_A_ANGLE_MAX` binds),
-`Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled). **`Q_TRANS_DECEL` is not decided by the
-search; it comes from analysis D.** `plan_decel(vps, scen, prm, x0, v_f, source)` sets it inside every
-evaluation, as the proposal asks (§10C step 4). With `a_plan_source="simulated"` (the default) it is
-the worst-case `a_eq` that `braking.measure_a_eq` simulates **for the same parameters, scenario and
-entry state**, so the planner is self-consistent with what the aircraft can do. `"ideal"` uses the
-ideal-pitch planner (`braking.ideal_stopping`) instead: no extra simulation, but it ignores wing
-drag, lift and pitch lag, so it is not a bound on the simulated figure in either direction (at 22 m/s
-with default parameters the two differ: 2.35 simulated against 2.42 ideal m/s²). An earlier version
-used the ideal planner only; this was changed after review. The simulated source roughly doubles the
-cost of an evaluation.
+**The vertical loop is ArduPilot's structure with ArduPilot's default values** (`z_mode =
+"ardupilot"`, open question O-12; the repo's `K_h`, `K_vh`, `K_i` hold stays the dataclass default
+for every other caller): position P → velocity P → an acceleration PID on the *measured*
+vertical acceleration, giving a normalised thrust that is turned into a rotor command through a
+thrust table (`LiftFF.thrust_for_delta`) with tilt compensation. It has no lift or hover
+feed-forward, so `ff_mode` is ignored. Its equivalent velocity gain is about 0.16 to 0.18 throttle
+per m/s, eight to nine times the repo hold's `K_vh` (0.02). The defaults are ArduPilot master (4.8.0-dev)
+Plane values read on 2026-10-27, **not a pinned tag** (O-08). It is a mapping, not ArduPilot:
+`thrust_norm` is linear in rotor thrust (no `MOT_THST_EXPO`), the acceleration is the exact vertical
+acceleration of the state (no noise, bias or delay), and the integrator starts at the entry thrust.
+`C_sens` shows the sensitivity to the two gains that matter (`z_vel_p`, `z_acc_p`).
 
-`optimise(vp, scens, scope, weights, seeds, popsize, maxiter, a_plan_source)` runs CMA-ES from a
-mid-range default and returns the best parameters, the cost, the default's cost, per-scenario
-metrics and the search. `evaluate_back` also takes `controller_overrides` (used by the sensitivity
-analysis to vary controller gains; they are applied to the planning run as well as the main run).
+**Rotors at the exit.** `C.rotor_start = "idle"` starts the rotors at the thrust of
+`Q_M_SPIN_MIN` (O-13: ArduPilot relaxes the Z controller in APPROACH and AIRBRAKE, so the throttle has
+decayed towards idle by the time POSITION1 starts). **O-13 is read from source and not checked in SITL
+or a log**; `"carry"` (D's assumption, W − L) is the sensitivity. The result barely depends on it.
+`braking.airbrake_entry_state(..., rotor_start=)` and `braking.entry_rotor_thrust` implement both;
+D's default stays `"carry"`.
 
-**What it found (placeholder, 4-scenario ensemble, simulated `Q_TRANS_DECEL`).** The cost fell from
-2.09 to 2.00. The optimiser drove `T_bt` and `spin_min` toward their lower bounds; the altitude
-excursion stayed near 12–14 m, i.e. the parameters the autopilot offers barely move it. **Three
-seeds agreed to a spread of 0.10 %** (T-12 satisfied for C; 2e-5 with the earlier ideal planner). A
-3-seed run took about 5 minutes. Record `result.search.spread` in the run record as
-`search_spreads={"C": …}` so the release gate can check it.
+**Rotor lag.** `C.rotor_lag_s` (0.25 s) is D's one lumped actuator lag (D, section 14), C's own value
+because the Z loop is fast.
+
+**Cost.** (10.1) with the normalisers `h_ref` 2 m, `E_ref` 15 kJ, `x_ref` 100 m (`C.weights`; the old
+10 m / 5 kJ / 150 m make a sub-metre excursion irrelevant). The weights (1, 0.3, 0.5) and the
+penalty 10 are unchanged. `ensemble.ensemble_cost` and `RunMetrics` are used as they are.
+
+**Search.** `optimise_c(vp, scens, cev, base_bp, weights, start, bounds=…, seeds, popsize, maxiter)`
+is CMA-ES from the register values with `q = 2`. `result.at_bound` names every variable within 10 %
+of its range of a bound (`theta_A` and `q` are the ones to watch). Evaluations are serial (CasADi
+functions are not picklable across processes) and cached per vector; one ensemble evaluation of 32 runs
+takes 5 to 14 s, so the shipped search (8 seeds, `popsize` 8, `maxiter` 20) is a few hours on one core.
+Record `result.search.spread` as `search_spreads={"C": …}` so the release gate can check it.
+
+**Tables.**
+
+| Table | Content |
+| --- | --- |
+| `C_params` | the optimum and the register values at `q = 2`: the four variables, `J`, `J_start`, seed spread, `at_bound`, p95 excursion, mean energy (kJ), p95 distance, max overshoot, flag counts |
+| `C_search` | per seed: best cost, evaluations |
+| `C_runs` | per ensemble member at the optimum: inputs, `x_tgt`, `x_end`, overshoot, energy, excursion, end sink rate, flags, `a_cap_ms2`, `q_over_a_cap`, and D's `braking_flags` (alpha above the 0.8 C_L,max band, VRS ratio; reporting only, not in `J`) |
+| `C_q_curve` | the optimum's `T_bt`, `theta_A`, `spin_min` with `q` varied (`C.q_curve`): the energy-against-distance curve, from which any overshoot tolerance can be read |
+| `C_sens` | one at a time at the optimum: `rotor_lag_s`, `rotor_start`, `z_vel_p`, `z_acc_p`, `theta_fw0_deg` |
+
+**What is no longer optimised:** `AIRSPEED_MIN`, `Q_TRANSITION_MS` and `TKOFF_THR_MAX` (Q2 and E
+cover part of the forward side; nothing optimises `AIRSPEED_MIN` now, and if it comes back it is a
+fifth variable of this search, with the entry speed following it). Also not in the vector:
+`PTCH_LIM_MAX_DEG` (fixed at 35°), `Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled).
+
+**Legacy.** `evaluate_back`, `plan_decel`, `evaluate_full`, `optimise`, `BACK_BOUNDS`, `FULL_BOUNDS`,
+`DEFAULT_PARAMS` and `THETA_P` are untouched and marked legacy in their docstrings.
+`analysis/sensitivity.py` and `analysis/collocation.py` still call `evaluate_back`, `plan_decel`,
+`DEFAULT_PARAMS` and `THETA_P`; their migration is a separate step. **B and C are not comparable yet**:
+the B-to-C comparison (B-9: B2 2.341 against patched C 2.256) stays on the old level-cruise entry until
+B1 and B2 start at the AIRBRAKE exit. C's `x` is the distance from the AIRBRAKE exit to the stop; it
+leaves out the APPROACH/AIRBRAKE leg and the `2 * V_closing` term of the switch test (O-02), which belong
+to E's budget.
+
+**Limits.** The end state is only a sink-rate check (DEC-5 lean, 1.76 m/s): there is no landing-error
+criterion (DEC-4) and no check on position or heading at the stop. The entry state still has
+placeholders (`theta_fw0_deg` = 0; `AIRSPEED_MIN` read as a true airspeed, DEC-1). `theta_A` against its
+30° bound is a stalled-wing brake as in D: read D's alpha and VRS flags next to it, and do not read the
+result as a recommendation to fly at 30°.
 
 ---
 

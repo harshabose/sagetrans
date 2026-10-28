@@ -48,7 +48,6 @@ C:                         # ArduPilot-parameter optimisation (back-transition)
   seeds: [1, 2, 3]
   popsize: 8
   maxiter: 15
-  a_plan_source: simulated         # simulated | ideal
 
 B2:                        # speed-scheduled law, started from a B1 solution
   ensemble_n: 4

@@ -73,6 +73,31 @@ constant deceleration is optimistic (analysis D). The airspeed form (O-05) needs
   filtering, inertia beyond `I_rot`); a sensitivity, not the spool law.
 * Filter states live in `ModeState.memory` (`L_f`, `d_eff`) and are carried through each step.
 
+### ArduPilot's vertical loop (`z_mode="ardupilot"`, analysis C)
+
+`z_mode` defaults to `"repo"` (the altitude hold above), so every other caller is unchanged. In
+`"ardupilot"` mode the vertical channel is ArduPilot's structure with its default values (open
+question O-12; master 4.8.0-dev Plane defaults, not a pinned tag, O-08), with the `z_*` fields of
+`BackTransitionParams`:
+
+```
+a_meas = (vh - vh_prev) / dt                  # measured, gravity-compensated vertical acceleration
+v_t    = clip(z_pos_p (h_tgt - h), +-z_vmax)
+vf    += k_a ((v_t - vh) - vf);   a_t = z_vel_p vf          # velocity-error filter, 5 Hz
+ef    += k_e ((a_t - a_meas) - ef)                          # acceleration-error filter, 10 Hz
+I      = clip(I + z_acc_i ef dt, 0, max(z_acc_imax, W / T_max))
+thr    = clip(I + z_acc_p ef, 0, 1);   T = thr T_max / max(0.5, cos theta)
+delta_r = clip(LiftFF.delta_for_thrust(T), delta_min, delta_max)   # then rotor_lag_s
+```
+
+`T_max` is the rotor thrust at `delta_max` (`LiftFF.thrust_for_delta`, so the table is built with
+`t_max_factor=3.0`). There is no lift or hover feed-forward: `ff_mode`, `K_h`, `K_vh`, `K_i`, `i_max`,
+`v_dem_max` and `delta_hover` are not read. The integrator starts at the entry thrust (`z_i0`, as
+ArduPilot starts it at the current throttle); the constructor needs a `LiftFF` and `z_i0` or raises
+`ValueError`, and so does an unknown `z_mode`. Assumed: `thrust_norm` linear in rotor thrust (no
+`MOT_THST_EXPO`), exact vertical acceleration (no IMU noise, bias or delay), tilt compensation
+`1 / cos(theta)` clamped at 0.5.
+
 ### Position cascade (eqs. 8.9, 8.4, 8.10)
 
 ```

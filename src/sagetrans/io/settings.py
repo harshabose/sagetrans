@@ -207,13 +207,82 @@ class Q2Cfg(_Strict):
         return self
 
 
+class CBoundsCfg(_Strict):
+    """Search bounds of analysis C: (low, high) of each of the four variables."""
+
+    T_bt: tuple[float, float] = (1.0, 6.0)  # Q_BACKTRANS_MS in seconds
+    theta_A_deg: tuple[float, float] = (10.0, 30.0)  # Q_A_ANGLE_MAX; 30 is DEC-7 and binding
+    spin_min: tuple[float, float] = (0.06, 0.25)  # Q_M_SPIN_MIN
+    q: tuple[float, float] = (1.0, 3.0)  # Q_TRANS_DECEL, m/s^2
+
+    @model_validator(mode="after")
+    def _ordered(self) -> CBoundsCfg:
+        for name, (lo, hi) in self.model_dump().items():
+            if not lo < hi:
+                raise ValueError(f"C.bounds.{name}: low {lo} is not below high {hi}")
+        if self.q[0] <= 0.0 or self.spin_min[0] < 0.0 or self.T_bt[0] <= 0.0:
+            raise ValueError("C.bounds: T_bt and q must be positive and spin_min non-negative")
+        return self
+
+
+class CWeightsCfg(_Strict):
+    """Normalisers of the ensemble cost (10.1); its weights (1, 0.3, 0.5) and penalty stay."""
+
+    h_ref: float = Field(2.0, gt=0.0)  # m
+    E_ref: float = Field(15000.0, gt=0.0)  # J
+    x_ref: float = Field(100.0, gt=0.0)  # m
+
+
+class CZCfg(_Strict):
+    """ArduPilot's vertical loop (open question O-12): master 4.8.0-dev Plane defaults (O-08)."""
+
+    pos_p: float = Field(1.0, gt=0.0)  # Q_P_POSZ_P, 1/s
+    vel_p: float = Field(5.0, gt=0.0)  # Q_P_VELZ_P
+    acc_p: float = Field(0.03, ge=0.0)  # Q_P_ACCZ_P
+    acc_i: float = Field(0.1, ge=0.0)  # Q_P_ACCZ_I
+    acc_imax: float = Field(0.8, gt=0.0)  # Q_P_ACCZ_IMAX
+    vmax: float = Field(2.5, gt=0.0)  # Q_PILOT_SPD_UP, applied up and down
+    vel_flt_hz: float = Field(5.0, gt=0.0)
+    acc_flt_hz: float = Field(10.0, gt=0.0)
+
+
+class CSensCfg(_Strict):
+    """`C_sens`: one-at-a-time changes at the optimum."""
+
+    rotor_lag_s: list[float] = [0.0, 0.25, 0.5]
+    rotor_start: list[Literal["idle", "carry"]] = ["idle", "carry"]
+    z_vel_p: list[float] = [2.5, 5.0, 10.0]
+    z_acc_p: list[float] = [0.015, 0.03, 0.06]
+    theta_fw0_deg: list[float] = [0.0, 8.0]
+
+
 class CCfg(_Strict):
-    ensemble_n: int = Field(4, ge=1)
-    ensemble_seed: int = 1
-    seeds: list[int] = [1, 2, 3]
+    """Analysis C from the AIRBRAKE exit; its entry comes from the D block (docs/C_fix_spec.md)."""
+
+    ensemble_n: int = Field(32, ge=1)
+    ensemble_seed: int = 8
+    seeds: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
     popsize: int = Field(8, ge=4)
-    maxiter: int = Field(15, ge=1)
-    a_plan_source: Literal["simulated", "ideal"] = "simulated"
+    maxiter: int = Field(20, ge=1)
+    rotor_lag_s: float = Field(0.25, ge=0.0)  # D's lumped actuator lag; C's own value
+    rotor_start: Literal["idle", "carry"] = "idle"  # rotors at the AIRBRAKE exit (O-13, unverified)
+    os_tol_m: float = Field(2.0, ge=0.0)  # overshoot past x_tgt that counts as a failure (PROPOSED)
+    sink_tol_ms: float = Field(1.76, ge=0.0)  # end sink rate that counts as sinking (PROPOSED)
+    weights: CWeightsCfg = CWeightsCfg()
+    bounds: CBoundsCfg = CBoundsCfg()
+    z: CZCfg = CZCfg()
+    q_curve: list[float] = [1.0, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0]  # C_q_curve
+    sens: CSensCfg = CSensCfg()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _old_keys(cls, data: object) -> object:
+        if isinstance(data, dict) and "a_plan_source" in data:
+            raise ValueError(
+                "C.a_plan_source was removed: Q_TRANS_DECEL is now a searched variable of C "
+                "(bounds.q), see docs/C_fix_spec.md section 8"
+            )
+        return data
 
 
 class B2StartCfg(_Strict):
