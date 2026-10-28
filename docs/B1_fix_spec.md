@@ -56,7 +56,7 @@ Unchanged mechanism: `vh_band` bounds `|v_h|` at the last node. `task_b1` passes
 
 ### 3.3 Everything else in the NLP is unchanged
 
-Hermite-Simpson, 40 intervals refined from 20, graded mesh, slew limits (`delta_rate` 5 per s, `theta_rate` 1 rad/s), `|v_h| <= 3` at the nodes, battery voltage, 0.01 regulariser, IPOPT settings, effective-throttle controls, replay with the near-exact vehicle (T-11, 2 percent). The pusher stays at zero. There is no equivalent of C's `rotor_lag_s`; B1's rotor slew limit and rotor state play that role (caveat, section 11).
+Hermite-Simpson, 40 intervals refined from 20, graded mesh, slew limits (`delta_rate` 5 per s, `theta_rate` 1 rad/s), `|v_h| <= 3` at the nodes, battery voltage, 0.01 regulariser, IPOPT settings, effective-throttle controls, replay with the near-exact vehicle (T-11, 2 percent). The replay reads the schedule at the middle of each 20 ms simulator step (the step's mean command, which is what the interpolated NLP controls mean); reading it at the start adds a 10 ms delay that the NLP does not have and sank the `c_envelope` optimum at a 20 deg pitch ceiling by 29 m (S-01, 60 m cap). `Verified.delayed` replays the start-read schedule too (`replay_late_command_ok`): an optimum on the lift peak, a fraction of a degree below the stall cliff, passes the first and fails the second, and is reported as verified but not robust to a late command. The pusher stays at zero. There is no equivalent of C's `rotor_lag_s`; B1's rotor slew limit and rotor state play that role (caveat, section 11).
 
 ## 4. Entry state and guesses
 
@@ -125,7 +125,7 @@ B1:                        # open-loop least-energy back-transition from the AIR
   end_vh_band_ms: null                 # null = C.sink_tol_ms
   variants:
     - {name: attached,   alpha_margin: 0.85,  theta_cmd_max_deg: 34.4}
-    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: 30.0}
+    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: null}   # null = PTCH_LIM_MAX_DEG (20 deg since 2026-10-28; this block was 30 before)
   band_sweep: {eps_h_m: [3.0, 10.0], variant: c_envelope}
   sens: {rotor_start_flip: true, end_vh_band_ms: 0.5, c_envelope_theta_cmd_deg: 34.4}
 ```

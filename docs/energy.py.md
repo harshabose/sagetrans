@@ -10,9 +10,40 @@
 > - **Cruise design speed 22.5 m/s TAS at 1500 m, converted to constant dynamic pressure** (EAS 20.91) at other altitudes; climb and glide default to the cruise speed (optional overrides). This removes the fixed-TAS altitude benefit: Wh/km goes from 18.3 (0 m) to 14.4 (5000 m) at fixed TAS, but only 16.9 to 16.2 at constant EAS.
 > - **Throttle check is report-only against `TKOFF_THR_MAX` (0.8)**; a segment fails only when the trim is infeasible (command above 1, current limit, bus voltage under `V_min`). The 200 m climb at 5000 m at cruise speed needs a command above 1.0 at low SoC, and that is reported as a failure, not hidden.
 > - **SoC trace** from `soc_start` (default 1.0, full pack) down to `1 - eta_usable` = 0.2, checked at both ends of each segment (worse one reported); `a_fwd` per site, leg and SoC from Q2 (two passes). Reserve counted once (largest of the landings); `n_diversion_transitions` stays at 0.
-> - **E-1** (use the configured controller, entry at `entry_eas` converted to TAS) and **E-4** (visible `a_plan_source`, `a_plan_fallback_ms2`) are fixed; the mission geometry moves from `mission.yaml` to `study.yaml` (`sites_amsl_m`, `missions`, `ranges_km`, `a_fwd_mode`, `a_fwd_metric`), and `cruise_amsl_m` and `ground_amsl_m` leave `mission.yaml`. New `analysis/soc_trace.py`.
+> - **E-1** (use the configured controller, entry at the AIRBRAKE exit `AIRSPEED_MIN - 2`, converted to TAS; `mission.speeds.entry_eas_ms` was dropped, see below) and **E-4** (visible `a_plan_source`, `a_plan_fallback_ms2`) are fixed; the mission geometry moves from `mission.yaml` to `study.yaml` (`sites_amsl_m`, `missions`, `ranges_km`, `a_fwd_mode`, `a_fwd_metric`), and `cruise_amsl_m` and `ground_amsl_m` leave `mission.yaml`. New `analysis/soc_trace.py`.
+> - **Entry speed of the back transition (2026-10-28, one entry speed).** E's back-transition segment IS analysis D's
+>   stopping run from the AIRBRAKE exit; there is no separate cruise-to-exit deceleration leg in E. It now starts at
+>   `braking.entry_airspeed(AIRSPEED_MIN, rho, D.entry_convention)`, the same speed D, C and B1 use, and the register
+>   entry `mission.speeds.entry_eas_ms` (22 / 20.9, a cruise speed) is gone. The kinetic energy between the glide speed
+>   and the exit speed is therefore not charged to any segment of E (it was charged, in part, to the back transition).
+>   **Checked 2026-10-28 (review fix B4): neither its energy nor its distance is counted anywhere.** The descent segment
+>   ends at the glide speed (the cruise speed), the back transition starts at the exit speed, and `fixed_distance_m` is the
+>   sum of the segments' distances, so the deceleration between them is in no segment. Size of the kinetic energy between
+>   the two speeds at the register settings: 0.82 Wh at 0 m, 0.94 Wh at 1500 m, 1.05 Wh at 2500 m, 1.36 Wh at 5000 m
+>   (21.1 -> 15.0, 22.7 -> 16.2, 23.9 -> 17.0, 27.3 -> 19.4 m/s TAS), about 0.05 to 0.08 km of range; the distance
+>   covered while slowing is not estimated. Not fixed: how to count it (a glide that slows, or a level deceleration) is a
+>   modelling choice for the owner. It is now a stated simplification in `energy.py` and
+>   `analysis/README.md` (kinetic energy dissipated by drag, not charged; distance not counted; at most 0.08 km).
+> - **The stopping run is D's (2026-10-28, review fix B3).** E's back transition used `inp.controller` (the register
+>   alone) and a level, rotors-at-hover start. It now runs `stages.d_exit_params` (the register plus the D block: exit pitch
+>   `theta_fw0`, `rotor_lag_s`, the lift feed-forward, the alpha gate and cap) from `braking.airbrake_entry_state`, the run D,
+>   C and B1 use. Back transition at the register settings, one way: 5.52 -> 5.38 Wh, 7.5 -> 6.8 s, 75.9 -> 72.5 m at
+>   0 m; 8.62 -> 8.49 Wh, 9.8 -> 8.9 s, 129.4 -> 121.9 m at 5000 m; maximum range +0.002 to +0.007 km. The sensitivity's
+>   budget uses the same controller.
+> - **Rotor fade in the forward transition (2026-10-29).** E's forward segment stopped at `AIRSPEED_MIN`; ArduPilot then
+>   freezes the rotor throttle and fades it linearly to zero over `Q_TRANSITION_MS`, and FT simulates that. `energy.fade_estimate`
+>   adds the fade's energy, time and distance to the segment: the rotors start from the throttle that carries `1 - E.fade_wing_share`
+>   of the weight (0.4 wing share, assumed from FT's mean 0.39 to 0.44; FT's measured `last_throttle` 0.44 to 0.55 agrees),
+>   the same rotor and motor model as FT, force balance at the hand-over speed (wing lift = W minus rotor thrust, pusher
+>   balances the drag). The register fades over 5 s, the recommended case over the FT optimum's value (`basics_rec` carries it
+>   in its id). `E_cases` compares E with FT's members grouped by the nearest site, same case: like-for-like by site.
+> - **Recommended case (2026-10-28).** When FT runs with E or Q2, `basics_rec:<AIRSPEED_MIN>:<TKOFF_THR_MAX %>` repeats
+>   D, E and Q2 at the FT optimum's snapped values (tables `E_*_recommended`, `Q2_*_recommended`, and `E_cases` side by
+>   side with the register case, which stays the headline). The values are in the task id, so a new FT optimum re-runs it.
+>   The sensitivity stays at the register values. `E_cases` also prints E's forward-transition energy next to the mean
+>   energy of FT's simulated forward transition at the same settings (information only).
 >
-> Result (repo run, defaults): round-trip radius 45.9 / 46.3 / 46.6 / 47.1 km at 0 / 1500 / 2500 / 5000 m (flown distance about 92 to 94 km); one-way 92.1 / 93.1 / 93.7 / 95.1 km; reserve 150 to 161 Wh. **The "100 km fits only at 5000 m" reading in section 4 was an artefact of fixed TAS** and is withdrawn. Open: whether `eta_usable` should read 0.9 (if the battery cut-off is 0.1 rather than 0.2, the same pack gives more usable energy; O-15), DEC-1, DEC-8.
+> Result (repo run, defaults): round-trip radius 45.9 / 46.3 / 46.5 / 46.4 km at 0 / 1500 / 2500 / 5000 m (flown distance about 92 to 93 km); one-way 92.1 / 93.1 / 93.7 / 94.4 km; reserve 150 to 161 Wh. (Since 2026-10-27 E reads `AIRSPEED_MIN` as an equivalent airspeed, `Q2.feed_convention: eas`; with the earlier true-airspeed reading the radii were 45.9 / 46.3 / 46.6 / 47.1 km and the one-way ranges 92.1 / 93.1 / 93.7 / 95.1 km.) **The "100 km fits only at 5000 m" reading in section 4 was an artefact of fixed TAS** and is withdrawn. Open: whether `eta_usable` should read 0.9 (if the battery cut-off is 0.1 rather than 0.2, the same pack gives more usable energy; O-15), DEC-1, DEC-8.
 
 ---
 
@@ -39,7 +70,7 @@ E runs in the quick **basics** task after D and F (order A, D, F, E, Q2), so it 
 > - E sets `a_plan = a_rec`, so its back-transition segment describes the **aggressive end** of the trade: the **shortest** switch distance and the **lowest** VTOL energy and time for this controller. Planning with a lower `a_plan` switches earlier and costs more. From D's trade curve (S-01, 20.9 m/s): $a_{plan}$ 2.5 → 1.5 adds 58 m of VTOL distance and about 11.5 kJ (3.2 Wh).
 > - For Q1 this does not matter: the back transition is 4.5 Wh, about 0.27 km of range. For anything that depends on **where** the aircraft ends up (fixed distance, landing-point error, altitude excursion) it does matter, and E's value is a lower bound.
 > - The link is automatic: if D is not in the run (`--only E`), `a_plan` **silently falls back to 2.5**. The fallback should be visible in the output.
-> - E enters the back transition at cruise speed (22.5 m/s), above D's slowest entry (16 m/s) that sets `a_rec`, so `a_rec` is conservative for E's entry.
+> - E enters the back transition at the AIRBRAKE exit (`AIRSPEED_MIN - 2` EAS), the same speed as D, so `a_rec` is the right one for E's entry.
 
 ---
 

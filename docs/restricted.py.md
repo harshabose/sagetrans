@@ -25,9 +25,9 @@ C shares the ensemble, the seed, the weights and the search with B2, so their co
 | input | where it comes from |
 | --- | --- |
 | ensemble (n = 32, seed 8) | `study.yaml` → `C`; axes from `scenarios.yaml` (altitude 0–5000 m, ISA −10..+20 K, mass ×0.80–1.15, headwind −5..+5 m/s, SoC 0.2–1.0) |
-| entry speed | `mission.speeds.entry_eas_ms` = 20.9 m/s **equivalent**, converted to true airspeed at each scenario's density (21–28 m/s TAS); ground speed = TAS − headwind |
+| entry speed | the AIRBRAKE exit, `AIRSPEED_MIN - 2` (`braking.entry_airspeed`, converted at the scenario density); ground speed = TAS − headwind |
 | start point | the register's own values (`Q_BACKTRANS_MS` 3 s, `Q_A_ANGLE_MAX` 30°, `Q_M_SPIN_MIN` 0.1, `AIRSPEED_MIN` 17, `Q_TRANSITION_MS` 5 s, `TKOFF_THR_MAX` 0.8) |
-| fixed controller values | altitude-hold and position-cascade gains from `controller.yaml`; `PTCH_LIM_MAX_DEG` 35° |
+| fixed controller values | altitude-hold and position-cascade gains from `controller.yaml`; `PTCH_LIM_MAX_DEG` 20° (the ArduPilot default; 35° before 2026-10-28) |
 | search effort | 8 seeds, population 8, 20 generations, `a_plan_source: simulated` |
 
 ---
@@ -72,7 +72,7 @@ CMA-ES on the unit cube of the bounded parameters, started from the register val
 | `q_transition` | `Q_TRANSITION_MS` | 2–8 s | `full` only |
 | `tkoff_thr_max` | `TKOFF_THR_MAX` | 0.5–1.0 | `full` only |
 
-Not decided by the search: `PTCH_LIM_MAX_DEG` (fixed at 35°, so `Q_A_ANGLE_MAX` is always the binding cap while it is ≤ 35°), `Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled), `Q_TRANS_DECEL` (set inside each evaluation, 2.1 step 2).
+Not decided by the search: `PTCH_LIM_MAX_DEG` (fixed at 20°, the ArduPilot default; it was 35° until 2026-10-28, so `Q_A_ANGLE_MAX` above 20° now changes nothing and is searched only up to 20°), `Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled), `Q_TRANS_DECEL` (set inside each evaluation, 2.1 step 2).
 
 ### 2.4 The `full` scope (`evaluate_full`)
 
@@ -163,7 +163,7 @@ A slower ramp trims the excursion (19.6 → 17.1 m over 1 → 6 s) at a clear pr
 | 20° | 3.567 | 17.4 | 19.8 | 191 |
 | 25° | 3.250 | 17.7 | 15.7 | 162 |
 | **30° (register, upper bound)** | 3.127 | 18.5 | 13.4 | 143 |
-| 35° (= `PTCH_LIM_MAX_DEG`) | 3.066 | 19.2 | 12.0 | 130 |
+| 35° (= the old `PTCH_LIM_MAX_DEG`; since 2026-10-28 the register's `PTCH_LIM_MAX_DEG` is the ArduPilot default, 20° (`PITCH_MAX`, Plane-4.7.2), so rows above 20° are not reachable any more) | 3.066 | 19.2 | 12.0 | 130 |
 | 40° (with the pitch limit raised to 45°) | 3.030 | 19.6 | 11.1 | 120 |
 | 45° (limit 50°) | 3.007 | 20.0 | 10.5 | 113 |
 
@@ -319,5 +319,5 @@ Status: **bug** = fix needed; **decision** = a choice that belongs to the projec
 | metrics and flags | `runs.run_metrics`, `runs.segment_stats`, `runs.failure_flags` |
 | controller | `ardupilot_like.Position1Controller` (back), `BaselineController` (full), [[ardupilot_like]] |
 | driver | `io/stages.py`: `task_c` |
-| inputs | `study.yaml` (`C`), `controller.yaml`, `scenarios.yaml` (ensemble axes), `mission.yaml` (`speeds.entry_eas_ms`) |
+| inputs | `study.yaml` (`C`), `controller.yaml`, `scenarios.yaml` (ensemble axes), `mission.yaml` |
 | related | [[analysis_D]] (planner, feed-forward), [[analysis_Q2]] (pusher margin, `AIRSPEED_MIN`), proposal §10C, §10B (B1, B2), eq. (10.1) |

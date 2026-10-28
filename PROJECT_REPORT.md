@@ -85,7 +85,7 @@ sagetrans/
   proposal.md              the design (one equation edited, see 5.4)
   pyproject.toml           dependencies, ruff, mypy --strict, import-linter layering contract
   configs/vehicle.yaml     the parameter register (5 TBD entries)
-  .github/workflows/ci.yml ruff, mypy, lint-imports, pytest on 3.11 and 3.13
+  .github/workflows/ci.yml ruff, mypy, lint-imports, pytest on 3.13
   src/sagetrans/           4,693 lines in 34 files
     README.md              overview, conventions, atmosphere
     atmosphere.py          ISA

@@ -168,7 +168,7 @@ D uses three different structures. They are easy to confuse.
 |---|---|---|---|
 |`D_a_eq`|named scenarios S-01, S-02, S-03, S-05, S-06, S-07 × `mass_factors` (0.80, 1.0, 1.15): 54 rows, **deterministic grid**|`v0_eas_ms` = 16, 17.1, 20.9 (EAS), each converted with `tas()` and used as the initial **ground** speed|none, just rows|
 |`D_recommendation_ensemble`, `a_rec`, `a_rec_pct`|**Latin-hypercube ensemble**, $n$ = 32, seed 8 (the same ensemble as B2 and C)|`v0_ground_ms` = 16 and 20.9, the same for every sample: 64 runs|min and 5th percentile|
-|`D_trade_curve`|the **first** named scenario only (S-01)|`entry_eas` = 20.9|none|
+|`D_trade_curve`|the **first** named scenario only (S-01)|`AIRSPEED_MIN - 2` EAS (the AIRBRAKE exit)|none|
 
 The `study.yaml` comment explains the grid: 16 and 17.1 EAS are 1.2 × the stall speed at nominal and at 1.15× mass; 20.9 EAS is cruise (22.5 TAS at 1500 m).
 
@@ -250,7 +250,7 @@ One row per scenario × mass factor × entry speed. Each row is a **worst-case b
 
 ### 5.3 `D_trade_curve`
 
-Rows over $a_{plan}$ × headwind × speed test × $a_{lim}$ $\in {bp.a_{lim},, a_{plan}}$, all for the first scenario at `entry_eas`. Each row uses the **real cascade** from the planned switch point.
+Rows over $a_{plan}$ × headwind × speed test × $a_{lim}$ $\in {bp.a_{lim},, a_{plan}}$, all for the first scenario at the AIRBRAKE exit speed (`AIRSPEED_MIN - 2`). Each row uses the **real cascade** from the planned switch point.
 
 |column|meaning|
 |---|---|
@@ -433,7 +433,7 @@ From `docs/ardupilot_open_questions.md` (O-03, O-04, O-05):
 |`Q_BCK_PIT_LIM`|constant optional $\theta_B$|$\theta_{B0}(V_{min}/V)^2$, **only with the NEW forward-throttle scheme**|
 |entry|cruise-like, $\theta$ = 0, rotors at hover|follows AIRBRAKE; rotors already spooled, exit at $\approx \max(\text{AIRSPEED_MIN} - 2,\ \text{Q_ASSIST_SPEED})$|
 
-Config values (from `controller.yaml`): `Q_A_ANGLE_MAX` 30°, `PTCH_LIM_MAX_DEG` 35° (effective 30°), `Q_BACKTRANS_MS` 3000, `AIRSPEED_MIN` 17 TAS, `Q_M_SPIN_MIN` 0.1, `Q_M_SPIN_MAX` 0.95. The code defaults of `BackTransitionParams` are 20°/25°; a `BackTransitionParams()` with no overrides is **not** the project's configuration.
+Config values (from `controller.yaml`): `Q_A_ANGLE_MAX` 30°, `PTCH_LIM_MAX_DEG` 20° (effective 20°; 35° and 30° before 2026-10-28), `Q_BACKTRANS_MS` 3000, `AIRSPEED_MIN` 17 TAS, `Q_M_SPIN_MIN` 0.1, `Q_M_SPIN_MAX` 0.95. The code defaults of `BackTransitionParams` are 20°/25°; a `BackTransitionParams()` with no overrides is **not** the project's configuration.
 
 Effect on D (6.2): ramp start is second-order (about 12–14% at 8°); duration is first-order; `Q_BCK_PIT_LIM` could be dominant. Because the ramp covers the bulk of the stopping distance, D's `a_rec` is a statement about this ramp model.
 

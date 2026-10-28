@@ -21,6 +21,7 @@ them with real data as you get it.
 | `controller.yaml` | register | the ArduPilot parameters (by their real names) and the assumed controller gains |
 | `scenarios.yaml` | plain | the named scenarios (S-01…S-06) and the ensemble ranges |
 | `study.yaml` | plain | which analyses to run, how much effort, run name, draft/release mode, parallelism |
+| `ardupilot_defaults.yaml` | register (optional) | the values ArduPilot ships with (Plane-4.7.2), same names and units as `controller.yaml`; a reference only, never an input (docs/DEFAULTS_spec.md) |
 
 **Register files** are the *data*: every entry carries a value, a unit, a source and an evidence
 status, and the toolkit tracks how much of every result rests on assumptions. **Plain files** are
@@ -188,7 +189,6 @@ a measured table is not supported yet (see "Not supported yet").
 | `descent.kappa` | - | 0.25 | vortex-ring fraction of induced velocity. **Unsourced: must come from a sourced boundary (Johnson, NASA).** Analysis F refuses to run without it |
 | `descent.v_fragility`, `v_sensor`, `h_slow`, `v_final` | m/s, m/s, m, m/s | 3, *omitted*, 5, 0.5 | payload-fragility and sensor limits; the final slow descent |
 | `requirements.range_primary_km`, `range_p95_km` | km | 100, 113 | range requirements the budget is checked against |
-| `speeds.entry_eas_ms` | m/s | 22 | equivalent airspeed at the start of the back-transition |
 
 ## `controller.yaml` reference
 
@@ -196,11 +196,11 @@ The `ardupilot` group uses the **real parameter names**.
 
 | Entry | Unit | Placeholder | Meaning |
 | --- | --- | --- | --- |
-| `AIRSPEED_MIN` | m/s | 14 | transition speed. The simulated controller compares *true* airspeed; whether ArduPilot compares EAS or TAS is open (O-02) |
+| `AIRSPEED_MIN` | m/s | 14 | transition speed, read as an **equivalent** airspeed by D, C, B1 and FT (`D.entry_convention: eas`; ArduPilot compares EAS, O-14 and O-23). E reads it the same way (`Q2.feed_convention: eas`) |
 | `Q_TRANSITION_MS` | ms | 5000 | rotor fade time after `AIRSPEED_MIN` (documented default) |
 | `Q_BACKTRANS_MS` | ms | 3000 | back-transition pitch-limit ramp |
 | `Q_A_ANGLE_MAX` | deg | 20 | maximum VTOL lean angle |
-| `PTCH_LIM_MAX_DEG` | deg | 35 | fixed-wing pitch limit (fixed in analysis C, not searched) |
+| `PTCH_LIM_MAX_DEG` | deg | 20 | the ArduPilot default (`PITCH_MAX` 20, Plane-4.7.2); fixed in analysis C, not searched. The pitch cap is `min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG)`, so a `Q_A_ANGLE_MAX` above this does nothing |
 | `Q_BCK_PIT_LIM` | deg | *omitted* | back-transition pitch cap; omitted = none |
 | `TKOFF_THR_MAX` | - | 0.7 | pusher throttle in AUTO during the forward transition |
 | `Q_TRANS_FAIL` | ms | 0 | stuck-transition timeout; 0 disables it |
@@ -232,11 +232,12 @@ recommendation. Add scenarios by adding lines; refer to them by name in `study.y
 | `analyses` | which of `A D F E Q2 C B1 sensitivity` to run; `--only` overrides it |
 | `switch_test` | `ground` or `air`: the speed used in the switch-point test (O-02) |
 | `A`, `D`, `F`, `E`, `Q2` | grids and scenario lists for the quick analyses. `A` also takes `alpha_min_deg` and `cl_frac`: the wing angle-of-attack band the feasibility scan must stay inside (lower end of the lift fit; the angle where C_L = `cl_frac` x C_L,max, provisional because C_L,max is), and `vrs_enforce` (default `false`: the rotor V_c / v_h ratio is only reported; `true`: also infeasible when it is below `-descent.kappa`) |
-| `D` (more) | Entry is the AIRBRAKE exit at `max(AIRSPEED_MIN - 2, q_assist_speed_ms)` (`entry_convention` `tas`/`eas`). `ff_mode` (`lift_aware` is an oracle at tau 0 and scale 1), `theta_fw0_deg` (placeholder), `pit_lim_mode`, `enforce_alpha` (report-only checks always run), `alpha_gate_ms`, `sink_tol_ms`, `rotor_lag_s`, `v0_eas_ms` (diagnostic grid), `sens` (sensitivity sweeps), `recommendation` (`ensemble_n` a power of two, `percentile`, `corners`, `n_boot`, `design_ground_speed_ms` inside the curve or null), `curve.ground_speeds_ms` (the `D_a_rec_curve` speeds, each above the 1 m/s end speed), `trade`. `E.a_plan_fallback_ms2` is used when D gives no recommendation |
-| `Q2`, `E` (more) | `Q2` also takes `soc`, `conventions` (`tas`, `eas`: how `AIRSPEED_MIN` is read) and `feed_convention` (the one E reads), `isa_offset_k`, `n_speed`, `write_profile`. `E.a_fwd_mode` is `case` (Q2 at E's own site), `worst` (the Q2 grid) or `mission` (`a_fwd` in `mission.yaml`); `E.a_fwd_metric` is `min` or `equiv` |
+| `D` (more) | Entry is the AIRBRAKE exit at `AIRSPEED_MIN - 2` (`entry_convention` `tas`/`eas`; `Q_ASSIST_SPEED` is not modelled, the study assumes it is 0, O-20). `ff_mode` (`lift_aware` is an oracle at tau 0 and scale 1), `theta_fw0_deg` (placeholder), `pit_lim_mode`, `enforce_alpha` (report-only checks always run), `alpha_gate_ms`, `sink_tol_ms`, `rotor_lag_s`, `v0_eas_ms` (diagnostic grid), `sens` (sensitivity sweeps), `recommendation` (`ensemble_n` a power of two, `percentile`, `corners`, `n_boot`, `design_ground_speed_ms` inside the curve or null), `curve.ground_speeds_ms` (the `D_a_rec_curve` speeds, each above the 1 m/s end speed), `trade`. `E.a_plan_fallback_ms2` is used when D gives no recommendation |
+| `Q2`, `E` (more) | `Q2` also takes `soc`, `conventions` (`tas`, `eas`: how `AIRSPEED_MIN` is read) and `feed_convention` (the one E reads), `isa_offset_k`, `n_speed`, `write_profile`. `E.a_fwd_mode` is `case` (Q2 at E's own site), `worst` (the Q2 grid) or `mission` (`a_fwd` in `mission.yaml`); `E.a_fwd_metric` is `min` or `equiv` (with `min` the wait is a constant worst-case acceleration and overstates the wait at altitude); `E.fade_wing_share` (0.4, ASSUMED) is the wing's share of the weight at the hand-over, taken from FT's simulated hand-overs, so E's rotor fade is not an independent check of FT |
 | `E` (sites) | `E.sites_amsl_m` (airfield elevations; the cruise altitude is the site plus `mission.profile.climb_height_m`) and `E.missions` (`round_trip`, `one_way`). The range is an output; `ranges_km` and the requirements are report points. `mission.yaml` no longer holds `cruise_amsl_m`, `ground_amsl_m`, `v_climb` or `v_glide` (omit the last two to use the cruise speed) and gains `climb_height_m`, `v_cruise_ref_amsl_m`, `payload_kg`, `t_drop_s` and `battery_window.soc_start` |
+| `FT` | analysis FT, the forward transition from hover (docs/FT_spec.md). The start is `mission.profile.clearance_agl_m` above the site; the accepted altitude loss and gain are `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m` (status `assumed`). Ensemble size, seed and `headwind_ms` range; search `popsize` (the seeds and iterations are under `scan` and `grid`); `rotor_lag_s`; `t_end_s` and `t_settle_s`; `tecs_start` (`warm` or `cold`: does TECS run in the VTOL hover? open); `stall_margin` (EAS over the stall speed from the hand-over on, 1.2); `rec_cl_frac`; `proj_is_failure`; `weights`; `bounds` for `AIRSPEED_MIN` (EAS), `Q_TRANSITION_MS`, `TKOFF_THR_MAX` and `Q_TRAN_PIT_MAX`; `scan`, `history_scenarios` and `sens`. The new `controller.yaml` entries (`Q_TRAN_PIT_MAX`, `TKOFF_THR_MIN`, `TRIM_THROTTLE`, `THR_MIN`, `THR_MAX`, `THR_SLEWRATE`, `PTCH_LIM_MIN_DEG` and the `tecs` group) are ArduPilot defaults with status `TBD` |
 | `C` | analysis C from the AIRBRAKE exit (entry from the `D` block). Ensemble size and seed, search `seeds`, `popsize`, `maxiter`; `rotor_lag_s` (0.25, D's lumped lag); `rotor_start` (`idle` is O-13, unverified, or `carry`); `os_tol_m` and `sink_tol_ms` (the overshoot and end-sink tolerances that make a run fail; PROPOSED, and the overshoot tolerance decides the answer); `weights` (the normalisers `h_ref`, `E_ref`, `x_ref`); `bounds` for `T_bt`, `theta_A_deg`, `spin_min` and `q` (`Q_TRANS_DECEL`, a searched variable); `z` (ArduPilot's vertical-loop gains); `q_curve` and `sens` (the grids of `C_q_curve` and `C_sens`). `a_plan_source` was removed and is rejected |
-| `B1` | B1 from the AIRBRAKE exit (entry rotor start and sink tolerance from `C`, entry speed rule from `D`). `scenarios`, the collocation mesh (`intervals`, `refine_from`, `max_iter`), `eps_h_m` (the headline altitude band, a list), `eps_x_m` (the distance caps swept: the front), `end_vh_band_ms` (null = `C.sink_tol_ms`), `variants` (the stated wing limits: each has `name`, exactly one of `alpha_margin` or `alpha_max_deg`, and `theta_cmd_max_deg`; there is no "no limit" variant), `band_sweep` and `sens` (sensitivities), and `gap_c` (the C parameters the same-problem gap uses; null = the register values at q = 2). A scalar `eps_x_m` (the old format) is rejected |
+| `B1` | B1 from the AIRBRAKE exit (entry rotor start and sink tolerance from `C`, entry speed rule from `D`). `scenarios`, the collocation mesh (`intervals`, `refine_from`, `max_iter`), `eps_h_m` (the headline altitude band, a list), `eps_x_m` (the distance caps swept: the front), `end_vh_band_ms` (null = `C.sink_tol_ms`), `variants` (the stated wing limits: each has `name`, exactly one of `alpha_margin` or `alpha_max_deg`, and `theta_cmd_max_deg` (`null` = the register's `PTCH_LIM_MAX_DEG`, which is what `c_envelope` uses, so it follows the register); there is no "no limit" variant), `band_sweep` and `sens` (sensitivities), and `gap_c` (the C parameters the same-problem gap uses; null = the register values at q = 2). A scalar `eps_x_m` (the old format) is rejected |
 | `sensitivity` | the scenario, the two Morris sizes, and whether to include the energy budget |
 
 Effort knobs worth knowing: `C.maxiter`, `B1.intervals` and `sensitivity.r_large`
@@ -281,5 +282,6 @@ Exit codes: `0` ok, `1` a task failed, `2` the inputs are unusable (or release m
   Table-driven maps (CSV over J and μ) and a measured open-circuit-voltage / equivalent-circuit table
   need B-spline interpolants in the model and are the next step; the register already accepts `file:`
   entries, but nothing reads them.
-* **A forward-transition optimisation** and a simulated forward transition in the energy budget.
+* **A simulated forward transition in the energy budget.** E uses a quasi-steady estimate; the forward
+  transition is simulated and optimised by analysis FT, which does not feed E (E's `a_fwd` is not wired to it).
 * **Per-scenario vehicle changes** other than mass (a hot-day derating of the motors, say).

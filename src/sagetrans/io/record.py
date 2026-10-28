@@ -5,9 +5,12 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import platform
 import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +65,18 @@ class FullRunRecord:
     fallbacks: tuple[str, ...] = ()
     override: bool = False  # the DRAFT refusal was explicitly overridden
     outputs: dict[str, str] = field(default_factory=dict)  # file name -> sha256
+    # schema 2 (docs/OUTPUTS_spec.md 5.5): what the results viewer needs that is not in a table.
+    # A record without `schema_version` was written by an older version and still loads.
+    schema_version: int = 2
+    tables: dict[str, dict[str, Any]] = field(default_factory=dict)  # name -> {rows, columns}
+    # {"limitations": [...], "notes": {analysis: [...]}, "study": {analysis: settings}}
+    context: dict[str, Any] = field(default_factory=dict)
+    # hash of the source files that decide what a task computes (see `source_hash`); also part of
+    # the task-cache key, so a code change cannot serve an old pickle
+    source_hash: str = ""
+    # Python and the numerical libraries that can move an optimum without a code change; also
+    # part of the task-cache key (see `library_versions`)
+    library_versions: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -72,6 +87,57 @@ class FullRunRecord:
             f"run record {self.config_hash[:8]} | {self.label} | commit {self.git_commit}"
             f"{'+dirty' if self.git_dirty else ''} | {self.date}"
         )
+
+
+# Modules that only turn results into files or text. They cannot change what a task computes, so a
+# change to them must not throw away a cache that took hours to build.
+OUTPUT_ONLY = (
+    "io/view/", "io/assemble.py", "io/cli.py", "io/study.py", "io/figures.py", "io/report.py",
+    "io/gate.py", "io/recommended.py", "io/results.py", "io/record.py", "io/ci_check.py",
+    "__main__.py",
+)  # fmt: skip
+
+
+@lru_cache(maxsize=4)
+def source_hash(root: Path | None = None) -> str:
+    """sha256 over the relative path and bytes of every package `.py` file that can change a task.
+
+    `root` is the package folder (default: `sagetrans`). The register and the plain settings files
+    are already in `StudyInputs.inputs_hash`; this is the code side of the task-cache key.
+    """
+    base = root or Path(__file__).resolve().parents[1]
+    h = hashlib.sha256()
+    for p in sorted(base.rglob("*.py")):
+        rel = p.relative_to(base).as_posix()
+        if "__pycache__" in rel or rel.startswith(OUTPUT_ONLY) or rel in OUTPUT_ONLY:
+            continue
+        h.update(rel.encode() + b"\0")
+        data = p.read_bytes().replace(b"\r\n", b"\n")  # line endings do not count
+        h.update(data + b"\0")
+    return h.hexdigest()
+
+
+# the libraries whose versions can change a result: pinned in pyproject.toml, recorded here and in
+# the cache key
+LIBRARIES = ("numpy", "scipy", "casadi", "cma", "SALib", "pydantic", "matplotlib")
+
+
+@lru_cache(maxsize=1)
+def library_versions() -> dict[str, str]:
+    """Python and the versions of `LIBRARIES` as installed ("not installed" is recorded too)."""
+    out = {"python": platform.python_version()}
+    for name in LIBRARIES:
+        try:
+            out[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            out[name] = "not installed"
+    return out
+
+
+def library_hash() -> str:
+    """sha256 of `library_versions`: the library part of the task-cache key."""
+    blob = json.dumps(library_versions(), sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()
 
 
 def build_record(
@@ -122,6 +188,7 @@ def build_record(
         settings_hash=settings_hash,
         fallbacks=fallbacks,
         override=override,
+        source_hash=source_hash(), library_versions=dict(library_versions()),
     )
 
 

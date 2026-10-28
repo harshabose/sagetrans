@@ -35,11 +35,15 @@ class BackTransitionParams:
     `a_lim` is the deceleration limit of the position cascade, which never reads the planned
     deceleration. ArduPilot's Q_TRANS_DECEL does both jobs; this repo splits them: the planned
     value only places the target (`braking.landing_error`: x_tgt = V_ref^2 / (2 a_plan)).
-    The fields from `theta_fw0` on default to the original behaviour.
+    The fields from `theta_fw0` on default to the original behaviour. The code defaults (for
+    example `theta_A` 20 deg, `theta_P` 20 deg) are used only by code that builds the class without
+    the register; `load_inputs` overrides them with the register's values (`Q_A_ANGLE_MAX` 30 deg,
+    `PTCH_LIM_MAX_DEG` 20 deg, the Z loop and the rest), so a bare `BackTransitionParams()` is not
+    the project's configuration.
     """
 
     theta_A: float = math.radians(20.0)  # Q_A_ANGLE_MAX
-    theta_P: float = math.radians(25.0)  # PTCH_LIM_MAX_DEG
+    theta_P: float = math.radians(20.0)  # PTCH_LIM_MAX_DEG (ArduPilot default)
     theta_B: float | None = None  # Q_BCK_PIT_LIM; None = no cap
     T_bt: float = 3.0  # Q_BACKTRANS_MS in seconds
     # altitude hold (8.5)
@@ -216,7 +220,20 @@ class Position1Controller:
     def _z_loop(
         self, dt: float, h: float, vh: float, theta: float, prev: dict[str, float]
     ) -> tuple[float, dict[str, float]]:
-        """ArduPilot's vertical loop (C spec section 3.2): the rotor command and its memory."""
+        """The vertical loop with the position P in front: climb target from the altitude error."""
+        p = self.p
+        v_t = min(max(p.z_pos_p * (p.h_tgt - h), -p.z_vmax), p.z_vmax)
+        return self.z_loop(dt, v_t, vh, theta, prev)
+
+    def z_loop(
+        self, dt: float, v_target: float, vh: float, theta: float, prev: dict[str, float]
+    ) -> tuple[float, dict[str, float]]:
+        """ArduPilot's vertical loop from the climb-rate target on (C spec section 3.2).
+
+        Velocity P, acceleration PID on the measured acceleration, thrust map and rotor lag: the
+        rotor command and its memory. `v_target` is the climb-rate demand (m/s), already limited by
+        the caller; `_z_loop` forms it from the altitude error, the forward transition from O-18.
+        """
         p = self.p
         ff, t_max = self.ff, self._t_max
         assert ff is not None and self.z_i0 is not None  # checked in __init__
@@ -231,9 +248,8 @@ class Position1Controller:
         if dt <= 0.0:  # no time has passed: nothing to update
             return prev["z_cmd"], prev
         a_meas = (vh - vh_prev) / dt  # gravity-compensated vertical acceleration
-        v_t = min(max(p.z_pos_p * (p.h_tgt - h), -p.z_vmax), p.z_vmax)
         ka = dt / (dt + 1.0 / (2.0 * math.pi * p.z_vel_flt_hz))
-        vf += ka * ((v_t - vh) - vf)
+        vf += ka * ((v_target - vh) - vf)
         a_t = p.z_vel_p * vf
         ke = dt / (dt + 1.0 / (2.0 * math.pi * p.z_acc_flt_hz))
         ef += ke * ((a_t - a_meas) - ef)
@@ -297,6 +313,10 @@ class BaselineParams:
     fade over Q_TRANSITION_MS), a cruise stub (rate-limited pusher hand-off, speed and altitude
     hold), the switch-point test (8.11) and Position1. Not modelled: BATT_WATT_MAX, TECS energy
     blending, airbrake. Gains are ASSUMED. Q_M_SPIN_MIN is `back.delta_min`.
+
+    The class defaults (`airspeed_min` 14 m/s, `q_transition_s` 5 s, `tkoff_thr_max` 0.7) are the
+    legacy placeholders; `load_inputs` overrides them with the register (17 m/s, 5 s, 0.8), and a
+    register entry that is missing falls back to them and is listed in `StudyInputs.fallbacks`.
     """
 
     back: BackTransitionParams

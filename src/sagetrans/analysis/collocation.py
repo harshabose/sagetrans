@@ -12,8 +12,16 @@ them can be cheaper at the same excursion. Relaxing the limits makes the NLP muc
 
 Every result must be replayed in `simulate()` (T-11); an optimiser that finds control dither or
 a stall-cliff the mesh cannot resolve returns a solution whose replay disagrees, and such a
-solution is not `verified`. Controls are EFFECTIVE rotor throttles (ESC dead zone removed from
-the NLP model and re-applied in the replay).
+solution is not `verified`. The replay applies the schedule the way the NLP means it: the simulator
+holds each command for one 20 ms step, so the interpolated controls are read at the MIDDLE of the
+step (the step's mean command). Reading them at its start adds a mean delay of 10 ms that the NLP
+does not have; a schedule that sits on the stall-peak ridge (`c_envelope` at a 20 deg pitch
+ceiling) falls over the cliff with it (29 m of sink at 60 m, S-01) although the collocated
+trajectory is right to 1 % when integrated finely. `Verified.delayed` replays the start-held
+schedule as well, so a schedule that does not survive that delay is visible.
+
+Controls are EFFECTIVE rotor throttles (ESC dead zone removed from the NLP model and re-applied in
+the replay).
 
 Entry. `make_problem` starts at level cruise (the legacy level-cruise entry, used by
 `bound_check` and the unit tests);
@@ -41,7 +49,7 @@ from sagetrans.analysis import braking, runs
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
 from sagetrans.analysis.ensemble import RunMetrics
 from sagetrans.control.ardupilot_like import BackTransitionParams, Position1Controller
-from sagetrans.dynamics.simulate import Result, simulate
+from sagetrans.dynamics.simulate import DT_DEFAULT, Result, simulate
 from sagetrans.physics.params import VehicleParams
 from sagetrans.physics.vehicle import AUX_NAMES, CasadiVehicle
 
@@ -463,27 +471,40 @@ def solve_refined(
 class OpenLoopController:
     """Plays back a collocated control history, linearly interpolated in time.
 
-    `u[:, 0]` is the effective rotor throttle; `dead_zone` maps it to the ESC command.
+    `u[:, 0]` is the effective rotor throttle; `dead_zone` maps it to the ESC command. The
+    simulator holds the command over one step, so the history is read `lead` seconds after the step
+    starts: half a step gives the step's mean command (exact for a linear history), 0 gives a
+    command that is on average half a step late.
     """
 
-    def __init__(self, t: np.ndarray, u: np.ndarray, dead_zone: float = 0.0) -> None:
-        self.t, self.u, self.dz = t, u, dead_zone
+    def __init__(
+        self, t: np.ndarray, u: np.ndarray, dead_zone: float = 0.0, lead: float = 0.0
+    ) -> None:
+        self.t, self.u, self.dz, self.lead = t, u, dead_zone, lead
 
     def command(
         self, t: float, x: np.ndarray, aux: dict[str, float], mode: object
     ) -> tuple[np.ndarray, object]:
-        eff = float(np.interp(t, self.t, self.u[:, 0]))
+        ts = t + self.lead
+        eff = float(np.interp(ts, self.t, self.u[:, 0]))
         d = self.dz + (1.0 - self.dz) * eff
-        th = float(np.interp(t, self.t, self.u[:, 1]))
+        th = float(np.interp(ts, self.t, self.u[:, 1]))
         return np.array([d, 0.0, th]), mode
 
 
-def replay(prob: Problem, sol: B1Solution) -> ReplayCheck:
-    """Replay in `simulate()` (near-exact vehicle, RK4) and compare the headline metrics."""
+def replay(prob: Problem, sol: B1Solution, hold: str = "mid") -> ReplayCheck:
+    """Replay in `simulate()` (near-exact vehicle, RK4) and compare the headline metrics.
+
+    `hold` is where in each 20 ms step the schedule is read: "mid" (the step's mean command, what
+    the NLP means) or "start" (a command that is 10 ms late on average).
+    """
+    if hold not in ("mid", "start"):
+        raise ValueError(f"hold must be 'mid' or 'start', not {hold!r}")
     veh = runs.vehicle_for(prob.vp)
+    lead = 0.5 * DT_DEFAULT if hold == "mid" else 0.0
     sim = simulate(
-        veh, OpenLoopController(sol.t, sol.u, prob.dead_zone), prob.scen.environment(), prob.x0,
-        sol.t_f + 0.5, runs.end_events(prob.vp, prob.scen, prob.opt.v_f, 100.0)[:1],
+        veh, OpenLoopController(sol.t, sol.u, prob.dead_zone, lead), prob.scen.environment(),
+        prob.x0, sol.t_f + 0.5, runs.end_events(prob.vp, prob.scen, prob.opt.v_f, 100.0)[:1],
     )  # fmt: skip
     h_ref = float(prob.x0[1])
     p_bus = sim["V_bus"] * sim["I_bus"]
@@ -551,10 +572,16 @@ class Verified:
     sol: B1Solution
     check: ReplayCheck | None
     attempts: list[B1Solution]
+    delayed: ReplayCheck | None = None  # the same schedule read at the start of each step
 
     @property
     def verified(self) -> bool:
         return self.sol.ok and self.check is not None and self.check.passes()
+
+    @property
+    def delay_robust(self) -> bool | None:
+        """Does the schedule also replay when its commands are 10 ms late? None if not checked."""
+        return None if self.delayed is None else self.delayed.passes()
 
 
 def solve_verified(
@@ -587,7 +614,7 @@ def solve_verified(
     good = [(s, c) for s, c in checked if c.passes()]
     if good:
         best, chk = min(good, key=lambda pair: key(pair[0]))
-        return Verified(best, chk, attempts)
+        return Verified(best, chk, attempts, replay(prob, best, "start"))
     if checked:
         best, chk = min(checked, key=lambda pair: key(pair[0]))
         return Verified(best, chk, attempts)
@@ -636,10 +663,15 @@ class BoundCheck:
     b1: B1Solution
     energy_margin: float  # (baseline - B1) / baseline; >= 0 means B1 is the bound
     check: ReplayCheck | None = None  # replay of `b1` (T-11); `bound_check_c` sets it
+    delayed: ReplayCheck | None = None  # the same schedule with its commands 10 ms late
 
     @property
     def verified(self) -> bool:
         return self.b1.ok and self.check is not None and self.check.passes()
+
+    @property
+    def delay_robust(self) -> bool | None:
+        return None if self.delayed is None else self.delayed.passes()
 
 
 def bound_check(
@@ -691,7 +723,7 @@ def bound_check_c(
         prob, max(c.excursion * margin, 0.3), c.distance * margin, "energy", ns=ns
     )
     base = {"energy": c.energy, "excursion": c.excursion, "distance": c.distance}
-    return BoundCheck(base, v.sol, (c.energy - v.sol.energy) / c.energy, v.check)
+    return BoundCheck(base, v.sol, (c.energy - v.sol.energy) / c.energy, v.check, v.delayed)
 
 
 def compare(

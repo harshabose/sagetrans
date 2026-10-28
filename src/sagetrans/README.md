@@ -94,7 +94,7 @@ Design points:
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 144 tests, about three minutes
+pytest                 # 213 tests, about five minutes
 ruff check . && mypy && lint-imports
 ```
 

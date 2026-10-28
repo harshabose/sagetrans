@@ -8,6 +8,7 @@ commanded pitch). **Controllers know nothing of analyses** (NFR-05).
 | --- | --- |
 | `base.py` | `ModeState` and the `Controller` protocol |
 | `ardupilot_like.py` | the ArduPilot-structured baseline: `Position1Controller`, `BaselineController` and their parameter classes |
+| `forward.py` | the forward transition from hover (docs/FT_spec.md): `ForwardController` (modes `fwd_wait`, `fwd_fade`, `fwd_done`), `TecsLite` (a port of `AP_TECS.cpp`, `Plane-4.7.2`), `ForwardParams` |
 
 ## The interface (`base.py`)
 

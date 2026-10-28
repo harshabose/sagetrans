@@ -11,8 +11,8 @@ parallel:
   enabled: true
   max_workers: 0           # 0 = one per CPU core (capped by the number of tasks)
 
-# Which analyses to run. Names: A D F E Q2 C B1 sensitivity
-analyses: [A, D, F, E, Q2, C, B1, sensitivity]
+# Which analyses to run. Names: A D F E Q2 FT C B1 sensitivity
+analyses: [A, D, F, E, Q2, FT, C, B1, sensitivity]
 
 switch_test: ground        # speed used in the Position1 switch test: ground | air  (O-02)
 
@@ -20,7 +20,7 @@ switch_test: ground        # speed used in the Position1 switch test: ground | a
 # which is 20.9 m/s EQUIVALENT airspeed (rho = 1.058 kg/m^3, sqrt(rho/rho0) = 0.929).
 # Every *_eas_ms list below is equivalent airspeed; every *_ground_ms list is ground speed
 # (= true airspeed in still air).
-# Stall (C_L,max 1.5, S 1.617 m^2): 11.9 / 13.3 / 14.2 m/s EAS at mass x0.80 / 1.0 / 1.15.
+# Stall (model C_L,max 1.444, S 1.617 m^2): 12.1 / 13.5 / 14.5 m/s EAS at mass x0.80 / 1.0 / 1.15.
 
 # ---- analysis settings -------------------------------------------------------------------------
 A:                         # zero-altitude-loss feasibility
@@ -42,9 +42,8 @@ A:                         # zero-altitude-loss feasibility
 D:                         # braking and Q_TRANS_DECEL
   scenarios: [S-01, S-02, S-03, S-05, S-06, S-07]   # S-01 first: it sets the trade curve
   mass_factors: [0.80, 1.0, 1.15]
-  # Entry is the AIRBRAKE exit; its air speed is max(AIRSPEED_MIN - 2, q_assist_speed_ms).
-  q_assist_speed_ms: 0              # Q_ASSIST_SPEED; 0 = assist off (ArduPilot default)
-  entry_convention: tas             # tas | eas: how AIRSPEED_MIN is read (open question RC5)
+  # Entry is the AIRBRAKE exit; its air speed is AIRSPEED_MIN - 2.
+  entry_convention: eas             # tas | eas: how AIRSPEED_MIN is read. eas since 2026-10-27 (ArduPilot compares EAS, O-14/O-23; docs/FT_spec.md 2); tas kept to reproduce old runs
   # Altitude hold: repo = constant hover throttle; lift_aware = throttle for W - L. At tau 0 and
   # scale 1 lift_aware is an ORACLE (it reads the simulated lift); tau and scale stand in for an
   # estimate.
@@ -79,16 +78,59 @@ E:                         # energy budget
   a_plan_fallback_ms2: 2.5    # Q_TRANS_DECEL used when D gives no recommendation
   a_fwd_mode: case            # forward-transition acceleration: case (Q2 at E's site) | worst (Q2 grid) | mission
   a_fwd_metric: min           # min (worst over speed) | equiv (distance-equivalent constant a)
+  fade_wing_share: 0.4        # ASSUMED: wing share of the weight at the hand-over (FT's simulated mean 0.39 to 0.44); the rotors carry the rest through the Q_TRANSITION_MS fade
 
 Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX, rest to AIRSPEED_MIN
   altitudes_m: [0, 1500, 2500, 5000]
   mass_factors: [0.80, 1.0, 1.15]
   soc: [0.8, 0.6, 0.3]
   conventions: [tas, eas]   # AIRSPEED_MIN read as true or equivalent airspeed (DEC-1 open): both reported
-  feed_convention: tas      # the one E reads (the register compares AIRSPEED_MIN as TAS)
+  feed_convention: eas      # the one E reads: AIRSPEED_MIN is an equivalent airspeed (O-14, O-23), as in D, C, B1 and FT
+
+FT:                        # forward transition from hover (docs/FT_spec.md)
+  # Start: mission.profile.clearance_agl_m above the site; limits mission.profile.fwd_alt_loss_max_m / fwd_alt_gain_max_m.
+  ensemble_n: 16           # the first 16 points of C's Sobol sample (same seed), so the members compare. FT_spec 6.5: one FT evaluation of 32 runs took 14.2 s against C's 4.1 s (3.5x, limit 2x), so n is halved
+  final_ensemble_n: 32     # the optimum, the register start and the ArduPilot default are reported on the first 32 points (the search uses ensemble_n)
+  ensemble_seed: 8
+  headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed
+  popsize: 8               # of every FT search; seeds and iterations are set under scan and grid
+  rotor_lag_s: 0.25        # as C
+  t_end_s: 90.0            # a run that has not reached the hand-over by then is a "no_handover" failure
+  t_settle_s: 10.0         # simulated after DONE, to see the recovery
+  tecs_start: warm         # warm | cold: does TECS run in the VTOL hover? (open item; a flight log answers it)
+  stall_margin: 1.2        # EAS / stall speed from the hand-over on; failure below it
+  rec_cl_frac: null        # C_L fraction for the recovery acceleration; null = A.cl_frac (0.8)
+  proj_is_failure: true    # the projected minimum altitude below the loss limit counts as a failure
+  weights: {h_ref: 5.0, E_ref: null, x_ref: 100.0, w_h: 1.0, w_E: 0.3, w_x: 0.0}   # E_ref null = mean energy at the start point; w_x 0: distance is not a cost here
+  bounds:
+    airspeed_min_eas_ms: [14.0, 20.0]   # below the cruise EAS (20.9); the 1.2 rule decides the lower end in practice
+    q_transition_s: [2.0, 20.0]         # was 2 to 12 s: the grid cost fell at every step and the winner sat on 12 s; ArduPilot allows up to 30 s
+    tkoff_thr_max: [0.5, 1.0]           # TECS forces a 1 % range above the minimum (O-22)
+    q_tran_pit_max_deg: [1.0, 10.0]     # ArduPilot range 0 to 30; the fade cap is 4 to 22 deg
+  scan:                    # FT_scan: AIRSPEED_MIN fixed on a grid, the other three re-searched
+    airspeed_min_eas_ms: [15.0, 16.0, 17.0, 18.0, 19.0, 20.0]
+    seeds: [1, 2, 3]
+    maxiter: 12            # the 20 m/s point reaches a 0.004 % seed spread at 12 (checked at the 12 s bound)
+  grid:                    # FT_grid (FT_spec Part 4): Q_TRANSITION_MS fixed per point, the other three searched, then snapped to ArduPilot's integers
+    q_transition_s: [2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20]   # coarse grid; the best point gets a fine pass
+    fine_offsets_s: [-1.0, -0.5, 0.5, 1.0]       # neighbours of the best coarse point; those outside bounds.q_transition_s are skipped
+    seeds: [1, 2, 3]                             # the T-12 seed spread is taken per point over these
+    maxiter: 12
+    descent_max_rounds: 50                       # moves of the 3 x 3 x 3 lattice descent after the snap
+  history_scenarios: [S-07, S-03]      # time histories at the optimum and at the register values
+  sens:                    # FT_sens: one at a time at the optimum
+    TECS_TIME_CONST: [3.0, 5.0, 8.0]
+    TECS_INTEG_GAIN: [0.15, 0.3, 0.6]
+    rotor_lag_s: [0.0, 0.25, 0.5]
+    z_vel_p: [2.5, 5.0, 10.0]
+    z_acc_p: [0.015, 0.03, 0.06]
+    TRIM_THROTTLE: [0.35, 0.45, 0.55]
+    tecs_start: [warm, cold]
+    rec_cl_frac: [0.7, 0.8, 0.9]       # changes only the projection
+    CL_max_scale: [0.9, 1.1]           # the model's C_L,max x this, through alpha_s; lift, stall speed, stall flag and recovery follow
 
 C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C_fix_spec.md)
-  # The entry (theta_fw0_deg, pit_lim_mode, q_assist_speed_ms, entry_convention) comes from the D block.
+  # The entry (theta_fw0_deg, pit_lim_mode, entry_convention) comes from the D block.
   # Four variables are searched: Q_BACKTRANS_MS, Q_A_ANGLE_MAX, Q_M_SPIN_MIN and Q_TRANS_DECEL (q).
   ensemble_n: 32
   ensemble_seed: 8         # fixed seed of the 32-member ensemble
@@ -102,7 +144,7 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
   weights: {h_ref: 2.0, E_ref: 15000.0, x_ref: 100.0}   # normalisers; weights 1, 0.3, 0.5 and penalty 10 stay
   bounds:                  # search bounds [low, high]
     T_bt: [1.0, 6.0]
-    theta_A_deg: [10.0, 30.0]   # 30 is DEC-7 and binding
+    theta_A_deg: [10.0, 30.0]   # 30 is DEC-7; the effective upper bound is min(this, PTCH_LIM_MAX_DEG = 20), the pitch limit
     spin_min: [0.06, 0.25]
     q: [1.0, 3.0]               # Q_TRANS_DECEL, m/s^2
   z:                       # ArduPilot vertical loop (O-12): master 4.8.0-dev Plane defaults, not a pinned tag (O-08)
@@ -126,7 +168,7 @@ B1:                        # open-loop least-energy back-transition from the AIR
   end_vh_band_ms: null                 # null = C.sink_tol_ms
   variants:                            # the wing limit is stated, never silent; no "no limit" variant
     - {name: attached,   alpha_margin: 0.85,  theta_cmd_max_deg: 34.4}   # |alpha_w| <= 0.85 alpha_s
-    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: 30.0}   # what C's ramp can reach
+    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: null}   # what C's ramp can reach: null = its ceiling, the register's PTCH_LIM_MAX_DEG (20 deg)
   band_sweep: {eps_h_m: [3.0, 10.0], variant: c_envelope}   # sensitivity at the largest distance cap
   sens: {rotor_start_flip: true, end_vh_band_ms: 0.5, c_envelope_theta_cmd_deg: 34.4}   # first scenario only
   gap_c: null                          # C parameters for the gap: {T_bt, theta_A_deg, spin_min, q}; null = register at q = 2

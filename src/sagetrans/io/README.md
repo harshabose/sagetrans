@@ -13,10 +13,12 @@ absolute imports mean it does not shadow the standard library.)
 | `gate.py` | `release_gate`, `GateResult`, `verification_from_junit`, `REQUIRED_TESTS`, `SEARCH_ANALYSES` |
 | `settings.py` | strict pydantic models for the plain files `study.yaml` and `scenarios.yaml` |
 | `inputs.py` | `load_inputs`: reads the five config files, converts units once, builds `VehicleParams` and friends from the register, records fallbacks, reports every problem (`InputError`); `StudyInputs` |
-| `stages.py` | the study as independent tasks (`basics`, `C`, `B1:<scenario>`, `sensitivity`): `plan_tasks`, `run_task` |
+| `stages.py` | the study as independent tasks (`basics`, `C`, `FT`, `FT_scan:<AIRSPEED_MIN>`, `B1:<scenario>`, `sensitivity`): `plan_tasks`, `run_task` |
+| `recommended.py` | `settings_recommended.csv`: the ArduPilot parameters, the register, the recommended and the default values |
 | `assemble.py` | turns task results into tables, figures, `report.md`, `inputs_used.md`, the run record and the gate verdict |
 | `study.py` | `run_study`: load, check, run tasks in a spawn process pool with a per-task disk cache, assemble |
-| `cli.py` | `python run.py` / `python -m sagetrans`: `--check --mode --only --force --serial --verify` |
+| `cli.py` | `python run.py` / `python -m sagetrans`: `--check --mode --only --force --serial --verify`, and `--view [FOLDER] --no-open` |
+| `view/` | the results viewer (below): `report.html` and `tables.xlsx` from a results folder |
 | `ci_check.py` | `python -m sagetrans.io.ci_check junit.xml`: fails CI if any of T-01…T-15 is missing or failing |
 
 ## One command: configs in, results out
@@ -25,10 +27,29 @@ absolute imports mean it does not shadow the standard library.)
 `inputs.load_inputs`, runs the planned tasks in parallel worker processes (CasADi objects cannot be
 shared, so each worker reloads the config folder itself), caches every task result under
 `<output>/<run_name>/_work/` keyed by `StudyInputs.inputs_hash` (register hash plus every
-result-relevant setting, but not run name, mode or parallelism), and hands everything to
+result-relevant setting, but not run name, mode or parallelism), the package version and `record.source_hash()` (the code that decides
+what a task computes: every package `.py` file except the output-only modules listed in `record.OUTPUT_ONLY`,
+so a change to the writer or the viewer keeps the cache; `run_record.json` carries it as `source_hash`) and `record.library_hash()` (Python and the
+versions of numpy, scipy, casadi, cma, SALib, pydantic and matplotlib, which can move an optimum without a code change;
+`run_record.json` carries them as `library_versions`), and hands everything to
 `assemble.assemble`. Exit codes: 0 ok, 1 a task failed, 2 unusable inputs or release mode refused,
 3 release-mode result blocked by the gate. `VehicleParams.released` is true only when the vehicle was
 built from a complete register (nothing TBD, nothing missing); only then can a run record say RELEASED.
+
+## The results viewer (`view/`)
+
+`python run.py --view [FOLDER]` reads a results folder that exists and writes `report.html` (one file, no
+network) and `tables.xlsx` into it. It never runs an analysis and imports no analysis code (an
+import-linter contract enforces that). `load.py` parses every CSV into typed columns and checks file hashes
+against `run_record.json`; `registry.py` lists the chapters and renders the page; `chapters.py` has one
+builder per analysis; `charts.py` draws the SVG; `html.py` holds the CSS, the tokens and the one inline
+script; `workbook.py` writes the xlsx (index sheet, one sheet per CSV, units in row 2, no formulas).
+A missing table or column makes a figure absent and prints "not in this run: <table>", never an error; a
+results folder from an older version loads through aliases (`C_runs` from `C_ensemble_runs`, `B1_front`
+from `B1_pareto_<scenario>`) and is named as older. Grey ink is reserved for reference series (the
+ArduPilot default), which are dashed; no chart has more than three coloured series. The writer adds the
+tables the viewer reads: `C_history`, `B1_history`, `inputs_register`, `settings_recommended`,
+`headline.json`, and `schema_version`, `tables` and `context` in the run record.
 
 ## The run record (`record.py`)
 
@@ -43,7 +64,8 @@ Written as `run_record.json` next to every output (FR-09, NFR-07). A `FullRunRec
 | `code_version`, `git_commit`, `git_dirty`, `date` | where the numbers came from |
 | `analyses` | name → the input hash of each contributing analysis's own `RunRecord` |
 | `seeds` | seeds used by stochastic searches |
-| `search_spreads` | for each analysis that used a stochastic search (`"C"`): the three-seed cost spread, i.e. the **real-problem T-12 evidence** the gate checks |
+| `schema_version`, `tables`, `context` | 2; `{table: {rows, columns}}`; the limitations, the notes of each task, the `study.yaml` block of each analysis and the FT altitude limits (what the viewer shows that is in no table) |
+| `search_spreads` | for each analysis that used a stochastic search (`"C"`, `"FT"`): the three-seed cost spread, i.e. the **real-problem T-12 evidence** the gate checks |
 | `override` | `True` if the DRAFT refusal was overridden for this write |
 | `outputs` | file name → SHA-256 of every file written |
 

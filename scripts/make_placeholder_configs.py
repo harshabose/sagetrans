@@ -17,6 +17,7 @@ from typing import Any
 
 from sagetrans.analysis.energy import BatteryWindow, MissionProfile
 from sagetrans.control.ardupilot_like import BackTransitionParams, BaselineParams
+from sagetrans.control.forward import ForwardParams
 from sagetrans.physics.params import VehicleParams
 
 OUT = Path(__file__).resolve().parents[1] / "configs"
@@ -159,7 +160,9 @@ def mission_yaml() -> str:
         "profile:        # the idealised flight used by the energy budget (analysis E)",
         f"  climb_height_m: {r(mp.climb_height_m, 'm', 'climb above the airfield; cruise altitude = site + this')}",
         f"  isa_offset_k: {r(mp.isa_offset_k, 'K', 'ISA temperature offset for the budget')}",
-        f"  clearance_agl_m: {r(mp.clearance_agl_m, 'm', 'hover climb before the forward transition')}",
+        f"  clearance_agl_m: {r(mp.clearance_agl_m, 'm', 'hover climb before the forward transition; also the height above ground at which analysis FT starts')}",
+        f"  fwd_alt_loss_max_m: {rec(mp.fwd_alt_loss_max_m, 'm', 'largest altitude loss below the forward-transition start that is accepted; a failure beyond it (analysis FT)', 'assumed')}",
+        f"  fwd_alt_gain_max_m: {rec(mp.fwd_alt_gain_max_m, 'm', 'largest altitude gain above the forward-transition start that is accepted; a failure beyond it (analysis FT)', 'assumed')}",
         f"  vz_takeoff: {r(mp.vz_takeoff, 'm/s', 'vertical climb rate in take-off')}",
         f"  t_hover_pre: {r(mp.t_hover_pre, 's', 'hover on the pad before lift-off')}",
         f"  a_fwd: {r(mp.a_fwd, 'm/s^2', 'forward-transition acceleration; ASSUMED until analysis C')}",
@@ -194,14 +197,12 @@ def mission_yaml() -> str:
         f"  range_primary_km: {rec(100.0, 'km', 'specified range requirement', 'stated')}",
         f"  range_p95_km: {rec(113.0, 'km', 'about 113 km needed for the 95th-percentile mission', 'stated')}",
         "",
-        "speeds:          # entry and transition speeds used by the studies",
-        f"  entry_eas_ms: {r(22.0, 'm/s', 'equivalent airspeed at the start of the back-transition (cruise speed)', 'assumed')}",
-        "",
     ])
 
 
 def controller_yaml() -> str:
     bt, bl = BackTransitionParams(), BaselineParams(back=BackTransitionParams())
+    fd = ForwardParams(back=BackTransitionParams(z_mode="ardupilot"))
     r = lambda v, u, s, st="TBD": rec(v, u, s, st)  # noqa: E731
     doc = "Plane docs"
     return "\n".join([
@@ -220,8 +221,26 @@ def controller_yaml() -> str:
         f"  Q_M_SPIN_MIN: {r(bt.delta_min, '-', 'rotor throttle floor in altitude hold; set above the ESC dead zone')}",
         f"  Q_M_SPIN_MAX: {r(bt.delta_max, '-', 'rotor throttle ceiling')}",
         f"  PTCH_LIM_MAX_DEG: {r(35.0, 'deg', 'fixed-wing pitch limit (not a decision variable in analysis C)')}",
+        f"  Q_TRAN_PIT_MAX: {r(fd.tran_pit_max_deg, 'deg', '(DEFAULT ARDU VALUE) pitch cap in the forward transition; the fade cap is (Q_TRAN_PIT_MAX + 1) x 2 (O-16)')}",
+        f"  TKOFF_THR_MIN: {r(fd.tkoff_thr_min, '-', '(DEFAULT ARDU VALUE) 0 = use TRIM_THROTTLE as the pusher minimum in the forward transition (O-17)')}",
+        f"  TRIM_THROTTLE: {r(fd.trim_throttle, '-', '(DEFAULT ARDU VALUE) THROTTLE_CRUISE 45 percent (config.h)')}",
+        f"  THR_MIN: {r(fd.thr_min, '-', '(DEFAULT ARDU VALUE)')}",
+        f"  THR_MAX: {r(fd.thr_max, '-', '(DEFAULT ARDU VALUE)')}",
+        f"  THR_SLEWRATE: {r(fd.thr_slewrate * 100.0, '%/s', '(DEFAULT ARDU VALUE)')}",
+        f"  PTCH_LIM_MIN_DEG: {r(fd.ptch_lim_min_deg, 'deg', 'ArduPilot default as remembered; not re-read from source. Check')}",
         "  # Q_TRANS_DECEL: normally an ANALYSIS OUTPUT (analysis D). Add it only to fix the planner",
         "  # value used when an analysis does not compute it.",
+        "",
+        "tecs:            # TECS defaults for the forward-transition model (analysis FT)",
+        f"  TECS_TIME_CONST: {r(fd.tecs_time_const, 's', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_THR_DAMP:   {r(fd.tecs_thr_damp, 's', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_INTEG_GAIN: {r(fd.tecs_integ_gain, '-', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_VERT_ACC:   {r(fd.tecs_vert_acc, 'm/s^2', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_PTCH_DAMP:  {r(fd.tecs_ptch_damp, 's', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_CLMB_MAX:   {r(fd.tecs_clmb_max, 'm/s', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_SINK_MAX:   {r(fd.tecs_sink_max, 'm/s', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_SINK_MIN:   {r(fd.tecs_sink_min, 'm/s', '(DEFAULT ARDU VALUE)')}",
+        f"  TECS_PITCH_MAX:  {r(fd.tecs_pitch_max_deg, 'deg', '(DEFAULT ARDU VALUE) 0 would use PTCH_LIM_MAX_DEG')}",
         "",
         "altitude_hold:   # rotor altitude hold, eq. 8.5 (gains assumed)",
         f"  K_h: {r(bt.K_h, 's^-1', 'altitude error to demanded climb rate')}",

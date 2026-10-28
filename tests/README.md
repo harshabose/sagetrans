@@ -1,6 +1,6 @@
 # Tests
 
-144 tests, about three minutes (`pytest`). Layout:
+213 tests, about five minutes (`pytest`). Layout:
 
 | File | Tests | Covers |
 | --- | --- | --- |
@@ -11,6 +11,12 @@
 | `unit/test_dynamics.py` | 7 | **T-04, T-05, T-06, T-09, T-10**, events, determinism |
 | `unit/test_analyses.py` | 15 | analyses A and D, including the scenario-mass regression for D |
 | `unit/test_energy_descent.py` | 15 | analyses E and F, steady-flight helpers, hand-calculated budget |
+| `unit/test_d_addenda.py` | 11 | D's lumped rotor lag and the `D_a_rec_curve` table |
+| `unit/test_inputs.py` | 18 | the config loader, `load_inputs` problems, one command end to end with the cache |
+| `unit/test_ft.py` | 7 | FT configuration, strict settings, the `z_loop` split, the FT task |
+| `unit/test_ft_model.py` | 12 | the forward controller, the TECS-lite port, the FT flags and recovery |
+| `unit/test_defaults.py` | 9 | the ArduPilot-defaults register, `resolve_default`, the third case in C and FT |
+| `unit/test_view.py` | 15 | the results viewer and workbook: tolerance, legacy folders, `data-src`, no network, `--view` |
 | `unit/test_m5.py` | 13 | **T-12** (analytic), search, ensembles, baseline controller, analysis C (including C taking `Q_TRANS_DECEL` from analysis D) |
 | `unit/test_m6.py` | 9 | analysis B1 including **T-11** |
 | `unit/test_m7.py` | 23 | sensitivity, run records, results writer, release gate (including the real-problem T-12 rule), the CI check, report |

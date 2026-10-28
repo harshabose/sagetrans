@@ -25,6 +25,7 @@ from sagetrans.analysis import (
     braking,
     descent,
     energy,
+    forward,
     pusher,
     restricted,
     runs,
@@ -42,6 +43,7 @@ from sagetrans.analysis.ensemble import (
 )
 from sagetrans.analysis.search import Bounds
 from sagetrans.control.ardupilot_like import BackTransitionParams
+from sagetrans.io.gate import T12_SPREAD_MAX
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.settings import END_SPEED_MS
 from sagetrans.physics import aero, battery, motor, rotor
@@ -51,7 +53,8 @@ RHO0 = float(atmosphere.density(0.0))
 Table = list[dict[str, Any]]
 
 # rough wall-clock seconds on a laptop, for scheduling and for the pre-flight estimate
-TASK_COST = {"basics": 60, "C": 330, "B1": 400, "sensitivity": 220}
+TASK_COST = {"basics": 60, "C": 330, "FT": 300, "FT_grid": 3000, "FT_scan": 2000, "B1": 400,
+             "sensitivity": 220}
 
 
 def tas(eas: float, scen: Scenario) -> float:
@@ -98,6 +101,20 @@ def exit_params(
         ff_lift_scale=c.ff_lift_scale, rotor_lag_s=rotor_lag_s, alpha_cap=alpha_cap,
         alpha_cap_vmin=c.alpha_gate_ms, **extra,
     )  # fmt: skip
+
+
+def d_exit_params(inp: StudyInputs) -> BackTransitionParams:
+    """The controller analysis D runs at the AIRBRAKE exit (its rotor lag, its angle cap).
+
+    E's back transition and the sensitivity's budget use it too, so no stopping run in the study
+    has other controller settings than D's.
+    """
+    lim, _ = alpha_limits(inp)
+    cap = zero_loss._alpha_band(inp.vehicle, lim)[1]  # body pitch at the top of A's band
+    return exit_params(
+        inp, rotor_lag_s=inp.study.D.rotor_lag_s,
+        alpha_cap=cap if inp.study.D.enforce_alpha else None,
+    )
 
 
 # ---- Q2: pusher thrust margin ------------------------------------------------------------------
@@ -176,6 +193,16 @@ def q2_worst(cells: list[Q2Cell], conv: str) -> Q2Cell:
     return min((c for c in cells if c[0]["convention"] == conv), key=lambda c: c[1].a_min)
 
 
+def site_mission(inp: StudyInputs, site: float) -> energy.MissionProfile:
+    """The mission at a site, with `v_trans` as a true airspeed (Q2.feed_convention) and the
+    rotor fade of the register's (or the recommended) `Q_TRANSITION_MS`."""
+    mp = energy.mission_at_site(inp.mission, site, inp.study.Q2.feed_convention)
+    return dataclasses.replace(
+        mp, q_transition_s=float(inp.start_params["q_transition"]),
+        wing_share_handover=inp.study.E.fade_wing_share,
+    )
+
+
 # ---- E: the mission budget per site -------------------------------------------------------------
 @dataclasses.dataclass
 class ECase:
@@ -202,7 +229,7 @@ def _fwd_accel_by_leg(
     if ec.a_fwd_mode == "worst":
         return dict.fromkeys(masses, worst)
     rho_c = float(atmosphere.density(mp.clearance_amsl, mp.isa_offset_k))
-    v_end = mp.v_trans if q2c.feed_convention == "tas" else mp.v_trans * math.sqrt(RHO0 / rho_c)
+    v_end = mp.v_trans  # already a true airspeed (`energy.mission_at_site`)
     out: dict[str, float] = {}
     for leg, m in masses.items():
         f = pusher.forward_accel(
@@ -222,10 +249,11 @@ def solve_e_case(
     Raises ValueError for a non-positive acceleration: there is no fallback to the mission value.
     """
     vp, ec = inp.vehicle, inp.study.E
-    mp = energy.mission_at_site(inp.mission, site)
+    mp = site_mission(inp, site)
     masses = {"out": vp.m, "ret": vp.m - mp.payload_kg} if kind == "round_trip" else {"leg": vp.m}
     rho_bt = float(atmosphere.density(site + mp.h_bt_agl_m, mp.isa_offset_k))
-    v0 = inp.entry_eas * math.sqrt(RHO0 / rho_bt)  # D's entry EAS as a true airspeed
+    # the stopping run starts at the AIRBRAKE exit, as in D, C and B1 (AIRSPEED_MIN - 2)
+    v0 = braking.entry_airspeed(inp.airspeed_min, rho_bt, inp.study.D.entry_convention)
     e_nom = vp.battery.e_nominal_wh * 3600.0
     src = None
     if ec.a_fwd_mode != "mission":
@@ -241,7 +269,7 @@ def solve_e_case(
                 f"TKOFF_THR_MAX = {inp.tkoff_thr_max:g}"
             )
         mb = energy.build_mission(vp, mp, inp.window, inp.descent, a_plan, kind, a,
-                                  bp=inp.controller, v0_entry=v0, a_fwd_source=src)  # fmt: skip
+                                  bp=d_exit_params(inp), v0_entry=v0, a_fwd_source=src)  # fmt: skip
         r_max = mb.max_range_m
         if r_max <= 0.0:
             raise ValueError("the usable energy does not cover the fixed segments and the reserve")
@@ -342,13 +370,10 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         alpha_cap = zero_loss._alpha_band(vp, lim)[1]  # body pitch; the wing angle adds i_w
         alpha_hi = alpha_cap + vp.wing.i_w
         kappa = inp.descent.kappa
-        base_bp = exit_params(
-            inp, rotor_lag_s=c.rotor_lag_s, alpha_cap=alpha_cap if c.enforce_alpha else None
-        )
+        base_bp = d_exit_params(inp)
 
         def entry(sc: Scenario) -> float:
-            return braking.entry_airspeed(inp.airspeed_min, c.q_assist_speed_ms, sc.rho,
-                                          c.entry_convention)  # fmt: skip
+            return braking.entry_airspeed(inp.airspeed_min, sc.rho, c.entry_convention)
 
         Run = tuple[braking.BrakingResult, dict[str, Any], float]
 
@@ -629,7 +654,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                     continue
                 mb, r = cs.mb, cs.r_max
                 budgets[name] = mb
-                mp_site = energy.mission_at_site(inp.mission, site)
+                mp_site = site_mission(inp, site)
                 rho_c = float(atmosphere.density(mp_site.cruise_amsl_m, mp_site.isa_offset_k))
                 v_c = mb.profiles[mb.legs[0][0]].v_cruise or math.nan
                 reqs = {f"{x:g}": x * 1e3 for x in inp.requirements_km}
@@ -733,11 +758,11 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
     return out
 
 
-# ---- tasks: C, B1, sensitivity -------------------------------------------------------------
+# ---- tasks: C, FT, B1, sensitivity -------------------------------------------------------------
 def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams, CostWeights]:
     """C's evaluation settings, base controller parameters and cost normalisers from the config.
 
-    The entry (`theta_fw0_deg`, `pit_lim_mode`, `q_assist_speed_ms`, `entry_convention`) is read
+    The entry (`theta_fw0_deg`, `pit_lim_mode`, `entry_convention`) is read
     from the D block: it describes the AIRBRAKE exit, not C.
     """
     c, d = inp.study.C, inp.study.D
@@ -750,9 +775,9 @@ def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams
         z_vel_flt_hz=z.vel_flt_hz, z_acc_flt_hz=z.acc_flt_hz,
     )  # fmt: skip
     cev = restricted.CEval(
-        airspeed_min=inp.airspeed_min, q_assist_speed=d.q_assist_speed_ms,
-        entry_convention=d.entry_convention, rotor_start=c.rotor_start, os_tol_m=c.os_tol_m,
-        sink_tol_ms=c.sink_tol_ms, end_speed=END_SPEED_MS,
+        airspeed_min=inp.airspeed_min, entry_convention=d.entry_convention,
+        rotor_start=c.rotor_start, os_tol_m=c.os_tol_m, sink_tol_ms=c.sink_tol_ms,
+        end_speed=END_SPEED_MS,
     )  # fmt: skip
     w = CostWeights(h_ref=c.weights.h_ref, E_ref=c.weights.E_ref, x_ref=c.weights.x_ref)
     return cev, base, w
@@ -769,12 +794,35 @@ def alpha_limits(inp: StudyInputs) -> tuple[zero_loss.ActuatorLimits, float]:
     return lim, zero_loss._alpha_band(vp, lim)[1] + vp.wing.i_w
 
 
+def b1_ceiling_deg(inp: StudyInputs, variant: Any) -> float:
+    """The pitch-command ceiling of a B1 variant in degrees; `null` in the config is the
+    register's PTCH_LIM_MAX_DEG, so the `c_envelope` variant follows it."""
+    if variant.theta_cmd_max_deg is None:
+        return math.degrees(inp.theta_p)
+    return float(variant.theta_cmd_max_deg)
+
+
+def c_theta_a_hi_deg(inp: StudyInputs) -> float:
+    """Upper bound of `Q_A_ANGLE_MAX` in degrees: `min(C.bounds.theta_A_deg[1], PTCH_LIM_MAX_DEG)`.
+
+    The pitch cap is `min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG)`, so an angle above the pitch limit
+    changes nothing and the search would wander on a flat region. The 30 deg of DEC-7 is now
+    only the pitch limit when `PTCH_LIM_MAX_DEG` is the smaller.
+    """
+    lo, hi = inp.study.C.bounds.theta_A_deg
+    eff = min(hi, math.degrees(inp.theta_p))
+    if eff <= lo:
+        raise ValueError(f"C.bounds.theta_A_deg {lo:g} is not below PTCH_LIM_MAX_DEG "
+                         f"({math.degrees(inp.theta_p):g} deg): nothing left to search")
+    return eff
+
+
 def c_bounds(inp: StudyInputs) -> Bounds:
     b = inp.study.C.bounds
     return Bounds(
         restricted.C_BOUNDS.names,
         (b.T_bt[0], math.radians(b.theta_A_deg[0]), b.spin_min[0], b.q[0]),
-        (b.T_bt[1], math.radians(b.theta_A_deg[1]), b.spin_min[1], b.q[1]),
+        (b.T_bt[1], math.radians(c_theta_a_hi_deg(inp)), b.spin_min[1], b.q[1]),
     )  # fmt: skip
 
 
@@ -782,24 +830,73 @@ def _c_row(label: str, results: list[restricted.CRun], w: CostWeights) -> dict[s
     return {"case": label, **{k: _num(v) for k, v in restricted.summarise_c(results, w).items()}}
 
 
+def default_case(
+    inp: StudyInputs, names: dict[str, str], convert: dict[str, Any] | None = None
+) -> tuple[dict[str, float] | None, str]:
+    """The parameters of an analysis's `ardupilot_default` case, from the defaults register.
+
+    `names` maps the analysis's variable to the ArduPilot name. Returns (None, note) when any
+    default is missing: the analysis then skips the case and says so (never a made-up value).
+    `convert` turns an SI default into the variable's own unit (FT: radians to degrees).
+    """
+    out: dict[str, float] = {}
+    missing: list[str] = []
+    for var, name in names.items():
+        v = inp.resolve_default(name)
+        if v is None:
+            missing.append(name)
+        else:
+            out[var] = (convert or {}).get(var, lambda x: x)(v)
+    if missing:
+        return None, ("ArduPilot default case not run: no default for " + ", ".join(missing)
+                      + " in ardupilot_defaults.yaml")  # fmt: skip
+    return out, ""
+
+
+def _c_trace(sim: Any, i_w: float, case: str, member: int, every: int = 5) -> Table:
+    """`C_history` rows of one run: every `every`-th sample, angles in degrees (as B1's series)."""
+    cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
+            "theta": np.degrees(sim["theta"]), "alpha_w_deg": np.degrees(sim["alpha"] + i_w),
+            "delta_r": sim["delta_r"], "theta_cmd": np.degrees(sim["theta_cmd"]),
+            "omega_r": sim["omega_r"]}  # fmt: skip
+    return [{"case": case, "member": member, **{k: float(v[i]) for k, v in cols.items()}}
+            for i in range(0, len(sim.t), every)]  # fmt: skip
+
+
 def task_c(inp: StudyInputs) -> dict[str, Any]:
     """Analysis C: search the four ArduPilot variables from the AIRBRAKE exit, then report.
 
-    Tables: `C_params` (the optimum and the register at q = 2), `C_search`, `C_runs` (one row per
-    ensemble member, with the capability ceiling and D's alpha and VRS checks), `C_q_curve`
-    (the optimum's ramp with q varied) and `C_sens` (one-at-a-time changes at the optimum).
+    Tables: `C_params` (the optimum, the register at q = 2 and the ArduPilot default), `C_search`,
+    `C_runs` (one row per ensemble member and case, with the capability ceiling and D's alpha and
+    VRS checks), `C_q_curve` (the optimum's ramp with q varied), `C_sens` (one-at-a-time
+    changes at the optimum) and `C_history` (the time series of member 0 in each
+    case). The ArduPilot-default case (docs/DEFAULTS_spec.md 2.2) sets the four searched
+    parameters to their defaults and keeps the register's entry (`AIRSPEED_MIN`), so the back
+    transition starts from the same state in all three cases; it is a reference only.
     """
     c, d, vp = inp.study.C, inp.study.D, inp.vehicle
     scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
     cev, base, w = c_settings(inp)
     bounds = c_bounds(inp)
     start = {k: inp.start_params[k] for k in ("T_bt", "theta_A", "spin_min")}
+    theta_hi = c_theta_a_hi_deg(inp)
+    theta_note = (
+        f"Q_A_ANGLE_MAX is searched up to {theta_hi:g} deg = min({c.bounds.theta_A_deg[1]:g}, "
+        f"PTCH_LIM_MAX_DEG {math.degrees(inp.theta_p):g}): the pitch cap is "
+        f"min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG), so "
+        + ("the 30 deg limit (DEC-7) is now the pitch limit." if theta_hi < c.bounds.theta_A_deg[1]
+           else "the pitch limit does not bind the search.")
+    )
     r = restricted.optimise_c(
         vp, scens, cev, base, w, start, bounds=bounds, seeds=tuple(c.seeds),
         popsize=c.popsize, maxiter=c.maxiter,
     )  # fmt: skip
     best = r.params
     reg = {**start, "q": restricted.C_Q_START}
+    dflt, dflt_note = default_case(
+        inp, {"T_bt": "Q_BACKTRANS_MS", "theta_A": "Q_A_ANGLE_MAX", "spin_min": "Q_M_SPIN_MIN",
+              "q": "Q_TRANS_DECEL"}
+    )  # fmt: skip
 
     def run_all(
         prm: dict[str, float], ev: restricted.CEval = cev, bp: BackTransitionParams = base
@@ -814,6 +911,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     opt = run_all(best)
     reg_runs = run_all(reg)
     s_opt, s_reg = restricted.summarise_c(opt, w), restricted.summarise_c(reg_runs, w)
+    dflt_runs = run_all(dflt) if dflt is not None else None
     params: Table = [
         {"case": "optimum", **deg(best), "J": r.cost, "J_start": r.cost_default,
          "seed_spread": r.search.spread,
@@ -823,31 +921,50 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
          "J_start": "", "seed_spread": "", "at_bound": "",
          **{k: _num(v) for k, v in s_reg.items() if k != "J"}},
     ]  # fmt: skip
+    if dflt is not None and dflt_runs is not None:
+        s_dflt = restricted.summarise_c(dflt_runs, w)
+        params.append({
+            "case": "ardupilot_default", **deg(dflt), "J": s_dflt["J"], "J_start": "",
+            "seed_spread": "", "at_bound": "",
+            **{k: _num(v) for k, v in s_dflt.items() if k != "J"},
+        })  # fmt: skip
     search = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
               for sr in r.search.seeds]  # fmt: skip
 
-    # per member: the run, the capability ceiling, D's alpha and VRS checks (reporting only)
+    # per member and case: the run, the capability ceiling, D's alpha and VRS checks (report only)
     lim, alpha_hi = alpha_limits(inp)
     run_rows: Table = []
-    for i, (s, cr) in enumerate(zip(scens, opt, strict=True)):
-        vps = s.vehicle_for(vp)
-        bp_i = dataclasses.replace(base, T_bt=best["T_bt"], theta_A=best["theta_A"],
-                                   delta_min=best["spin_min"])  # fmt: skip
-        fl = braking.braking_flags(
-            cr.sim, vps, s, bp_i, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
-            kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
-        )  # fmt: skip
-        a_cap = restricted.capability_ceiling(vp, s, best, cev, base)
-        run_rows.append({
-            "member": i, "altitude_m": s.altitude_amsl_m, "isa_offset_k": s.isa_offset_k,
-            "mass_kg": s.mass_kg, "soc": s.soc, "headwind_ms": s.headwind_ms,
-            "V0_air_ms": cr.v_air0, "V0_ground_ms": cr.v_ground0, "x_tgt_m": cr.x_tgt,
-            "x_end_m": _num(cr.x_end), "overshoot_m": _num(cr.overshoot),
-            "energy_kJ": cr.metrics.energy / 1e3, "excursion_m": cr.metrics.excursion,
-            "end_sink_ms": _num(-cr.vh_end), "flags": ",".join(cr.metrics.failures),
-            "a_cap_ms2": _num(a_cap), "q_over_a_cap": _num(best["q"] / a_cap),
-            **{k: v if isinstance(v, bool) else _num(v) for k, v in fl.items()},
-        })  # fmt: skip
+
+    def member_rows(case: str, prm: dict[str, float], results: list[restricted.CRun]) -> None:
+        for i, (s, cr) in enumerate(zip(scens, results, strict=True)):
+            vps = s.vehicle_for(vp)
+            bp_i = dataclasses.replace(base, T_bt=prm["T_bt"], theta_A=prm["theta_A"],
+                                       delta_min=prm["spin_min"])  # fmt: skip
+            fl = braking.braking_flags(
+                cr.sim, vps, s, bp_i, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
+                kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
+            )  # fmt: skip
+            a_cap = restricted.capability_ceiling(vp, s, prm, cev, base)
+            run_rows.append({
+                "case": case, "member": i, "altitude_m": s.altitude_amsl_m,
+                "isa_offset_k": s.isa_offset_k, "mass_kg": s.mass_kg, "soc": s.soc,
+                "headwind_ms": s.headwind_ms, "V0_air_ms": cr.v_air0,
+                "V0_ground_ms": cr.v_ground0, "x_tgt_m": cr.x_tgt,
+                "x_end_m": _num(cr.x_end), "overshoot_m": _num(cr.overshoot),
+                "energy_kJ": cr.metrics.energy / 1e3, "excursion_m": cr.metrics.excursion,
+                "end_sink_ms": _num(-cr.vh_end), "flags": ",".join(cr.metrics.failures),
+                "a_cap_ms2": _num(a_cap), "q_over_a_cap": _num(prm["q"] / a_cap),
+                **{k: v if isinstance(v, bool) else _num(v) for k, v in fl.items()},
+            })  # fmt: skip
+
+    member_rows("optimum", best, opt)
+    if dflt is not None and dflt_runs is not None:
+        member_rows("ardupilot_default", dflt, dflt_runs)
+
+    history: Table = _c_trace(opt[0].sim, vp.wing.i_w, "C optimum", 0)
+    history += _c_trace(reg_runs[0].sim, vp.wing.i_w, "C register", 0)
+    if dflt_runs is not None:
+        history += _c_trace(dflt_runs[0].sim, vp.wing.i_w, "C ardupilot_default", 0)
 
     q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q}
                for q in c.q_curve]  # fmt: skip
@@ -874,10 +991,406 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         row.pop("case", None)
     print(f"    C reports: {time.time() - t0:.0f} s", flush=True)
     return {
-        "result": r, "scens": scens,
+        "result": r, "scens": scens, "notes": [theta_note, *([dflt_note] if dflt_note else [])],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
-                   "C_q_curve": q_curve, "C_sens": sens_rows},
+                   "C_q_curve": q_curve, "C_sens": sens_rows, "C_history": history},
     }  # fmt: skip
+
+
+def ft_settings(inp: StudyInputs) -> tuple[forward.FTEval, dict[str, float]]:
+    """FT's evaluation settings and the register start (the four searched values).
+
+    The controller template is `inp.forward` (the register plus C's Z-loop gains); the accepted
+    loss and gain are the mission profile's; the recovery C_L fraction is `FT.rec_cl_frac` or A's.
+    """
+    f, m, fp = inp.study.FT, inp.mission, inp.forward
+    _, alpha_hi = alpha_limits(inp)
+    fev = forward.FTEval(
+        template=fp, t_end_s=f.t_end_s, t_settle_s=f.t_settle_s, stall_margin=f.stall_margin,
+        cl_frac=f.rec_cl_frac or inp.study.A.cl_frac or 0.8, proj_is_failure=f.proj_is_failure,
+        loss_max_m=m.fwd_alt_loss_max_m, gain_max_m=m.fwd_alt_gain_max_m, alpha_hi=alpha_hi,
+        alpha_gate_ms=inp.study.D.alpha_gate_ms,
+    )  # fmt: skip
+    start = {
+        "airspeed_min": fp.airspeed_min_eas, "q_transition": fp.q_transition_s,
+        "tkoff_thr_max": fp.tkoff_thr_max, "tran_pit_max": fp.tran_pit_max_deg,
+    }  # fmt: skip
+    return fev, start
+
+
+def ft_scenarios(
+    inp: StudyInputs, n: int | None = None
+) -> tuple[list[Scenario], list[Scenario]]:
+    """The Sobol sample and the corners, at the transition altitude.
+
+    `n` members of the sample (default `FT.ensemble_n`, the search ensemble). A larger `n` is a
+    prefix extension of a smaller one, so the search members are the first members of the final set.
+    """
+    f = inp.study.FT
+    axes = dataclasses.replace(inp.ensemble_axes, headwind_ms=(f.headwind_ms[0], f.headwind_ms[1]))
+    return forward.ft_ensemble(
+        n or f.ensemble_n, inp.vehicle, f.ensemble_seed, axes, inp.mission.clearance_agl_m
+    )
+
+
+def ft_bounds(inp: StudyInputs, fixed: dict[str, float] | None = None) -> Bounds:
+    b = inp.study.FT.bounds
+    return forward.ft_bounds(
+        b.airspeed_min_eas_ms, b.q_transition_s, b.tkoff_thr_max, b.q_tran_pit_max_deg, fixed
+    )
+
+
+def ft_weights(
+    inp: StudyInputs, scens: list[Scenario], fev: forward.FTEval, start: dict[str, float]
+) -> CostWeights:
+    """The cost of FT; `E_ref: null` is the mean energy at the register start (computed once)."""
+    w = inp.study.FT.weights
+    e_ref = w.E_ref or forward.mean_energy(inp.vehicle, scens, fev, start)
+    return CostWeights(w_h=w.w_h, w_E=w.w_E, w_x=w.w_x, h_ref=w.h_ref, E_ref=e_ref, x_ref=w.x_ref)
+
+
+def _ft_member_row(s: Scenario, r: forward.FTRun, case: str, kind: str, i: int) -> dict[str, Any]:
+    """One `FT_runs` row: the member's axes, then the run's columns."""
+    row: dict[str, Any] = {
+        "case": case, "set": kind, "member": i, "altitude_m": s.ground_amsl_m,
+        "isa_offset_k": s.isa_offset_k, "mass_kg": s.mass_kg, "soc": s.soc,
+        "headwind_ms": s.headwind_ms,
+    }  # fmt: skip
+    for k, v in r.row.items():
+        row[k] = v if isinstance(v, bool | str) else _num(v)
+    return row
+
+
+FT_PARAM_COLUMNS = {
+    "airspeed_min": "airspeed_min_eas_ms", "q_transition": "q_transition_s",
+    "tkoff_thr_max": "tkoff_thr_max", "tran_pit_max": "tran_pit_max_deg",
+}  # fmt: skip
+
+
+def _ft_sens_eval(fev: forward.FTEval, key: str, value: Any) -> forward.FTEval:
+    """The evaluation settings with one `FT.sens` entry changed."""
+    tp = fev.template
+    if key == "rec_cl_frac":  # changes only the projection
+        return dataclasses.replace(fev, cl_frac=value)
+    if key in ("rotor_lag_s", "z_vel_p", "z_acc_p"):
+        back = dataclasses.replace(tp.back, **{key: value})
+        return dataclasses.replace(fev, template=dataclasses.replace(tp, back=back))
+    own = {"TECS_TIME_CONST": "tecs_time_const", "TECS_INTEG_GAIN": "tecs_integ_gain",
+           "TRIM_THROTTLE": "trim_throttle", "tecs_start": "tecs_start"}  # fmt: skip
+    return dataclasses.replace(fev, template=dataclasses.replace(tp, **{own[key]: value}))
+
+
+def vehicle_with_cl_max(vp: VehicleParams, scale: float) -> VehicleParams:
+    """The vehicle with its wing's C_L,max scaled, the least invasive way: only `alpha_s` moves.
+
+    The stall angle `alpha_s` is the provisional input of the lift peak (vehicle.yaml); it is found
+    by bisection so that `runs.cl_max` is `scale` times the model's value (C_L,max rises with
+    alpha_s). The stall speed, the stall flag, the recovery acceleration and the simulated lift all
+    read the wing, so they follow. Nothing else of the wing (C_L0, C_L,alpha, C_N, M, drag) changes.
+    """
+    target = scale * runs.cl_max(vp.wing)
+    lo, hi = 0.5 * vp.wing.alpha_s, 2.0 * vp.wing.alpha_s
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        wing = dataclasses.replace(vp.wing, alpha_s=mid)
+        if runs.cl_max(wing) < target:
+            lo = mid
+        else:
+            hi = mid
+    return dataclasses.replace(vp, wing=dataclasses.replace(vp.wing, alpha_s=0.5 * (lo + hi)))
+
+
+# ---- FT: the grid over Q_TRANSITION_MS, the snap to ArduPilot's integers, the report ----------
+def ft_lattice_bounds(inp: StudyInputs) -> dict[str, tuple[float, float]]:
+    """The search bounds of the three lattice variables, by `forward.LATTICE_NAMES`."""
+    b = inp.study.FT.bounds
+    return {"airspeed_min": b.airspeed_min_eas_ms, "tkoff_thr_max": b.tkoff_thr_max,
+            "tran_pit_max": b.q_tran_pit_max_deg}  # fmt: skip
+
+
+def ft_task_id(prm: dict[str, float]) -> str:
+    """`FT:<AIRSPEED_MIN m/s>:<Q_TRANSITION_MS>:<TKOFF_THR_MAX %>:<Q_TRAN_PIT_MAX deg>` of a lattice
+    point. The values are in the task id, so they are part of its cache key."""
+    return "FT:{}:{}:{}:{}".format(
+        round(prm["airspeed_min"]), round(prm["q_transition"] * 1e3),
+        round(prm["tkoff_thr_max"] * 100), round(prm["tran_pit_max"]),
+    )
+
+
+def parse_ft_id(arg: str) -> dict[str, float]:
+    v, q_ms, thr, pit = (int(x) for x in arg.split(":"))
+    return {"airspeed_min": float(v), "q_transition": q_ms / 1e3, "tkoff_thr_max": thr / 100.0,
+            "tran_pit_max": float(pit)}  # fmt: skip
+
+
+def grid_id(q_s: float) -> str:
+    return f"FT_grid:{round(q_s * 1e3)}"
+
+
+def task_ft_grid(inp: StudyInputs, q_ms_arg: str) -> dict[str, Any]:
+    """One `FT_grid` point (FT_spec Part 4): Q_TRANSITION_MS fixed, the other three searched.
+
+    The continuous CMA-ES result is snapped to ArduPilot's integers (AIRSPEED_MIN 1 m/s,
+    Q_TRAN_PIT_MAX 1 deg, TKOFF_THR_MAX 1 %), then a lattice descent moves to the best in-bound
+    3 x 3 x 3 neighbour until none is better, all on the search ensemble. The T-12 spread is the
+    three-seed spread of the continuous search. The row carries both results and the cost change.
+    """
+    f, vp = inp.study.FT, inp.vehicle
+    q = int(q_ms_arg) / 1e3
+    fev, start = ft_settings(inp)
+    core, _ = ft_scenarios(inp)
+    w = ft_weights(inp, core, fev, start)
+    fixed = {"q_transition": q}
+    r = forward.optimise_ft(
+        vp, core, fev, w, {**start, **fixed}, ft_bounds(inp, fixed), fixed=fixed,
+        seeds=tuple(f.grid.seeds), popsize=f.popsize, maxiter=f.grid.maxiter,
+    )  # fmt: skip
+    cont = r.params
+
+    def cost(p: dict[str, float]) -> float:
+        return forward.ft_cost(vp, core, fev, {**p, **fixed}, w)
+
+    lat = forward.lattice_descent(
+        cost, cont, ft_lattice_bounds(inp), max_rounds=f.grid.descent_max_rounds
+    )
+    snapped = {**lat.params, **fixed}
+    sm = forward.summarise_ft(forward_runs(vp, core, snapped, fev), w)
+    row = {
+        "q_transition_s": q,
+        **{FT_PARAM_COLUMNS[k] + "_continuous": cont[k] for k in forward.FT_NAMES},
+        "J_continuous": r.cost, "seed_spread": r.search.spread,
+        "t12_ok": r.search.spread <= T12_SPREAD_MAX,
+        "at_bound": ";".join(f"{k}:{x}" for k, x in r.at_bound.items()),
+        **{FT_PARAM_COLUMNS[k]: snapped[k] for k in forward.FT_NAMES},
+        "J_snap": lat.cost_start, "J_snapped": lat.cost,
+        "J_snapped_minus_continuous": lat.cost - r.cost,
+        "descent_moves": lat.rounds, "descent_evaluations": lat.evaluations,
+        "ensemble_n": len(core), **{k: _num(x) for k, x in sm.items() if k != "J"},
+    }  # fmt: skip
+    return {"result": r, "row": row, "q_transition_s": q, "snapped": snapped}
+
+
+def grid_coarse_ids(inp: StudyInputs) -> list[str]:
+    return [grid_id(q) for q in inp.study.FT.grid.q_transition_s]
+
+
+def grid_fine_ids(inp: StudyInputs, results: dict[str, dict[str, Any]]) -> list[str]:
+    """The fine pass: the best coarse point (lowest continuous `J_continuous`, the `J_search` of the
+    brief) plus the offsets, inside the search bounds, not already on the coarse grid."""
+    g = inp.study.FT.grid
+    coarse = [(results[i]["row"]["J_continuous"], results[i]["q_transition_s"])
+              for i in grid_coarse_ids(inp) if i in results]  # fmt: skip
+    if not coarse:
+        return []
+    q_best = min(coarse)[1]
+    lo, hi = inp.study.FT.bounds.q_transition_s
+    out = []
+    for off in g.fine_offsets_s:
+        q = round(q_best + off, 3)
+        if lo - 1e-9 <= q <= hi + 1e-9 and q not in g.q_transition_s:
+            out.append(grid_id(q))
+    return out
+
+
+def grid_winner(results: dict[str, dict[str, Any]]) -> str | None:
+    """The grid task with the lowest snapped cost (`J_snapped`) among those that ran."""
+    rows = {t: r["row"]["J_snapped"] for t, r in results.items() if t.startswith("FT_grid:")}
+    return min(rows, key=lambda t: (rows[t], t)) if rows else None
+
+
+def follow_up_tasks(
+    inp: StudyInputs, results: dict[str, dict[str, Any]], failed: dict[str, str]
+) -> list[str]:
+    """Tasks that can only be planned once earlier ones are done (a later phase of the run).
+
+    FT: the fine pass after the coarse grid, then the report of the winner. The task id carries
+    the winner's values, so they are part of the cache key.
+    """
+    out: list[str] = []
+    if "FT" not in inp.study.analyses:
+        return out
+    done = set(results) | set(failed)
+    coarse = grid_coarse_ids(inp)
+    if not all(i in done for i in coarse):
+        return out
+    fine = grid_fine_ids(inp, results)
+    out += [i for i in fine if i not in done]
+    if all(i in done for i in [*coarse, *fine]):
+        win = grid_winner(results)
+        if win is not None:
+            tid = ft_task_id(results[win]["snapped"])
+            if tid not in done:
+                out.append(tid)
+    # the recommended settings, once the FT report exists: E and Q2 are repeated at them
+    ft_done = next((t for t in results if t.startswith("FT:")), None)
+    if ft_done is not None and set(inp.study.analyses) & {"E", "Q2"}:
+        rec = rec_task_id(parse_ft_id(ft_done.split(":", 1)[1]))
+        if rec not in done:
+            out.append(rec)
+    return out
+
+
+def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
+    """Analysis FT, the report of the grid winner `arg` (see `ft_task_id`).
+
+    Tables: `FT_params` (the optimum, the register start and the ArduPilot default), `FT_runs`
+    (every member of each case, Sobol core and corners), `FT_sens` (one at a time at the optimum)
+    and `FT_history` (time series of the named scenarios, each case). The sensitivities, `base` and
+    `J_start` use the first `FT.ensemble_n` members; the three cases of `FT_params`, `FT_runs` and
+    `FT_history` are evaluated on the first `FT.final_ensemble_n` (`ensemble_n` columns say which,
+    and the notes repeat it). The `ardupilot_default` case (docs/DEFAULTS_spec.md 2.1) sets the
+    four variables to their defaults, everything else to the register; no search is run for it.
+    The search itself is `task_ft_grid`; `assemble` joins its row to the optimum's.
+    """
+    f, vp = inp.study.FT, inp.vehicle
+    best = parse_ft_id(arg)
+    fev, start = ft_settings(inp)
+    core, corners = ft_scenarios(inp)
+    t0 = time.time()
+    w = ft_weights(inp, core, fev, start)
+    j_start = forward.ft_cost(vp, core, fev, start, w)
+    print(f"    FT E_ref {w.E_ref:.0f} J ({time.time() - t0:.0f} s, {len(core)} runs)", flush=True)
+    t1 = time.time()
+    cases = {"optimum": best, "register": start}
+    dflt, dflt_note = default_case(
+        inp, {"airspeed_min": "AIRSPEED_MIN", "q_transition": "Q_TRANSITION_MS",
+              "tkoff_thr_max": "TKOFF_THR_MAX", "tran_pit_max": "Q_TRAN_PIT_MAX"},
+        convert={"tran_pit_max": math.degrees},
+    )  # fmt: skip
+    if dflt is not None:
+        cases["ardupilot_default"] = dflt
+    final, final_corners = ft_scenarios(inp, f.final_ensemble_n)
+    core_runs = {c: forward_runs(vp, final, prm, fev) for c, prm in cases.items()}
+    corner_runs = {c: forward_runs(vp, final_corners, prm, fev) for c, prm in cases.items()}
+    params: Table = []
+    for c, prm in cases.items():
+        opt = c == "optimum"
+        params.append({
+            "case": c, **{FT_PARAM_COLUMNS[k]: prm[k] for k in forward.FT_NAMES},
+            "ensemble_n": len(final), "J_start": j_start if opt else "",
+            **{k: _num(v) for k, v in forward.summarise_ft(core_runs[c], w).items()},
+        })  # fmt: skip
+    run_rows: Table = []
+    for c in cases:
+        for kind, scens, results in (
+            ("core", final, core_runs[c]), ("corner", final_corners, corner_runs[c])
+        ):
+            for i, (sc, rr) in enumerate(zip(scens, results, strict=True)):
+                run_rows.append(_ft_member_row(sc, rr, c, kind, i))
+    notes = [
+        "FT_params, FT_runs and FT_history evaluate the optimum, the register start and the "
+        f"ArduPilot default on the first {len(final)} members of the Sobol sample and the "
+        f"{len(final_corners)} corners. The grid search, FT_grid, FT_sens and J_start use the "
+        f"first {len(core)} members. The optimum is the best snapped point of FT_grid: whole m/s, "
+        "whole "
+        "degrees, whole percent and whole milliseconds, the values ArduPilot can take."
+    ]
+    # one at a time at the optimum, on the search ensemble; `base` is the unchanged evaluation there
+    sens_rows: Table = []
+    base_sm = forward.summarise_ft(forward_runs(vp, core, best, fev), w)
+    sens_rows.append({"parameter": "base", "value": "", "ensemble_n": len(core),
+                      "cl_max": runs.cl_max(vp.wing), "alpha_s_rad": vp.wing.alpha_s,
+                      **{k: _num(x) for k, x in base_sm.items()}})  # fmt: skip
+    for key, values in f.sens.model_dump().items():
+        for v in values:
+            if key == "CL_max_scale":  # a different wing: the stall flag reads the changed C_L,max
+                vp_s, fev_s = vehicle_with_cl_max(vp, v), fev
+            else:
+                vp_s, fev_s = vp, _ft_sens_eval(fev, key, v)
+            sm = forward.summarise_ft(forward_runs(vp_s, core, best, fev_s), w)
+            sens_rows.append({"parameter": key, "value": v, "ensemble_n": len(core),
+                              "cl_max": runs.cl_max(vp_s.wing), "alpha_s_rad": vp_s.wing.alpha_s,
+                              **{k: _num(x) for k, x in sm.items()}})  # fmt: skip
+    hist: Table = []
+    for name in f.history_scenarios:
+        sc = forward.ft_scenario(inp.scenarios[name], inp.mission.clearance_agl_m)
+        for c, prm in cases.items():
+            rr = forward.run_ft(vp, sc, prm, fev)
+            hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
+    print(f"    FT reports: {time.time() - t1:.0f} s", flush=True)
+    return {
+        "optimum": best, "J_start": j_start, "scens": core, "E_ref": w.E_ref,
+        "notes": [*notes, *([dflt_note] if dflt_note else [])],
+        "tables": {"FT_params": params, "FT_runs": run_rows, "FT_sens": sens_rows,
+                   "FT_history": hist},
+    }  # fmt: skip
+
+
+def with_settings(
+    inp: StudyInputs, airspeed_min: float, tkoff_thr_max: float, q_transition_s: float | None = None
+) -> StudyInputs:
+    """The inputs with `AIRSPEED_MIN`, `TKOFF_THR_MAX` and (if given) `Q_TRANSITION_MS` replaced
+    everywhere they are read."""
+    q = inp.start_params["q_transition"] if q_transition_s is None else q_transition_s
+    return dataclasses.replace(
+        inp, airspeed_min=airspeed_min, tkoff_thr_max=tkoff_thr_max,
+        tkoff_thr_max_raw=tkoff_thr_max,
+        mission=dataclasses.replace(inp.mission, v_trans=airspeed_min),
+        forward=dataclasses.replace(inp.forward, airspeed_min_eas=airspeed_min,
+                                    tkoff_thr_max=tkoff_thr_max),
+        start_params={**inp.start_params, "airspeed_min": airspeed_min,
+                      "tkoff_thr_max": tkoff_thr_max, "q_transition": q},
+    )
+
+
+def rec_task_id(optimum: dict[str, float]) -> str:
+    """`basics_rec:<AIRSPEED_MIN m/s>:<Q_TRANSITION_MS>:<TKOFF_THR_MAX %>`: D, E and Q2 at the
+    recommended settings (E's rotor fade reads `Q_TRANSITION_MS`).
+
+    The FT optimum's values are in the id, so a changed optimum is a new cache key (a re-run).
+    """
+    return (f"basics_rec:{round(optimum['airspeed_min'])}:{round(optimum['q_transition'] * 1e3)}"
+            f":{round(optimum['tkoff_thr_max'] * 100)}")
+
+
+def task_basics_rec(inp: StudyInputs, arg: str) -> dict[str, Any]:
+    """E and Q2 (and D, whose recommendation E's back transition reads) at the recommended
+    `AIRSPEED_MIN` and `TKOFF_THR_MAX` of the FT optimum: the same code as `task_basics`, on
+    inputs with those two values replaced. The tables carry the suffix `_recommended`; the
+    `register` case stays the headline. The sensitivity is not repeated: it stays at the
+    register values.
+    """
+    v, q_ms, thr = (int(x) for x in arg.split(":"))
+    keep = [a for a in inp.study.analyses if a in ("D", "E", "Q2")]
+    study = inp.study.model_copy(update={"analyses": keep})
+    inp2 = dataclasses.replace(with_settings(inp, float(v), thr / 100.0, q_ms / 1e3), study=study)
+    out = task_basics(inp2)
+    tables = {f"{k}_recommended": rows for k, rows in out["tables"].items()
+              if k.startswith(("E_", "Q2_"))}
+    return {"tables": tables, "errors": out.get("errors", []), "airspeed_min": float(v),
+            "q_transition_s": q_ms / 1e3, "tkoff_thr_max": thr / 100.0,
+            "notes": [f"E and Q2 at the FT optimum's AIRSPEED_MIN {v} m/s, Q_TRANSITION_MS "
+                       f"{q_ms} and TKOFF_THR_MAX {thr} %: D is re-run at that entry speed, so E's "
+                       "back transition and its planned deceleration follow the recommended "
+                       "settings"]}
+
+
+def forward_runs(
+    vp: VehicleParams, scens: list[Scenario], prm: dict[str, float], fev: forward.FTEval
+) -> list[forward.FTRun]:
+    return [forward.run_ft(vp, sc, prm, fev) for sc in scens]
+
+
+def task_ft_scan(inp: StudyInputs, v_arg: str) -> dict[str, Any]:
+    """One `FT_scan` grid point: AIRSPEED_MIN fixed, the other three variables re-searched."""
+    f, vp = inp.study.FT, inp.vehicle
+    v = float(v_arg)
+    fev, start = ft_settings(inp)
+    core, _ = ft_scenarios(inp)
+    w = ft_weights(inp, core, fev, start)
+    fixed = {"airspeed_min": v}
+    r = forward.optimise_ft(
+        vp, core, fev, w, {**start, **fixed}, ft_bounds(inp, fixed), fixed=fixed,
+        seeds=tuple(f.scan.seeds), popsize=f.popsize, maxiter=f.scan.maxiter,
+    )  # fmt: skip
+    sm = forward.summarise_ft(forward_runs(vp, core, r.params, fev), w)
+    row = {
+        "airspeed_min_eas_ms": v, **{FT_PARAM_COLUMNS[k]: r.params[k] for k in forward.FT_NAMES},
+        "J_search": r.cost, "seed_spread": r.search.spread,
+        "at_bound": ";".join(f"{k}:{x}" for k, x in r.at_bound.items()),
+        "entry_eas_back_ms": v - 2.0, **{k: _num(x) for k, x in sm.items()},
+    }  # fmt: skip
+    return {"result": r, "row": row, "airspeed_min": v}
 
 
 def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
@@ -892,9 +1405,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     scen = inp.scenarios[scen_name]
     cev, c_base, w = c_settings(inp)
     base = exit_params(inp, rotor_lag_s=c.rotor_lag_s)  # the entry state reads theta_fw0, delta_min
-    v_air = braking.entry_airspeed(
-        inp.airspeed_min, d.q_assist_speed_ms, scen.rho, d.entry_convention
-    )
+    v_air = braking.entry_airspeed(inp.airspeed_min, scen.rho, d.entry_convention)
     end_band = b.end_vh_band_ms or c.sink_tol_ms
     lim, alpha_hi = alpha_limits(inp)
     errors: list[str] = []
@@ -904,12 +1415,19 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     }  # fmt: skip
     v_s = runs.stall_speed(scen.vehicle_for(vp), scen.rho)
     variants = {v.name: v for v in b.variants}
+    ceiling = variants.get("c_envelope")
+    if ceiling is not None and b1_ceiling_deg(inp, ceiling) > math.degrees(inp.theta_p) + 1e-9:
+        raise ValueError(
+            f"B1 variant c_envelope: pitch command ceiling {b1_ceiling_deg(inp, ceiling):g} deg "
+            f"is above PTCH_LIM_MAX_DEG ({math.degrees(inp.theta_p):g} deg); it describes what "
+            "C's ramp can reach"
+        )
     ex_max = max(b.eps_x_m)
 
     def options(v: Any, band: float, theta_deg: float | None = None) -> coll.CollocationOptions:
         kw: dict[str, Any] = {
             "n": b.intervals, "max_iter": b.max_iter, "vh_band": band,
-            "theta_cmd_max": math.radians(theta_deg or v.theta_cmd_max_deg),
+            "theta_cmd_max": math.radians(theta_deg or b1_ceiling_deg(inp, v)),
         }  # fmt: skip
         if v.alpha_max_deg is not None:
             kw["alpha_max"] = math.radians(v.alpha_max_deg)
@@ -946,6 +1464,9 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         if not (s.ok and ver.verified and ver.check is not None):
             return r
         chk = ver.check
+        if ver.delayed is not None:  # does the schedule survive commands that are 10 ms late?
+            r["replay_late_command_ok"] = ver.delay_robust
+            r["replay_late_command_excursion_m"] = ver.delayed.metrics["excursion"]
         fl = braking.braking_flags(
             chk.sim, vp, scen, base, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
             kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
@@ -966,7 +1487,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         theta_deg: float | None = None,
     ) -> tuple[dict[str, Any], Table, coll.B1Solution | None]:  # fmt: skip
         rs, band = rs or c.rotor_start, band or end_band
-        theta = theta_deg or v.theta_cmd_max_deg
+        theta = theta_deg or b1_ceiling_deg(inp, v)
         t0 = time.time()
         prob = problem(options(v, band, theta), rs)
         ver = coll.solve_verified(prob, eh, ex, "energy", ns=tuple(b.refine_from))
@@ -1078,6 +1599,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
             if res is not None:
                 s_ = res.b1
                 g.update({"b1_converged": s_.ok, "b1_replay_verified": res.verified,
+                          "b1_late_command_ok": res.delay_robust,
                           "eps_h_m": s_.eps_h, "eps_x_m": s_.eps_x})  # fmt: skip
                 if res.verified:
                     g.update({
@@ -1098,12 +1620,17 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
         inp.vehicle, scen, statuses=inp.input_statuses(), fractions=inp.input_fractions(),
         controller_nominals=inp.controller_nominals(),
     )  # fmt: skip
-    mp_site = energy.mission_at_site(inp.mission, scen.ground_amsl_m)
+    # the back transition is the AIRBRAKE-exit run of D and C (its vertical loop is the ArduPilot
+    # one), so the altitude-hold gains of the other loop are replaced by the Z-loop gains
+    inputs = [i for i in inputs if not i.name.startswith("alt_hold_")]
+    inputs += sens.z_loop_inputs(inp.study.C.z.model_dump())
+    cev, base, _ = c_settings(inp)
+    mp_site = site_mission(inp, scen.ground_amsl_m)
     budget = (mp_site, inp.window, inp.descent) if c.include_budget else None
     return sens.HeadlineModel(
         inp.vehicle, scen, inputs, prm=dict(inp.start_params), budget=budget,
         controller=dict(inp.controller_overrides), theta_p=inp.theta_p,
-        a_plan_source="simulated", v0_eas=inp.entry_eas,
+        c_eval=cev, c_base=base, budget_bp=d_exit_params(inp),
     )  # fmt: skip
 
 
@@ -1123,6 +1650,9 @@ def plan_tasks(inp: StudyInputs) -> list[str]:
         tasks.append("basics")
     if "C" in wanted:
         tasks.append("C")
+    if "FT" in wanted:
+        tasks += grid_coarse_ids(inp)  # the report of the winner follows (`follow_up_tasks`)
+        tasks += [f"FT_scan:{v:g}" for v in inp.study.FT.scan.airspeed_min_eas_ms]
     if "B1" in wanted:
         tasks += [f"B1:{n}" for n in inp.study.B1.scenarios]
     if "sensitivity" in wanted:
@@ -1143,6 +1673,14 @@ def run_task(inp: StudyInputs, task: str) -> dict[str, Any]:
         return task_basics(inp)
     if kind == "C":
         return task_c(inp)
+    if kind == "basics_rec":
+        return task_basics_rec(inp, arg)
+    if kind == "FT":
+        return task_ft(inp, arg)
+    if kind == "FT_grid":
+        return task_ft_grid(inp, arg)
+    if kind == "FT_scan":
+        return task_ft_scan(inp, arg)
     if kind == "B1":
         return task_b1(inp, arg)
     if kind == "sensitivity":

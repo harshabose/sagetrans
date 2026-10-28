@@ -9,6 +9,23 @@ the cruise altitude a fixed climb height above it. The range is an OUTPUT: whate
 after the fixed segments and the reserve goes to cruise. Segment powers use one mean state of
 charge (`MissionProfile.soc_mean`); `soc_trace.py` walks the SoC along the mission and checks each
 segment at both ends. The forward transition is a quasi-steady ESTIMATE until analyses B/C exist.
+
+STATED SIMPLIFICATION, the forward-transition wait. It uses Q2's worst-case acceleration (the
+minimum over speed and over the Q2 grid, `E.a_fwd_metric: min`) as a CONSTANT, so it overstates
+the wait where the pusher is weak: at 5000 m with the register's `TKOFF_THR_MAX` 0.8 it is 41.7 s
+and 124 kJ against FT's simulated 15 s and 73 kJ; at sea level the two agree (37 kJ). The rotor
+fade that follows is an estimate with `E.fade_wing_share` (0.4), a value TAKEN FROM FT's
+simulated hand-overs (0.39 to 0.44), so comparing E's fade with FT's is not an independent check:
+it shows that the rotor and motor model and the force balance reproduce FT, not that the wing
+share is right. Both are conservative for a range budget (more energy).
+
+STATED SIMPLIFICATION, the glide-to-exit deceleration. The descent ends at the glide speed (the
+cruise speed) and the back transition starts at the AIRBRAKE exit (`AIRSPEED_MIN - 2`, 15.0 to
+19.4 m/s TAS at the four sites against 21.1 to 27.3 m/s). The slowing in between is in no
+segment: its kinetic energy (0.82 to 1.36 Wh) is taken to be dissipated by drag in the descent, so
+it is not charged to the battery, and the distance covered while slowing is not counted. The
+effect on the range is at most 0.08 km. How to count it (a glide that slows, a level
+deceleration) is a modelling choice that has not been made.
 """
 
 from __future__ import annotations
@@ -53,10 +70,21 @@ class MissionProfile:
     ground_amsl_m: float = 0.0
     isa_offset_k: float = 0.0
     clearance_agl_m: float = 30.0  # hover climb before the forward transition
+    fwd_alt_loss_max_m: float = 10.0  # accepted altitude loss in the forward transition (FT)
+    fwd_alt_gain_max_m: float = 10.0  # accepted altitude gain in the forward transition (FT)
     vz_takeoff: float = 2.0
     t_hover_pre: float = 10.0  # s of hover before lift-off
-    v_trans: float = 14.0  # AIRSPEED_MIN
+    # AIRSPEED_MIN as loaded, an EQUIVALENT airspeed. `mission_at_site` turns it into the TRUE
+    # airspeed at the clearance altitude, which is what the forward segment, Q2's acceleration
+    # profile and the SoC trace read, so none of them converts again.
+    v_trans: float = 14.0
     a_fwd: float = 1.5  # forward-transition acceleration (ASSUMED until analysis C)
+    # Q_TRANSITION_MS in seconds: the rotor fade after the hand-over. 0 = no fade (the older
+    # estimate that stops at V_trans); the study sets the register's or the recommended value.
+    q_transition_s: float = 0.0
+    # share of the weight the wing carries at the hand-over (the rotors carry the rest into the
+    # fade); None = the quasi-steady `rotor_share` model
+    wing_share_handover: float | None = None
     v_climb: float | None = None  # design TAS at `v_cruise_ref_amsl_m`; None = the cruise speed
     roc: float = 2.5
     v_cruise: float | None = None  # design TAS at `v_cruise_ref_amsl_m`; None = best-range speed
@@ -195,13 +223,24 @@ def design_speeds(mp: MissionProfile, altitude_amsl_m: float) -> tuple[float, fl
     return vc, vcl, vg
 
 
-def mission_at_site(mp: MissionProfile, site_amsl_m: float) -> MissionProfile:
+def mission_at_site(
+    mp: MissionProfile, site_amsl_m: float, v_trans_convention: str = "eas"
+) -> MissionProfile:
     """The profile for an airfield at `site_amsl_m`: cruise at site + climb height, the design
-    speeds converted to that altitude. The segment functions then run unchanged on it."""
+    speeds converted to that altitude. The segment functions then run unchanged on it.
+
+    `v_trans` of the result is a TRUE airspeed: the loaded AIRSPEED_MIN (an equivalent airspeed)
+    times sqrt(rho0 / rho) at the clearance altitude above the site. `v_trans_convention="tas"`
+    (Q2.feed_convention) keeps the loaded value as it is. Apply this once to a loaded profile.
+    """
     cruise = site_amsl_m + mp.climb_height_m
     vc, vcl, vg = design_speeds(mp, cruise)
+    v_trans = mp.v_trans
+    if v_trans_convention == "eas":
+        rho_c = float(atmosphere.density(site_amsl_m + mp.clearance_agl_m, mp.isa_offset_k))
+        v_trans = mp.v_trans * math.sqrt(float(atmosphere.density(0.0)) / rho_c)
     return replace(
-        mp, ground_amsl_m=site_amsl_m, cruise_amsl_m=cruise,
+        mp, ground_amsl_m=site_amsl_m, cruise_amsl_m=cruise, v_trans=v_trans,
         v_cruise=vc if mp.v_cruise is not None else None,
         v_climb=vcl if (mp.v_climb is not None or mp.v_cruise is not None) else None,
         v_glide=vg if (mp.v_glide is not None or mp.v_cruise is not None) else None,
@@ -266,10 +305,56 @@ def takeoff_segment(vp: VehicleParams, mp: MissionProfile, soc: float) -> Segmen
     return SegmentResult(e, mp.t_hover_pre + t_climb, 0.0, "hover model (assumed maps)")
 
 
+def fade_estimate(vp: VehicleParams, mp: MissionProfile, soc: float, n: int = 100) -> SegmentResult:
+    """The rotor fade after the hand-over: energy, time (`Q_TRANSITION_MS`) and distance.
+
+    ArduPilot freezes the rotor throttle at the hand-over (`last_throttle`) and fades the command
+    linearly to zero over `Q_TRANSITION_MS` (FT's controller does the same, floor 1 %). Here
+    `last_throttle` is the command that gives the rotors' share of the weight at the hand-over,
+    (1 - wing share) W with the wing share `mp.wing_share_handover` (E.fade_wing_share; without it
+    the (V/V_lw)^2 of `rotor_share`, which is 1 above V_lw), through the same rotor and
+    motor model as FT (`trim.electrical_state`: command from speed and torque, bus power from the
+    motor power). The aircraft keeps its hand-over speed (the distance is a lower bound) and is in
+    force balance at every instant: the wing carries what the fading rotors do not, W - T_rotor,
+    and the pusher balances the wing's drag at that lift, so it works harder as the rotors let go.
+    Holding the hand-over thrust m a_fwd + D instead overestimates by 40 % to 180 % against FT (it
+    keeps accelerating, FT's TECS does not). Zero when `mp.q_transition_s` is zero.
+    """
+    q = mp.q_transition_s
+    if q <= 0.0 or mp.v_trans <= 0.0:
+        return SegmentResult(0.0, 0.0, 0.0, "no rotor fade")
+    rho = float(atmosphere.density(mp.clearance_amsl, mp.isa_offset_k))
+    v, w_n = mp.v_trans, vp.m * G
+    share = (  # rotors' share of the weight at the hand-over
+        rotor_share(vp, rho, v) if mp.wing_share_handover is None else 1.0 - mp.wing_share_handover
+    )
+    w0 = trim.rotor_speed_for_thrust(share * w_n, 0.0, v, rho, vp)
+    speeds = np.linspace(0.0, w0, 41)
+    cmd = np.zeros(speeds.size)
+    power = np.zeros(speeds.size)
+    for i, w in enumerate(speeds):
+        t_r, q_r = 0.0, 0.0
+        if w > 0.0:
+            t_r, q_r = (float(x) for x in rotor.lift_rotor(float(w), 0.0, v, rho, vp.rotor)[:2])
+        drag = _wing_polar_drag(vp, rho, v, max(w_n - t_r, 0.0))
+        w_p = trim.pusher_speed_for_thrust(drag, v, rho, vp)
+        q_p = float(rotor.pusher(w_p, v, rho, vp.pusher)[1])
+        es = trim.electrical_state(vp, soc, 0.0, float(w), q_r, w_p, q_p)
+        cmd[i], power[i] = es.delta_r_cmd, es.power
+    last = float(cmd[-1])  # the throttle command at the hand-over
+    tau = np.linspace(0.0, q, n)
+    c = last * np.maximum(0.01, (q - tau) / q)  # FT's linear fade with its 1 % floor
+    p = np.interp(c, cmd, power)  # `cmd` rises with the rotor speed
+    return SegmentResult(
+        float(np.trapezoid(p, tau)), q, v * q, f"rotor fade over {q:g} s from throttle {last:.2f}"
+    )
+
+
 def forward_transition_estimate(
     vp: VehicleParams, mp: MissionProfile, soc: float, n: int = 40, source: str | None = None
 ) -> SegmentResult:
-    """Quasi-steady ESTIMATE: constant acceleration a_fwd to V_trans, rotors carrying W - L.
+    """Quasi-steady ESTIMATE: constant acceleration a_fwd to V_trans, rotors carrying W - L,
+    then the rotor fade of `mp.q_transition_s` (`fade_estimate`).
 
     The wing lift is the share (V/V_lw)^2 of the weight with V_lw the speed where the wing
     carries the weight at 80% of C_L,max (`rotor_share`); the pusher supplies m a_fwd + D.
@@ -293,9 +378,12 @@ def forward_transition_estimate(
         powers[i] = trim.electrical_state(vp, soc, 0.0, w_r, q_r, w_p, q_p).power
     t = speeds / mp.a_fwd
     e = float(np.trapezoid(powers, t))
+    fade = fade_estimate(vp, mp, soc)
+    label = "quasi-steady estimate, a_fwd ASSUMED" if source is None else source
     return SegmentResult(
-        e, mp.v_trans / mp.a_fwd, mp.v_trans**2 / (2.0 * mp.a_fwd),
-        "quasi-steady estimate, a_fwd ASSUMED" if source is None else source,
+        e + fade.energy_J, mp.v_trans / mp.a_fwd + fade.time_s,
+        mp.v_trans**2 / (2.0 * mp.a_fwd) + fade.distance_m,
+        label + (f"; {fade.source}" if fade.time_s > 0.0 else ""),
     )  # fmt: skip
 
 
@@ -339,15 +427,21 @@ def back_transition_segment(
 ) -> SegmentResult:
     """Energy of the Position1 braking simulation (analysis D) from ground speed v0.
 
-    `bp` is the configured controller (as analysis D uses it; `run_braking` sets the target
-    height and the hover throttle itself). None builds one from the code defaults.
+    `bp` is the configured controller (`stages.d_exit_params`, the one analysis D runs;
+    `run_braking` sets the target height and the hover throttle itself). With it the run starts at
+    the AIRBRAKE exit like D, C and B1 (`braking.airbrake_entry_state`: pitch `bp.theta_fw0`, the
+    rotors carrying what the wing does not). None builds a controller from the code defaults and
+    starts from the legacy hover state (rotors at hover speed, level), which no study path uses.
     """
     scen = Scenario(
         mp.ground_amsl_m + mp.h_bt_agl_m, mp.isa_offset_k, soc, ground_amsl_m=mp.ground_amsl_m
     )
+    x0 = None
     if bp is None:
         bp = BackTransitionParams.for_vehicle(vp, scen.rho, soc, scen.altitude_amsl_m)
-    r = braking.landing_error(vp, scen, v0, a_plan, bp, agl0=mp.h_bt_agl_m)
+    else:
+        x0, _ = braking.airbrake_entry_state(vp, scen, bp, v0)
+    r = braking.landing_error(vp, scen, v0, a_plan, bp, agl0=mp.h_bt_agl_m, x0=x0)
     if r.sim.terminated_by != "ground_speed_reached":
         raise RuntimeError(f"back-transition did not complete ({r.sim.terminated_by})")
     return SegmentResult(
@@ -422,8 +516,11 @@ def build_budget(
 ) -> BudgetResult:
     """First-pass budget of ONE leg from the component models and analyses D and F.
 
-    `bp` is the controller of the back transition and `v0_entry` its entry ground speed; None
-    keeps the old behaviour (code defaults, entry at the cruise speed).
+    `bp` is the controller of the back transition and `v0_entry` its entry ground speed. E and
+    the sensitivity pass the AIRBRAKE exit speed (`braking.entry_airspeed`, the speed D, C and B1
+    start from) and `inp.controller`; None keeps the legacy behaviour (code defaults, entry at the
+    cruise speed), which no study path uses any more. `mp.v_trans` is a true airspeed here
+    (`mission_at_site` converts the loaded AIRSPEED_MIN once).
     """
     soc = mp.soc_mean
     rho_cruise = float(atmosphere.density(mp.cruise_amsl_m, mp.isa_offset_k))

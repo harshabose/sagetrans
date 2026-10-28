@@ -12,6 +12,7 @@ scenario and options to a results object. Analysis letters follow the proposal's
 | `zero_loss.py` | **A** — quasi-steady zero-altitude-loss feasibility | For which constant decelerations at which speeds can the hardware hold altitude, inside an angle-of-attack band? What fails at each edge? |
 | `collocation.py` | **B1** — open-loop optimum by direct collocation | What is the best trajectory under the constraints? (energy against excursion and distance) |
 | `restricted.py` | **C** — ArduPilot-parameter optimisation | What can the autopilot be *configured* to do? |
+| `forward.py` | **FT** — forward transition from hover | Which `AIRSPEED_MIN`, `Q_TRANSITION_MS`, `TKOFF_THR_MAX` and `Q_TRAN_PIT_MAX` leave the altitude and the stall margin intact? |
 | `braking.py` | **D** — Position1 braking and `Q_TRANS_DECEL` | How far does the aircraft need to brake, and what deceleration should the planner assume? |
 | `energy.py` | **E** — mission energy budget and reserve | Does the mission fit in the usable pack energy at 100 and 113 km (Q1, Q7)? |
 | `pusher.py` | **Q2** — pusher forward acceleration | What forward acceleration can the pusher deliver at `TKOFF_THR_MAX` from rest to `AIRSPEED_MIN`? |
@@ -241,9 +242,11 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
   is the TECS/navigation pitch demand at the AIRBRAKE exit, from a SITL run or a flight log; each
   degree adds about 0.05 m/s² to `a_eq`). `airbrake_entry_state` builds that state.
 * **The entry speed comes from the airspeed exit rule only**: `entry_airspeed` returns
-  `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)` as a true airspeed. `entry_convention: tas` reads
-  `AIRSPEED_MIN` as a true airspeed (as the controller does today), `eas` as an equivalent one
-  (open question RC5). The ground speed is the air speed minus the headwind.
+  `AIRSPEED_MIN - 2` as a true airspeed (`Q_ASSIST_SPEED` is not modelled; the study assumes it is 0,
+  O-20). `entry_convention: eas` (set in
+  `study.yaml` since 2026-10-27, O-14/O-23) reads `AIRSPEED_MIN` as an equivalent airspeed and converts
+  it to the true airspeed the model integrates; `tas` reads it as a true airspeed and is kept so old
+  runs reproduce. The ground speed is the air speed minus the headwind.
 * **The pitch limit is ArduPilot's** (O-04): it ramps from `max(theta_fw0, 0)` to
   `min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG)` over `Q_BACKTRANS_MS`, clock from `t = 0`; the initial
   pitch is `theta_fw0`. `Q_BCK_PIT_LIM` is a constant cap by default; `pit_lim_mode: airspeed`
@@ -339,7 +342,9 @@ numbers of `D_recommendation` are valid only inside `covers` (`ground_speed_min_
 `a_rec_design_ms2`, the curve value at that speed by linear interpolation; a speed outside the
 curve is an error. Analysis E keeps reading the single conservative `a_rec_min`. E enters faster
 than the curve ends (its entry EAS is 21 to 27 m/s TAS against 20 m/s), where `a_eq` is higher, so
-`a_rec_min` is conservative there; using the curve at E's entry speed is an open decision.
+`a_rec_min` is conservative there; using the curve at E's entry speed is an open decision. (E's back
+transition itself now starts at the AIRBRAKE exit, `AIRSPEED_MIN - 2`, the speed D uses, so the
+statement above about E entering faster than the curve ends describes the old cruise-speed entry.)
 
 ### Tables
 
@@ -372,7 +377,7 @@ instead is open). Analysis C keeps the old behaviour: C's `plan_decel` still cal
 | Name | Purpose |
 | --- | --- |
 | `ideal_stopping(v0, theta_max, t_bt, v_end=0, dt=1e-4)` | the planner worked example: ideal pitch, no lift/drag, braking at the limit throughout; returns `(distance, a_eq, ramp distance)` |
-| `entry_airspeed(airspeed_min, q_assist_speed, rho, convention)` | the airspeed exit rule, as a true airspeed |
+| `entry_airspeed(airspeed_min, rho, convention)` | the airspeed exit rule `AIRSPEED_MIN - 2`, as a true airspeed |
 | `airbrake_entry_state(vp, scen, bp, v_air0)` | the state at the AIRBRAKE exit and the ground speed |
 | `run_braking(vp, scen, v0, bp, ..., x0=None)` | simulate Position1 from ground speed `v0` to `V_f`; builds the `LiftFF` table when `bp.ff_mode == "lift_aware"`; returns a `BrakingResult` |
 | `measure_a_eq(...)` | the worst case: pitch at the envelope limit throughout |
@@ -437,6 +442,27 @@ E_total = E_to + E_ft + E_climb + E_cruise + E_desc + E_bt + E_land + E_reserve
 ```
 
 ### What E computes
+
+* **Stated simplification: the forward-transition wait is a constant worst-case acceleration.**
+  It uses Q2's minimum over speed and over the Q2 grid (`E.a_fwd_metric: min`) as a constant,
+  so it overstates the wait where the pusher is weak: 41.7 s and 124 kJ at 5000 m with the
+  register `TKOFF_THR_MAX` 0.8, against FT's simulated 15 s and 73 kJ; at sea level they agree
+  (37 kJ). The fade after it uses `E.fade_wing_share` = 0.4, **taken from FT's simulated
+  hand-overs** (0.39 to 0.44), so E's fade against FT's is not an independent comparison: it
+  checks the rotor and motor model and the force balance, not the wing share. Both err on the
+  side of more energy.
+* **Stated simplification: the glide-to-exit deceleration.** The descent ends at the glide
+  (cruise) speed, the back transition starts at the AIRBRAKE exit `AIRSPEED_MIN - 2` (15.0 to
+  19.4 m/s TAS against 21.1 to 27.3). The slowing between them is in no segment: its kinetic
+  energy (0.82 to 1.36 Wh) is taken as dissipated by drag, not charged to the battery, and its
+  distance is not counted. At most 0.08 km of range. How to count it is an open modelling choice.
+* **The forward transition has two parts.** The quasi-steady wait to `AIRSPEED_MIN` (constant
+  `a_fwd` from Q2, rotors carrying `W - L`) and the rotor fade of `Q_TRANSITION_MS`: ArduPilot
+  freezes the rotor throttle at the hand-over and fades it linearly to zero. The fade starts from
+  the throttle that carries the share of the weight the wing does not (`E.fade_wing_share`, an
+  assumed 0.4, FT's measured mean at the hand-over), goes through the same rotor and motor model
+  as FT, holds the hand-over speed and keeps force balance (the wing carries `W` minus the rotor
+  thrust, the pusher balances its drag). Register: 5 s; recommended: the FT optimum's value.
 
 * **Two missions per site.** `round_trip`: a loaded outbound leg, the payload drop, an empty
   return leg (`vehicle mass - payload_kg`); each leg has its own take-off, forward transition,
@@ -548,9 +574,11 @@ current limits. An unreachable cell keeps a row with `a_min <= 0` and NaN `a_equ
 records `tkoff_thr_max` and its status; if the register entry is absent the 0.7 built-in is used and
 the row says `fallback (placeholder)`.
 
-**Airspeed convention.** `AIRSPEED_MIN` is registered as a true airspeed, so `tas` is the default feed
-to E, but the old Q2 read it as equivalent; both are tabulated until DEC-1 is settled. At 5000 m the
-two differ by 29 percent (17 EAS is 21.9 TAS).
+**Airspeed convention.** `AIRSPEED_MIN` is an equivalent airspeed (`Q2.feed_convention: eas`, since
+2026-10-28 the default, and the one D, C, B1 and FT use); both conventions are still tabulated. E
+converts it once, in `energy.mission_at_site` (the true airspeed at the clearance altitude above the
+site), so E's forward segment and Q2's end speed are the same number. At 5000 m EAS and TAS differ by
+29 percent (17 EAS is 21.9 TAS).
 
 **What it found (register values, `TKOFF_THR_MAX` 0.8, 17 m/s).** At E's own site (30 m, SoC 0.6,
 nominal mass) `a_min` is 1.24 m/s² (distance-equivalent 1.86, 7.9 s, 78 m); the command matters a
@@ -573,8 +601,8 @@ register value and the result is very sensitive to it. The lift share is E's rul
 **Question.** What can the autopilot be *configured* to do, and how far is that from the bound?
 
 **Entry.** C starts at the AIRBRAKE exit, like D: the same entry state (`braking.airbrake_entry_state`),
-the same entry speed rule (`braking.entry_airspeed`, `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`) and
-t = 0 at the exit. `theta_fw0_deg`, `pit_lim_mode`, `q_assist_speed_ms` and `entry_convention` are
+the same entry speed rule (`braking.entry_airspeed`, `AIRSPEED_MIN - 2`) and
+t = 0 at the exit. `theta_fw0_deg`, `pit_lim_mode` and `entry_convention` are
 read from the **D block** (they describe the exit, not C); `io.stages.exit_params` builds the
 controller parameters for both so they cannot drift. There is no forward transition, no cruise and
 no planner simulation. The position cascade runs (`brake_at_limit = False`); the at-limit run is
@@ -648,7 +676,7 @@ Record `result.search.spread` as `search_spreads={"C": …}` so the release gate
 **What is no longer optimised:** `AIRSPEED_MIN`, `Q_TRANSITION_MS` and `TKOFF_THR_MAX` (Q2 and E
 cover part of the forward side; nothing optimises `AIRSPEED_MIN` now, and if it comes back it is a
 fifth variable of this search, with the entry speed following it). Also not in the vector:
-`PTCH_LIM_MAX_DEG` (fixed at 35°), `Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled).
+`PTCH_LIM_MAX_DEG` (fixed at 20°, the ArduPilot default; 35° until 2026-10-28), `Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled).
 
 **Legacy.** `evaluate_back`, `plan_decel`, `evaluate_full`, `optimise`, `BACK_BOUNDS`, `FULL_BOUNDS`,
 `DEFAULT_PARAMS` and `THETA_P` are untouched and marked legacy in their docstrings.
@@ -666,6 +694,34 @@ result as a recommendation to fly at 30°.
 
 ---
 
+## FT — forward transition (`forward.py`)
+
+**Question.** Which four ArduPilot settings take the aircraft from hover at 30 m to wing-borne flight without
+losing altitude, stalling or leaving the wing unable to carry the weight? Specified in `docs/FT_spec.md`,
+with the source facts in `docs/ardupilot_open_questions.md` (O-14 to O-22).
+
+* **Model.** `control/forward.py`: the Z loop and a climb demand until the hand-over (the first step with
+  EAS above `AIRSPEED_MIN`), then a frozen-throttle linear fade over `Q_TRANSITION_MS`, then DONE. The pusher
+  and the pitch are driven by `TecsLite`, a line-by-line port of `AP_TECS.cpp` (VTOL stage in WAIT and FADE,
+  normal stage in DONE, O-21), with the pitch cap of O-16 and the throttle limits of O-17. Everything is in
+  equivalent airspeed. `TECS_THR_ERATE` decay is not modelled; whether TECS runs through the hover is the
+  `FT.tecs_start` setting (open).
+* **Cost and flags.** Cost as C's (altitude excursion and energy; distance has weight 0). A failure costs
+  the usual penalty: `no_handover`, `stall_margin` (EAS below 1.2 times the stall speed from the hand-over
+  on), `stall`, `alt_loss`, `alt_gain` (beyond `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`,
+  both `assumed`), `proj_loss` (the projected minimum altitude from the end-of-fade state and the recovery
+  acceleration), `underspeed`, `battery_cutoff`, `touchdown`.
+* **Search and tables.** CMA-ES over four variables, bounds in `study.yaml` `FT.bounds`, the same Sobol
+  ensemble as C shifted to the transition altitude (`FT.ensemble_n` 16: one evaluation of 32 runs cost 3.5
+  times C's, over the spec's 2 times). `FT_params` (the optimum, the register start and, with a defaults
+  file, the `ardupilot_default` case), `FT_search`, `FT_runs`, `FT_scan` (cost with `AIRSPEED_MIN` fixed on
+  a grid), `FT_sens`, `FT_history`.
+* **A reference, not a recommendation.** The `ardupilot_default` case sets the four searched values to what
+  ArduPilot ships with (`configs/ardupilot_defaults.yaml`, docs/DEFAULTS_spec.md) and keeps the rest of the
+  register; C has the same third case. It is simulated to show how far the default is from the optimum.
+
+---
+
 ## B1 — open-loop optimum by direct collocation (`collocation.py`)
 
 **Question.** What is the least bus energy for the AIRBRAKE-exit-to-hover problem, as a function of
@@ -674,7 +730,7 @@ distance, under a **stated wing limit**? It is the energy-against-distance front
 
 **Entry.** B1 starts at the AIRBRAKE exit, like D and C: `make_problem_exit` builds the problem from
 `braking.airbrake_entry_state` (all nine states fixed to it, the rotor speed included; `prespin_max`
-stays 0), at the entry speed of D's rule `max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`. The rotor start
+stays 0), at the entry speed of D's rule `AIRSPEED_MIN - 2`. The rotor start
 (`carry` or `idle`) and the end sink tolerance are read from the **C block**, the entry-speed rule and
 `theta_fw0` from the **D block**; the B1 block does not repeat them. The old level-cruise problem
 (`make_problem`, 22 m/s) is kept for the legacy `bound_check` and the unit tests. B-9 (B2 against C) is

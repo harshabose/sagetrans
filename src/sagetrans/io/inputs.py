@@ -34,12 +34,14 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from sagetrans import atmosphere
 from sagetrans.analysis.common import Scenario
 from sagetrans.analysis.descent import DescentLimits
 from sagetrans.analysis.energy import BatteryWindow, MissionProfile
 from sagetrans.analysis.ensemble import EnsembleAxes
 from sagetrans.config.schema import Config, ConfigError, Status
 from sagetrans.control.ardupilot_like import BackTransitionParams, BaselineParams
+from sagetrans.control.forward import ForwardParams
 from sagetrans.io.settings import ALL_ANALYSES, ScenariosFile, StudyCfg
 from sagetrans.physics.params import (
     AttitudeParams,
@@ -51,7 +53,10 @@ from sagetrans.physics.params import (
     WingParams,
 )
 
-REGISTER_FILES = ("vehicle", "mission", "controller")
+REGISTER_FILES = ("vehicle", "mission", "controller", "ardupilot_defaults")
+# register files that may be absent: the study then runs without the ArduPilot-defaults comparison
+OPTIONAL_REGISTER_FILES = ("ardupilot_defaults",)
+DEFAULTS_ONLY = ("Q_ASSIST_SPEED",)  # listed in ardupilot_defaults.yaml, not a study parameter
 PLAIN_FILES = ("scenarios", "study")
 
 # VehicleParams attribute -> group name in vehicle.yaml
@@ -69,13 +74,19 @@ NATIVE_DIVISOR = {"vehicle.battery.capacity_Ah_pack": 3600.0}  # coulombs -> Ah
 
 MISSION_OPTIONAL = {"v_cruise", "v_climb", "v_glide"}  # absent: best-range / the cruise speed
 MISSION_FROM_CONTROLLER = {"v_trans"}  # taken from ardupilot.AIRSPEED_MIN, not mission.yaml
-MISSION_FROM_STUDY = {"cruise_amsl_m", "ground_amsl_m"}  # set per site by analysis E
+# set per site by analysis E (the fade fields: the register's Q_TRANSITION_MS, E.fade_wing_share)
+MISSION_FROM_STUDY = {"cruise_amsl_m", "ground_amsl_m", "q_transition_s", "wing_share_handover"}
 
 # controller.yaml: ardupilot name -> (BackTransitionParams / decision-dict key, kind)
 ARDUPILOT_PARAMS = (
     "AIRSPEED_MIN", "Q_TRANSITION_MS", "Q_BACKTRANS_MS", "Q_A_ANGLE_MAX", "Q_BCK_PIT_LIM",
     "TKOFF_THR_MAX", "Q_TRANS_FAIL", "Q_M_SPIN_MIN", "Q_M_SPIN_MAX", "PTCH_LIM_MAX_DEG",
-    "Q_TRANS_DECEL",
+    "Q_TRANS_DECEL", "Q_TRAN_PIT_MAX", "TKOFF_THR_MIN", "TRIM_THROTTLE", "THR_MIN", "THR_MAX",
+    "THR_SLEWRATE", "PTCH_LIM_MIN_DEG",
+)  # fmt: skip
+TECS_PARAMS = (
+    "TECS_TIME_CONST", "TECS_THR_DAMP", "TECS_INTEG_GAIN", "TECS_VERT_ACC", "TECS_PTCH_DAMP",
+    "TECS_CLMB_MAX", "TECS_SINK_MAX", "TECS_SINK_MIN", "TECS_PITCH_MAX",
 )  # fmt: skip
 CONTROLLER_GROUPS = {
     "altitude_hold": ("K_h", "K_vh", "K_i", "v_dem_max", "i_max"),
@@ -124,16 +135,18 @@ class StudyInputs:
     start_params: dict[str, float]  # the register's values as analysis C's starting point
     theta_p: float  # PTCH_LIM_MAX_DEG in rad
     requirements_km: tuple[float, float]
-    entry_eas: float
     airspeed_min: float  # AIRSPEED_MIN, m/s (also `mission.v_trans`)
-    tkoff_thr_max: float  # TKOFF_THR_MAX, the pusher command in AUTO
+    tkoff_thr_max: float  # TKOFF_THR_MAX as flown: the pusher command in AUTO (0 -> THR_MAX)
     scenarios: dict[str, Scenario]
     ensemble_axes: EnsembleAxes
     study: StudyCfg
     fallbacks: tuple[str, ...]  # register paths that fell back to the built-in placeholder
     draft_reasons: tuple[str, ...]  # why this is not a release-grade input set
     settings_hash: str
+    forward: ForwardParams
+    defaults: dict[str, float] = field(default_factory=dict)  # ArduPilot defaults, SI, by name
     notes: tuple[str, ...] = field(default=())
+    tkoff_thr_max_raw: float | None = None  # TKOFF_THR_MAX as the register states it (display)
 
     @property
     def is_draft(self) -> bool:
@@ -163,11 +176,16 @@ class StudyInputs:
     def controller_nominals(self) -> dict[str, float]:
         return {"alt_hold_Kvh": self.controller.K_vh, "alt_hold_Ki": self.controller.K_i}
 
+    def resolve_default(self, name: str) -> float | None:
+        """The ArduPilot default of a parameter in SI units, or None (see `resolve_default`)."""
+        return resolve_default(self.defaults, name)
+
 
 # ---- reading files -----------------------------------------------------------------------------
-def _read_yaml(path: Path, problems: list[str]) -> Any:
+def _read_yaml(path: Path, problems: list[str], optional: bool = False) -> Any:
     if not path.is_file():
-        problems.append(f"missing file: {path.name} (expected in {path.parent})")
+        if not optional:
+            problems.append(f"missing file: {path.name} (expected in {path.parent})")
         return None
     try:
         with path.open(encoding="utf-8") as fh:
@@ -196,9 +214,12 @@ def _known_paths() -> set[str]:
         "mission.descent.kappa", "mission.descent.v_fragility", "mission.descent.v_sensor",
         "mission.descent.h_slow", "mission.descent.v_final",
         "mission.requirements.range_primary_km", "mission.requirements.range_p95_km",
-        "mission.speeds.entry_eas_ms",
     }  # fmt: skip
     known |= {f"controller.ardupilot.{n}" for n in ARDUPILOT_PARAMS}
+    known |= {f"controller.tecs.{n}" for n in TECS_PARAMS}
+    # the defaults file uses the same names (and so the same unit conversion) as the register
+    known |= {f"ardupilot_defaults.ardupilot.{n}" for n in (*ARDUPILOT_PARAMS, *DEFAULTS_ONLY)}
+    known |= {f"ardupilot_defaults.tecs.{n}" for n in TECS_PARAMS}
     for g, names in CONTROLLER_GROUPS.items():
         known |= {f"controller.{g}.{n}" for n in names}
     return known
@@ -247,6 +268,54 @@ class _Reader:
         return cls(**kw)
 
 
+def _forward_params(
+    rd: _Reader, study: StudyCfg, controller: BackTransitionParams, v_cruise_tas: float,
+    mission: MissionProfile, airspeed_min: float, q_transition_s: float, tkoff_thr_max: float,
+) -> ForwardParams:
+    """The forward-transition controller's parameters from the register (analysis FT, FT spec 3.2).
+
+    Angles are converted from the register's radians to degrees, `THR_SLEWRATE` is a fraction per
+    second. The speed demand is the cruise speed at its reference altitude, as an equivalent
+    airspeed.
+    """
+    ap, tc = "controller.ardupilot.", "controller.tecs."
+    d = ForwardParams(back=replace(controller, z_mode="ardupilot"))
+    z, ft = study.C.z, study.FT
+    back = replace(
+        controller, z_mode="ardupilot", rotor_lag_s=ft.rotor_lag_s, z_pos_p=z.pos_p,
+        z_vel_p=z.vel_p, z_acc_p=z.acc_p, z_acc_i=z.acc_i, z_acc_imax=z.acc_imax, z_vmax=z.vmax,
+        z_vel_flt_hz=z.vel_flt_hz, z_acc_flt_hz=z.acc_flt_hz,
+    )  # fmt: skip
+    rho_ref = float(atmosphere.density(mission.v_cruise_ref_amsl_m, mission.isa_offset_k))
+    rho0 = float(atmosphere.density(0.0))
+    return ForwardParams(
+        back=back, airspeed_min_eas=airspeed_min, q_transition_s=q_transition_s,
+        tkoff_thr_max=tkoff_thr_max,
+        tran_pit_max_deg=math.degrees(
+            rd.get(ap + "Q_TRAN_PIT_MAX", math.radians(d.tran_pit_max_deg))
+        ),
+        tkoff_thr_min=rd.get(ap + "TKOFF_THR_MIN", d.tkoff_thr_min),
+        trim_throttle=rd.get(ap + "TRIM_THROTTLE", d.trim_throttle),
+        thr_min=rd.get(ap + "THR_MIN", d.thr_min), thr_max=rd.get(ap + "THR_MAX", d.thr_max),
+        thr_slewrate=rd.get(ap + "THR_SLEWRATE", d.thr_slewrate),
+        ptch_lim_min_deg=math.degrees(
+            rd.get(ap + "PTCH_LIM_MIN_DEG", math.radians(d.ptch_lim_min_deg))
+        ),
+        tecs_time_const=rd.get(tc + "TECS_TIME_CONST", d.tecs_time_const),
+        tecs_thr_damp=rd.get(tc + "TECS_THR_DAMP", d.tecs_thr_damp),
+        tecs_integ_gain=rd.get(tc + "TECS_INTEG_GAIN", d.tecs_integ_gain),
+        tecs_vert_acc=rd.get(tc + "TECS_VERT_ACC", d.tecs_vert_acc),
+        tecs_ptch_damp=rd.get(tc + "TECS_PTCH_DAMP", d.tecs_ptch_damp),
+        tecs_clmb_max=rd.get(tc + "TECS_CLMB_MAX", d.tecs_clmb_max),
+        tecs_sink_max=rd.get(tc + "TECS_SINK_MAX", d.tecs_sink_max),
+        tecs_sink_min=rd.get(tc + "TECS_SINK_MIN", d.tecs_sink_min),
+        tecs_pitch_max_deg=math.degrees(
+            rd.get(tc + "TECS_PITCH_MAX", math.radians(d.tecs_pitch_max_deg))
+        ),
+        airspeed_cruise_eas=v_cruise_tas * math.sqrt(rho_ref / rho0), tecs_start=ft.tecs_start,
+    )
+
+
 # ---- the loader --------------------------------------------------------------------------------
 def load_inputs(
     config_dir: str | Path, mode: str | None = None, only: set[str] | frozenset[str] | None = None
@@ -256,7 +325,10 @@ def load_inputs(
     `only` replaces the `analyses` list of study.yaml (the command line's --only)."""
     root = Path(config_dir)
     problems: list[str] = []
-    raw = {n: _read_yaml(root / f"{n}.yaml", problems) for n in (*REGISTER_FILES, *PLAIN_FILES)}
+    raw = {
+        n: _read_yaml(root / f"{n}.yaml", problems, optional=n in OPTIONAL_REGISTER_FILES)
+        for n in (*REGISTER_FILES, *PLAIN_FILES)
+    }
     for n in REGISTER_FILES:
         if raw[n] is not None and not isinstance(raw[n], Mapping):
             problems.append(f"{n}.yaml: the top level must be a mapping of groups")
@@ -283,7 +355,7 @@ def load_inputs(
 
     # register files -> one merged Config
     try:
-        cfg = Config.from_dict({n: raw[n] for n in REGISTER_FILES}, root=root)
+        cfg = Config.from_dict({n: raw[n] for n in REGISTER_FILES if raw[n] is not None}, root=root)
     except ConfigError as exc:
         raise InputError(str(exc).split("\n  ")[1:] or [str(exc)]) from exc
     known = _known_paths()
@@ -320,12 +392,11 @@ def load_inputs(
     )
     r1 = rd.get("mission.requirements.range_primary_km", 100e3) / 1e3
     r2 = rd.get("mission.requirements.range_p95_km", 113e3) / 1e3
-    entry_eas = rd.get("mission.speeds.entry_eas_ms", 22.0)
     # controller
     bt0 = BackTransitionParams()
     ap = "controller.ardupilot."
     theta_a = rd.get(ap + "Q_A_ANGLE_MAX", bt0.theta_A)
-    theta_p = rd.get(ap + "PTCH_LIM_MAX_DEG", math.radians(35.0))
+    theta_p = rd.get(ap + "PTCH_LIM_MAX_DEG", math.radians(20.0))
     t_bt = rd.get(ap + "Q_BACKTRANS_MS", bt0.T_bt)  # the register converts ms to s
     spin_min = rd.get(ap + "Q_M_SPIN_MIN", bt0.delta_min)
     spin_max = rd.get(ap + "Q_M_SPIN_MAX", bt0.delta_max)
@@ -352,7 +423,14 @@ def load_inputs(
     stub = "controller.cruise_stub."
     q_transition_s = rd.get(ap + "Q_TRANSITION_MS", bl0.q_transition_s)
     q_fail = rd.get(ap + "Q_TRANS_FAIL", 0.0)
-    tkoff = rd.get(ap + "TKOFF_THR_MAX", bl0.tkoff_thr_max)
+    tkoff_raw = rd.get(ap + "TKOFF_THR_MAX", bl0.tkoff_thr_max)
+    tkoff = tkoff_raw
+    if tkoff_raw == 0.0:  # ArduPilot: 0 means THR_MAX (O-17). Resolved here, once, for everyone.
+        if not cfg_has(cfg, ap + "THR_MAX"):
+            raise InputError([
+                "controller.ardupilot.TKOFF_THR_MAX is 0 (= THR_MAX) but THR_MAX is not in the "
+                "register; give THR_MAX or a TKOFF_THR_MAX above 0"])
+        tkoff = rd.get(ap + "THR_MAX", 1.0)
     baseline_overrides: dict[str, Any] = {
         "v_cruise": rd.get(stub + "v_cruise", bl0.v_cruise),
         "r_tecs": rd.get(stub + "r_tecs", bl0.r_tecs),
@@ -365,6 +443,8 @@ def load_inputs(
         "q_trans_fail_s": q_fail,
         "speed_test": study.switch_test,
     }
+    forward = _forward_params(rd, study, controller, baseline_overrides["v_cruise"], mission,
+                              airspeed_min, q_transition_s, tkoff)
     start = {
         "T_bt": t_bt, "theta_A": theta_a, "spin_min": spin_min, "airspeed_min": airspeed_min,
         "q_transition": q_transition_s, "tkoff_thr_max": tkoff,
@@ -407,6 +487,8 @@ def load_inputs(
     wanted = {
         "A": study.A.scenarios, "D": study.D.scenarios, "B1": study.B1.scenarios,
     }
+    if "FT" in (only or study.analyses):  # its history scenarios are looked up only when it runs
+        wanted["FT"] = study.FT.history_scenarios
     for an, names in wanted.items():
         for n in names:
             if n not in scenarios:
@@ -428,13 +510,40 @@ def load_inputs(
         config_dir=root, mode=chosen, config=cfg, vehicle=vehicle, mission=mission,
         window=window, descent=descent, controller=controller,
         controller_overrides=gains, baseline_overrides=baseline_overrides, start_params=start,
-        theta_p=theta_p, requirements_km=(r1, r2), entry_eas=entry_eas, airspeed_min=airspeed_min,
+        theta_p=theta_p, requirements_km=(r1, r2), airspeed_min=airspeed_min,
         tkoff_thr_max=tkoff,
         scenarios=scenarios,
         ensemble_axes=axes, study=study, fallbacks=tuple(rd.fallbacks),
         draft_reasons=tuple(draft_reasons),
         settings_hash=hashlib.sha256(settings_blob.encode()).hexdigest(),
+        forward=forward, defaults=_defaults(cfg), tkoff_thr_max_raw=tkoff_raw,
     )  # fmt: skip
+
+
+def _defaults(cfg: Config) -> dict[str, float]:
+    """The ArduPilot defaults by name in SI units (empty without the defaults file)."""
+    out: dict[str, float] = {}
+    for p in cfg:
+        if p.startswith("ardupilot_defaults.") and cfg.record(p).si_value is not None:
+            out[p.rsplit(".", 1)[1]] = float(cfg.record(p).si_value or 0.0)
+    return out
+
+
+def resolve_default(defaults: Mapping[str, float], name: str) -> float | None:
+    """The ArduPilot default of `name` in SI units, with "use another parameter" resolved.
+
+    `TKOFF_THR_MAX` 0 means `THR_MAX` is used (O-17); `Q_A_ANGLE_MAX` 0 means the attitude
+    controller's 30 deg. A missing entry (or a missing `THR_MAX` behind a 0) gives None: the caller
+    skips that comparison and says so, it never falls back to a made-up value.
+    """
+    v = defaults.get(name)
+    if v is None:
+        return None
+    if name == "TKOFF_THR_MAX" and v == 0.0:
+        return defaults.get("THR_MAX")
+    if name == "Q_A_ANGLE_MAX" and v == 0.0:
+        return math.radians(30.0)
+    return float(v)
 
 
 def cfg_has(cfg: Config, path: str) -> bool:

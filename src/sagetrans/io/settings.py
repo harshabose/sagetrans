@@ -12,8 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-AnalysisName = Literal["A", "D", "F", "E", "Q2", "C", "B1", "sensitivity"]
-ALL_ANALYSES: tuple[str, ...] = ("A", "D", "F", "E", "Q2", "C", "B1", "sensitivity")
+AnalysisName = Literal["A", "D", "F", "E", "Q2", "FT", "C", "B1", "sensitivity"]
+ALL_ANALYSES: tuple[str, ...] = ("A", "D", "F", "E", "Q2", "FT", "C", "B1", "sensitivity")
 
 
 # the ground speed at which D's runs end (braking.measure_a_eq `v_f`); a test keeps them equal
@@ -148,7 +148,6 @@ class DCfg(_Strict):
     ff_lift_scale: float = Field(1.0, gt=0.0)
     theta_fw0_deg: float = 0.0  # last fixed-wing pitch at the AIRBRAKE exit (placeholder)
     pit_lim_mode: Literal["constant", "airspeed"] = "constant"  # Q_BCK_PIT_LIM form (O-05)
-    q_assist_speed_ms: float = Field(0.0, ge=0.0)  # entry speed: max(AIRSPEED_MIN - 2, this)
     entry_convention: Literal["tas", "eas"] = "tas"  # AIRSPEED_MIN read as true or equivalent
     enforce_alpha: bool = False  # hold the wing angle of attack to the 0.8 C_L,max band top
     alpha_gate_ms: float = Field(5.0, ge=0.0)  # below this airspeed alpha is not judged
@@ -188,6 +187,10 @@ class ECfg(_Strict):
     # grid ("worst"), or the value in mission.yaml ("mission")
     a_fwd_mode: Literal["case", "worst", "mission"] = "case"
     a_fwd_metric: Literal["min", "equiv"] = "min"  # worst over speed, or distance-equivalent
+    # share of the weight the wing carries at the hand-over; the rotors carry the rest through the
+    # fade of Q_TRANSITION_MS. ASSUMED: the mean of FT's simulated hand-overs (FT_runs,
+    # wing_share_handover 0.39 to 0.44 for the register and the recommended settings)
+    fade_wing_share: float = Field(0.4, gt=0.0, le=1.0)
 
 
 class Q2Cfg(_Strict):
@@ -211,7 +214,8 @@ class CBoundsCfg(_Strict):
     """Search bounds of analysis C: (low, high) of each of the four variables."""
 
     T_bt: tuple[float, float] = (1.0, 6.0)  # Q_BACKTRANS_MS in seconds
-    theta_A_deg: tuple[float, float] = (10.0, 30.0)  # Q_A_ANGLE_MAX; 30 is DEC-7 and binding
+    # Q_A_ANGLE_MAX; 30 is DEC-7, the effective top is min(this, PTCH_LIM_MAX_DEG)
+    theta_A_deg: tuple[float, float] = (10.0, 30.0)
     spin_min: tuple[float, float] = (0.06, 0.25)  # Q_M_SPIN_MIN
     q: tuple[float, float] = (1.0, 3.0)  # Q_TRANS_DECEL, m/s^2
 
@@ -285,13 +289,129 @@ class CCfg(_Strict):
         return data
 
 
+class FTWeightsCfg(_Strict):
+    """Cost of analysis FT: (10.1) with these weights and normalisers; the penalty (10) stays."""
+
+    h_ref: float = Field(5.0, gt=0.0)  # m
+    E_ref: float | None = Field(None, gt=0.0)  # J; null = mean energy at the register start
+    x_ref: float = Field(100.0, gt=0.0)  # m
+    w_h: float = Field(1.0, ge=0.0)
+    w_E: float = Field(0.3, ge=0.0)
+    w_x: float = Field(0.0, ge=0.0)  # distance is not a cost here
+
+
+class FTBoundsCfg(_Strict):
+    """Search bounds of analysis FT: (low, high) of each of the four variables."""
+
+    airspeed_min_eas_ms: tuple[float, float] = (14.0, 20.0)  # AIRSPEED_MIN as an EAS
+    q_transition_s: tuple[float, float] = (2.0, 20.0)  # Q_TRANSITION_MS in seconds
+    tkoff_thr_max: tuple[float, float] = (0.5, 1.0)  # TECS forces a 1 % range (O-22)
+    q_tran_pit_max_deg: tuple[float, float] = (1.0, 10.0)  # the fade cap is 4 to 22 deg
+
+    @model_validator(mode="after")
+    def _ordered(self) -> FTBoundsCfg:
+        for name, (lo, hi) in self.model_dump().items():
+            if not lo < hi:
+                raise ValueError(f"FT.bounds.{name}: low {lo} is not below high {hi}")
+        if self.tkoff_thr_max[0] <= 0.0:
+            raise ValueError("FT.bounds.tkoff_thr_max: the low end must be above 0")
+        if self.airspeed_min_eas_ms[0] <= 0.0 or self.q_transition_s[0] <= 0.0:
+            raise ValueError("FT.bounds: AIRSPEED_MIN and Q_TRANSITION_MS must be positive")
+        return self
+
+
+class FTScanCfg(_Strict):
+    """`FT_scan`: AIRSPEED_MIN fixed on a grid, the other three variables re-searched."""
+
+    airspeed_min_eas_ms: list[float] = [15.0, 16.0, 17.0, 18.0, 19.0, 20.0]
+    seeds: list[int] = [1, 2, 3]
+    maxiter: int = Field(12, ge=1)
+
+
+class FTGridCfg(_Strict):
+    """`FT_grid` (FT_spec Part 4): Q_TRANSITION_MS fixed on a grid, the other three searched."""
+
+    q_transition_s: list[float] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 20.0]
+    # the fine pass: the best coarse point plus these offsets (those outside the bounds are skipped)
+    fine_offsets_s: list[float] = [-1.0, -0.5, 0.5, 1.0]
+    seeds: list[int] = [1, 2, 3]  # the T-12 spread of a point is taken over these
+    maxiter: int = Field(12, ge=1)
+    descent_max_rounds: int = Field(50, ge=1)  # moves of the lattice descent
+
+    @model_validator(mode="after")
+    def _grid(self) -> FTGridCfg:
+        if not self.q_transition_s or any(q < 0.5 or q > 30.0 for q in self.q_transition_s):
+            raise ValueError("FT.grid.q_transition_s: use 0.5 to 30 s (the ArduPilot range)")
+        if len(set(self.q_transition_s)) != len(self.q_transition_s):
+            raise ValueError("FT.grid.q_transition_s has a repeated value")
+        return self
+
+
+class FTSensCfg(_Strict):
+    """`FT_sens`: one at a time at the optimum."""
+
+    TECS_TIME_CONST: list[float] = [3.0, 5.0, 8.0]
+    TECS_INTEG_GAIN: list[float] = [0.15, 0.3, 0.6]
+    rotor_lag_s: list[float] = [0.0, 0.25, 0.5]
+    z_vel_p: list[float] = [2.5, 5.0, 10.0]
+    z_acc_p: list[float] = [0.015, 0.03, 0.06]
+    TRIM_THROTTLE: list[float] = [0.35, 0.45, 0.55]
+    tecs_start: list[Literal["warm", "cold"]] = ["warm", "cold"]
+    rec_cl_frac: list[float] = [0.7, 0.8, 0.9]  # changes only the projection
+    # the model's C_L,max times this, through the stall angle alpha_s (provisional in vehicle.yaml);
+    # the simulated lift, the stall speed, the stall flag and the recovery all follow
+    CL_max_scale: list[float] = [0.9, 1.1]
+
+
+class FTCfg(_Strict):
+    """Analysis FT, the forward transition from hover (docs/FT_spec.md).
+
+    The start is `mission.profile.clearance_agl_m` above the site; the accepted altitude loss and
+    gain are `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`.
+    """
+
+    # the search ensemble: the first points of C's Sobol sample (halved, spec 6.5)
+    ensemble_n: int = Field(16, ge=1)
+    # the final evaluation of the optimum, the register start and the ArduPilot default: the first
+    # `final_ensemble_n` points of the same sample (a prefix, so the search members are among them)
+    final_ensemble_n: int = Field(32, ge=1)
+    ensemble_seed: int = 8
+    headwind_ms: list[float] = [0.0, 5.0]  # the ensemble's headwind range (low, high)
+    popsize: int = Field(8, ge=4)  # of every FT search; seeds and iterations: scan.*, grid.*
+    rotor_lag_s: float = Field(0.25, ge=0.0)  # as C
+    t_end_s: float = Field(90.0, gt=0.0)  # no hand-over by then: a "no_handover" failure
+    t_settle_s: float = Field(10.0, ge=0.0)  # simulated after DONE, to see the recovery
+    tecs_start: Literal["warm", "cold"] = "warm"  # open item: does TECS run in the VTOL hover?
+    stall_margin: float = Field(1.2, gt=0.0)  # EAS / stall speed from the hand-over on
+    rec_cl_frac: float | None = Field(None, gt=0.0, le=1.0)  # null = A.cl_frac
+    proj_is_failure: bool = True  # the projected minimum altitude below the loss limit fails
+    weights: FTWeightsCfg = FTWeightsCfg()
+    bounds: FTBoundsCfg = FTBoundsCfg()
+    scan: FTScanCfg = FTScanCfg()
+    grid: FTGridCfg = FTGridCfg()
+    history_scenarios: list[str] = ["S-07", "S-03"]  # histories: optimum and register start
+    sens: FTSensCfg = FTSensCfg()
+
+    @model_validator(mode="after")
+    def _headwind_range(self) -> FTCfg:
+        if len(self.headwind_ms) != 2 or self.headwind_ms[0] > self.headwind_ms[1]:
+            raise ValueError("FT.headwind_ms must be [low, high] with low <= high")
+        if self.final_ensemble_n < self.ensemble_n:
+            raise ValueError("FT.final_ensemble_n must be at least FT.ensemble_n")
+        lo, hi = self.bounds.q_transition_s
+        if any(not lo <= q <= hi for q in self.grid.q_transition_s):
+            raise ValueError("FT.grid.q_transition_s must lie inside FT.bounds.q_transition_s")
+        return self
+
+
 class B1VariantCfg(_Strict):
     """One stated wing limit of B1: a margin on alpha_s or an angle, and the pitch limit."""
 
     name: str
     alpha_margin: float | None = Field(None, gt=0.0)  # |alpha_w| <= margin x alpha_s
     alpha_max_deg: float | None = Field(None, gt=0.0)  # |alpha_w| <= this angle
-    theta_cmd_max_deg: float = Field(34.4, gt=0.0)  # pitch-command limit
+    # pitch-command limit; None = the register's PTCH_LIM_MAX_DEG (what C's ramp can reach)
+    theta_cmd_max_deg: float | None = Field(34.4, gt=0.0)
 
     @model_validator(mode="after")
     def _one_limit(self) -> B1VariantCfg:
@@ -305,7 +425,7 @@ class B1VariantCfg(_Strict):
 def _default_variants() -> list[B1VariantCfg]:
     return [
         B1VariantCfg(name="attached", alpha_margin=0.85, theta_cmd_max_deg=34.4),
-        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=30.0),
+        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=None),
     ]
 
 
@@ -396,6 +516,7 @@ class StudyCfg(_Strict):
     E: ECfg = ECfg()
     Q2: Q2Cfg = Q2Cfg()
     C: CCfg = CCfg()
+    FT: FTCfg = FTCfg()
     B1: B1Cfg = B1Cfg()
     sensitivity: SensCfg = SensCfg()
 
