@@ -318,11 +318,13 @@ def test_the_ft_chapter_shows_the_grid_with_the_winner_and_the_failed_spreads(tm
          "J": 11.0}])  # fmt: skip
     write_table(tmp_path, "FT_grid", [
         {"point": "coarse", "winner": False, "q_transition_s": 4.0, "J_continuous": 1.2,
-         "seed_spread": 0.002, "t12_ok": True, "J_snapped": 1.1},
+         "seed_spread": 0.002, "t12_ok": True, "J_snapped": 1.1, "within_2pct": False},
         {"point": "coarse", "winner": False, "q_transition_s": 8.0, "J_continuous": 0.9,
-         "seed_spread": 0.034, "t12_ok": False, "J_snapped": 0.85},
+         "seed_spread": 0.034, "t12_ok": False, "J_snapped": 0.85, "within_2pct": False},
+        {"point": "coarse", "winner": False, "q_transition_s": 10.0, "J_continuous": 0.83,
+         "seed_spread": 0.004, "t12_ok": True, "J_snapped": 0.81, "within_2pct": True},
         {"point": "fine", "winner": True, "q_transition_s": 9.0, "J_continuous": 0.82,
-         "seed_spread": 0.004, "t12_ok": True, "J_snapped": 0.8}])  # fmt: skip
+         "seed_spread": 0.004, "t12_ok": True, "J_snapped": 0.8, "within_2pct": True}])  # fmt: skip
     write_record(tmp_path, schema_version=2)
     html = build_html(load(tmp_path))
     ft = html.split('id="ft"')[1].split("</section>")[0]
@@ -330,6 +332,7 @@ def test_the_ft_chapter_shows_the_grid_with_the_winner_and_the_failed_spreads(tm
     assert "8 s (3.4%)" in ft  # the point above the T-12 limit is named
     assert 'class="mk s2' in ft  # the winner has its own mark
     assert "mk s1 hollow" in ft  # and the failed point is hollow
+    assert "Within 2 % of the best cost: Q_TRANSITION_MS 9, 10 s." in ft  # the flat part of the curve
 
 
 def test_the_defaults_chapter_compares_flag_counts_and_names_saving_or_increase(tmp_path):

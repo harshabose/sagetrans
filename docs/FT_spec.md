@@ -168,7 +168,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
   weights: {h_ref: 5.0, E_ref: null, x_ref: 100.0, w_h: 1.0, w_E: 0.3, w_x: 0.0}   # E_ref null = mean energy at the start point; w_x 0: distance is not a cost here
   bounds:
     airspeed_min_eas_ms: [14.0, 20.0]   # below the cruise EAS (20.9); the 1.2 rule decides the lower end in practice
-    q_transition_s: [2.0, 12.0]         # was 2 to 8 s; widened after the full run put the optimum at 8 s
+    q_transition_s: [2.0, 20.0]         # was 2 to 8 s, then 2 to 12 s: the optimum sat on each bound in turn
     tkoff_thr_max: [0.5, 1.0]           # TECS forces a 1 % range above the minimum (O-22)
     q_tran_pit_max_deg: [1.0, 10.0]     # ArduPilot range 0 to 30; the fade cap is 4 to 22 deg
   scan:                    # FT_scan: AIRSPEED_MIN fixed on a grid, the other three re-searched
@@ -192,7 +192,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
 Bounds validation: `lo < hi` for every pair; `tkoff_thr_max.lo > 0`.
 
 Rationale of the bounds: `AIRSPEED_MIN` upper end 20 stays under the cruise EAS so TECS has a speed to
-climb to; `Q_TRANSITION_MS` 2 to 12 s (the old `FULL_BOUNDS` range was 2 to 8 s; the first full run put the optimum at the 8 s bound, so the upper end was widened to 12 s, the owner's decision of 2026-10-27); `Q_TRAN_PIT_MAX` 1 to 10 deg gives
+climb to; `Q_TRANSITION_MS` 2 to 20 s (the old `FULL_BOUNDS` range was 2 to 8 s; the first full run put the optimum at the 8 s bound, so the upper end was widened to 12 s, the owner's decision of 2026-10-27, and to 20 s on 2026-10-28 because the grid cost fell at every step from 2 to 12 s and the winner sat on 12 s; ArduPilot allows up to 30 s, and the limit is not raised again without the owner); `Q_TRAN_PIT_MAX` 1 to 10 deg gives
 a fade cap of 4 to 22 deg, which was below the 35 deg of `PTCH_LIM_MAX_DEG` (20 deg since 2026-10-28; the fade cap does not read it) and inside the wing band checked by
 the angle-of-attack flag. `at_bound` (the existing 10 % rule) names any variable that lands at a bound.
 
@@ -485,7 +485,7 @@ in 1 m/s, `Q_TRAN_PIT_MAX` in 1 deg, `TKOFF_THR_MAX` in 1 % and `Q_TRANSITION_MS
 Design. `Q_TRANSITION_MS` is the one variable the cost is flat or slowly rising in, so it goes on a grid and
 the other three are searched at each value (a three-variable CMA-ES, as `FT_scan` does for `AIRSPEED_MIN`).
 
-1. `FT.grid` in `study.yaml`: `q_transition_s: [2, 3, 4, 5, 6, 8, 10, 12]` (inside `FT.bounds.q_transition_s`),
+1. `FT.grid` in `study.yaml`: `q_transition_s: [2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20]` (inside `FT.bounds.q_transition_s`),
    `seeds: [1, 2, 3]`, `maxiter: 12`. One task per point, `FT_grid:<Q_TRANSITION_MS in ms>`, cached on its own.
 2. The fine pass. The coarse point with the lowest continuous cost gets its neighbours at `fine_offsets_s`
    (default -1, -0.5, +0.5, +1 s). A neighbour outside `FT.bounds.q_transition_s` is skipped: the range is
@@ -508,7 +508,13 @@ the other three are searched at each value (a three-variable CMA-ES, as `FT_scan
    third wave). The winner's values are in the task id, so they are in its cache key. The older
    four-variable search (`FT.seeds`, `FT.maxiter`) is no longer run.
 7. Viewer: the FT chapter shows the snapped cost against `Q_TRANSITION_MS` with the winner marked and every
-   point above the T-12 limit hollow and named.
+   point above the T-12 limit hollow and named, and the `Q_TRANSITION_MS` values whose cost is within 2 % of
+   the best (`FT_grid.within_2pct`, `context.ft_grid.within_2pct_q_transition_s`, a note). That range, not the
+   single winner, is what the cost curve supports when it is flat near the minimum.
+8. Bound (2026-10-28). The first grid (2 to 12 s) fell at every step and its winner, 12 s, sat on our own
+   bound, so `FT.bounds.q_transition_s` is 2 to 20 s and the coarse grid gains 14, 16 and 20 s. The fine pass
+   still surrounds the best coarse point (offsets beyond 20 s are skipped). If the winner is again on the
+   bound the run says so (`winner_on_q_bound`) and the bound is the owner's decision.
 
 Tests: the snapped optimum is on the lattice and its cost is not worse than any of its in-bound lattice
 neighbours (re-evaluated, the in-bound subset of the 26); the fine pass skips out-of-bound neighbours; the

@@ -105,7 +105,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
   weights: {h_ref: 5.0, E_ref: null, x_ref: 100.0, w_h: 1.0, w_E: 0.3, w_x: 0.0}   # E_ref null = mean energy at the start point; w_x 0: distance is not a cost here
   bounds:
     airspeed_min_eas_ms: [14.0, 20.0]   # below the cruise EAS (20.9); the 1.2 rule decides the lower end in practice
-    q_transition_s: [2.0, 12.0]         # was 2 to 8 s: the first full run ended at 8 s, the bound
+    q_transition_s: [2.0, 20.0]         # was 2 to 12 s: the grid cost fell at every step and the winner sat on 12 s; ArduPilot allows up to 30 s
     tkoff_thr_max: [0.5, 1.0]           # TECS forces a 1 % range above the minimum (O-22)
     q_tran_pit_max_deg: [1.0, 10.0]     # ArduPilot range 0 to 30; the fade cap is 4 to 22 deg
   scan:                    # FT_scan: AIRSPEED_MIN fixed on a grid, the other three re-searched
@@ -113,7 +113,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
     seeds: [1, 2, 3]
     maxiter: 12            # the 20 m/s point reaches a 0.004 % seed spread at 12 (checked at the 12 s bound)
   grid:                    # FT_grid (FT_spec Part 4): Q_TRANSITION_MS fixed per point, the other three searched, then snapped to ArduPilot's integers
-    q_transition_s: [2, 3, 4, 5, 6, 8, 10, 12]   # coarse grid; the best point gets a fine pass
+    q_transition_s: [2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20]   # coarse grid; the best point gets a fine pass
     fine_offsets_s: [-1.0, -0.5, 0.5, 1.0]       # neighbours of the best coarse point; those outside bounds.q_transition_s are skipped
     seeds: [1, 2, 3]                             # the T-12 seed spread is taken per point over these
     maxiter: 12

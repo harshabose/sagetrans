@@ -181,6 +181,16 @@ def _section_d(q: dict[str, Any]) -> str | None:
     return "\n".join(parts)
 
 
+NEAR_BEST = 0.02  # a grid point within this fraction of the best snapped cost is "as good"
+
+
+def grid_near_best(rows: list[dict[str, Any]], frac: float = NEAR_BEST) -> list[float]:
+    """The `Q_TRANSITION_MS` values (s) whose snapped cost is within `frac` of the best one."""
+    costs = [(float(r["q_transition_s"]), float(r["J_snapped"])) for r in rows]
+    best = min(j for _, j in costs)
+    return sorted(q for q, j in costs if j <= best * (1.0 + frac) + 1e-12)
+
+
 def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any]) -> Table:
     """E at the register and at the recommended settings, side by side, one row per case, site and
     mission, with FT's mean energy of the whole forward transition at the same settings as an
@@ -315,6 +325,9 @@ def assemble(
         for r in grid_rows:
             r["point"] = "coarse" if r["q_transition_s"] in coarse else "fine"
             r["winner"] = r is wrow
+        near = grid_near_best(grid_rows)
+        for r in grid_rows:
+            r["within_2pct"] = r["q_transition_s"] in near
         tables["FT_grid"] = [{"point": r["point"], "winner": r["winner"],
                               **{k: v for k, v in r.items() if k not in ("point", "winner")}}
                              for r in grid_rows]
@@ -334,6 +347,7 @@ def assemble(
         ft_grid_context = {"winner_q_transition_s": q_win,
                            "winner_t12_ok": bool(wrow["t12_ok"]),
                            "winner_on_q_bound": min(abs(q_win - lo), abs(q_win - hi)) < 1e-9,
+                           "within_2pct_q_transition_s": near,
                            "t12_failed": [{"q_transition_s": q, "seed_spread": s}
                                           for q, s in t12_failed]}
         ft_task = {**ft_task, "notes": [*ft_task.get("notes", []),
@@ -343,7 +357,9 @@ def assemble(
                 f"{q:g} ({s:.1%})" for q, s in t12_failed) if t12_failed else "")
             + f". The winner ({q_win:g} s) " + ("passes." if wrow["t12_ok"] else "FAILS it.")
             + (" The winner is on a Q_TRANSITION_MS search bound." if ft_grid_context[
-                "winner_on_q_bound"] else "")]}
+                "winner_on_q_bound"] else "")
+            + f" Q_TRANSITION_MS within {NEAR_BEST:.0%} of the best cost: "
+            + ", ".join(f"{q:g}" for q in near) + " s."]}
     if ft_res is not None:
         scan = sorted((res["row"] for t, res in task_results.items() if t.startswith("FT_scan:")),
                       key=lambda r: r["airspeed_min_eas_ms"])  # fmt: skip

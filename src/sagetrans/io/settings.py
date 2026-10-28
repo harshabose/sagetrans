@@ -300,7 +300,7 @@ class FTBoundsCfg(_Strict):
     """Search bounds of analysis FT: (low, high) of each of the four variables."""
 
     airspeed_min_eas_ms: tuple[float, float] = (14.0, 20.0)  # AIRSPEED_MIN as an EAS
-    q_transition_s: tuple[float, float] = (2.0, 12.0)  # Q_TRANSITION_MS in seconds
+    q_transition_s: tuple[float, float] = (2.0, 20.0)  # Q_TRANSITION_MS in seconds
     tkoff_thr_max: tuple[float, float] = (0.5, 1.0)  # TECS forces a 1 % range (O-22)
     q_tran_pit_max_deg: tuple[float, float] = (1.0, 10.0)  # the fade cap is 4 to 22 deg
 
@@ -327,7 +327,7 @@ class FTScanCfg(_Strict):
 class FTGridCfg(_Strict):
     """`FT_grid` (FT_spec Part 4): Q_TRANSITION_MS fixed on a grid, the other three searched."""
 
-    q_transition_s: list[float] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0]  # the coarse grid
+    q_transition_s: list[float] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 20.0]
     # the fine pass: the best coarse point plus these offsets (those outside the bounds are skipped)
     fine_offsets_s: list[float] = [-1.0, -0.5, 0.5, 1.0]
     seeds: list[int] = [1, 2, 3]  # the T-12 spread of a point is taken over these

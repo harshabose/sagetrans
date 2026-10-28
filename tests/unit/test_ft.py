@@ -285,10 +285,31 @@ def test_a_fine_offset_outside_the_bounds_is_skipped(tmp_path):
     cfg = tmp_path / "configs"
     shutil.copytree(CONFIGS, cfg)
     with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
-        fh.write(FT_TINY.replace("q_transition_s: [4.0, 6.0]", "q_transition_s: [11.5, 12.0]")
+        fh.write(FT_TINY.replace("q_transition_s: [4.0, 6.0]", "q_transition_s: [19.5, 20.0]")
                  .replace("[-0.5, 0.5, 2.0]", "[-1.0, 0.5, 1.0]"))
     inp = load_inputs(cfg, only={"FT"})
-    res = {"FT_grid:11500": {"q_transition_s": 11.5, "row": {"J_continuous": 2.0}},
-           "FT_grid:12000": {"q_transition_s": 12.0, "row": {"J_continuous": 1.0}}}
-    # the best coarse point is on the 12 s bound: 12.5 and 13 s are not searched (no widening)
-    assert stages.grid_fine_ids(inp, res) == ["FT_grid:11000"]
+    res = {"FT_grid:19500": {"q_transition_s": 19.5, "row": {"J_continuous": 2.0}},
+           "FT_grid:20000": {"q_transition_s": 20.0, "row": {"J_continuous": 1.0}}}
+    # the best coarse point is on the 20 s bound: 20.5 and 21 s are not searched (no widening)
+    assert stages.grid_fine_ids(inp, res) == ["FT_grid:19000"]
+
+
+def test_the_shipped_bound_and_grid_reach_20_s_inside_the_ardupilot_range():
+    inp = load_inputs(ROOT / "configs", only={"FT"})
+    f = inp.study.FT
+    assert f.bounds.q_transition_s == (2.0, 20.0)  # ArduPilot allows up to 30 s
+    assert {14.0, 16.0, 20.0} <= set(f.grid.q_transition_s) and max(f.grid.q_transition_s) == 20.0
+    assert all(f.bounds.q_transition_s[0] <= q <= f.bounds.q_transition_s[1]
+               for q in f.grid.q_transition_s)
+    assert FTCfg().bounds.q_transition_s == (2.0, 20.0)  # the defaults agree with the file
+    assert "FT_grid:20000" in stages.grid_coarse_ids(inp)
+
+
+def test_the_range_within_two_percent_of_the_best_cost():
+    from sagetrans.io.assemble import grid_near_best
+
+    rows = [{"q_transition_s": q, "J_snapped": j}
+            for q, j in ((8.0, 0.81), (10.0, 0.79), (12.0, 0.774), (14.0, 0.770), (16.0, 0.772),
+                         (20.0, 0.80))]
+    assert grid_near_best(rows) == [12.0, 14.0, 16.0]  # <= 0.770 * 1.02 = 0.7854
+    assert grid_near_best(rows, 0.0) == [14.0]

@@ -1431,13 +1431,16 @@ def build_ft(c: Ctx) -> Out:
                                                      for r in wins], [tip(r, gtip) for r in wins]))
         failed = [f"{r['q_transition_s']:g} s ({num(r.get('seed_spread')):.1%})" for r in grid
                   if r.get("t12_ok") is False]
+        near = [r["q_transition_s"] for r in grid if r.get("within_2pct") is True]
+        near_text = (" Within 2 % of the best cost: Q_TRANSITION_MS "
+                     + ", ".join(f"{q:g}" for q in near) + " s." if near else "")
         o.figures.append(
             panelbox(
                 "Cost against Q_TRANSITION_MS",
                 "The best snapped cost found with Q_TRANSITION_MS fixed at each value (the other "
                 "three searched, then snapped to ArduPilot's integers). The winner is marked; a "
                 "hollow mark is a point whose three-seed spread is above the T-12 limit"
-                + (": " + ", ".join(failed) if failed else ", none here") + ".",
+                + (": " + ", ".join(failed) if failed else ", none here") + "." + near_text,
                 ch.xy_chart(gseries, "Q_TRANSITION_MS [s]", "cost J",
                             "Cost against Q_TRANSITION_MS"),
                 _legend(("s1", "line", "grid point"),
