@@ -16,6 +16,12 @@
 >   `braking.entry_airspeed(AIRSPEED_MIN, rho, D.entry_convention)`, the same speed D, C and B1 use, and the register
 >   entry `mission.speeds.entry_eas_ms` (22 / 20.9, a cruise speed) is gone. The kinetic energy between the glide speed
 >   and the exit speed is therefore not charged to any segment of E (it was charged, in part, to the back transition).
+> - **The stopping run is D's (2026-10-28, review fix B3).** E's back transition used `inp.controller` (the register
+>   alone) and a level, rotors-at-hover start. It now runs `stages.d_exit_params` (the register plus the D block: exit pitch
+>   `theta_fw0`, `rotor_lag_s`, the lift feed-forward, the alpha gate and cap) from `braking.airbrake_entry_state`, the run D,
+>   C and B1 use. Back transition at the register settings, one way: 5.52 -> 5.38 Wh, 7.5 -> 6.8 s, 75.9 -> 72.5 m at
+>   0 m; 8.62 -> 8.49 Wh, 9.8 -> 8.9 s, 129.4 -> 121.9 m at 5000 m; maximum range +0.002 to +0.007 km. The sensitivity's
+>   budget uses the same controller.
 > - **Recommended case (2026-10-28).** When FT runs with E or Q2, `basics_rec:<AIRSPEED_MIN>:<TKOFF_THR_MAX %>` repeats
 >   D, E and Q2 at the FT optimum's snapped values (tables `E_*_recommended`, `Q2_*_recommended`, and `E_cases` side by
 >   side with the register case, which stays the headline). The values are in the task id, so a new FT optimum re-runs it.

@@ -103,6 +103,20 @@ def exit_params(
     )  # fmt: skip
 
 
+def d_exit_params(inp: StudyInputs) -> BackTransitionParams:
+    """The controller analysis D runs at the AIRBRAKE exit (its rotor lag, its angle cap).
+
+    E's back transition and the sensitivity's budget use it too, so no stopping run in the study
+    has other controller settings than D's.
+    """
+    lim, _ = alpha_limits(inp)
+    cap = zero_loss._alpha_band(inp.vehicle, lim)[1]  # body pitch at the top of A's band
+    return exit_params(
+        inp, rotor_lag_s=inp.study.D.rotor_lag_s,
+        alpha_cap=cap if inp.study.D.enforce_alpha else None,
+    )
+
+
 # ---- Q2: pusher thrust margin ------------------------------------------------------------------
 def pusher_margin(vp: VehicleParams, rho: float, v_tas: float, soc: float) -> dict[str, float]:
     """Full-throttle pusher thrust against the wing drag at the transition speed.
@@ -250,7 +264,7 @@ def solve_e_case(
                 f"TKOFF_THR_MAX = {inp.tkoff_thr_max:g}"
             )
         mb = energy.build_mission(vp, mp, inp.window, inp.descent, a_plan, kind, a,
-                                  bp=inp.controller, v0_entry=v0, a_fwd_source=src)  # fmt: skip
+                                  bp=d_exit_params(inp), v0_entry=v0, a_fwd_source=src)  # fmt: skip
         r_max = mb.max_range_m
         if r_max <= 0.0:
             raise ValueError("the usable energy does not cover the fixed segments and the reserve")
@@ -351,9 +365,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         alpha_cap = zero_loss._alpha_band(vp, lim)[1]  # body pitch; the wing angle adds i_w
         alpha_hi = alpha_cap + vp.wing.i_w
         kappa = inp.descent.kappa
-        base_bp = exit_params(
-            inp, rotor_lag_s=c.rotor_lag_s, alpha_cap=alpha_cap if c.enforce_alpha else None
-        )
+        base_bp = d_exit_params(inp)
 
         def entry(sc: Scenario) -> float:
             return braking.entry_airspeed(inp.airspeed_min, sc.rho, c.entry_convention)
@@ -1598,7 +1610,7 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
     return sens.HeadlineModel(
         inp.vehicle, scen, inputs, prm=dict(inp.start_params), budget=budget,
         controller=dict(inp.controller_overrides), theta_p=inp.theta_p,
-        c_eval=cev, c_base=base, budget_bp=inp.controller,
+        c_eval=cev, c_base=base, budget_bp=d_exit_params(inp),
     )  # fmt: skip
 
 

@@ -355,15 +355,21 @@ def back_transition_segment(
 ) -> SegmentResult:
     """Energy of the Position1 braking simulation (analysis D) from ground speed v0.
 
-    `bp` is the configured controller (as analysis D uses it; `run_braking` sets the target
-    height and the hover throttle itself). None builds one from the code defaults.
+    `bp` is the configured controller (`stages.d_exit_params`, the one analysis D runs;
+    `run_braking` sets the target height and the hover throttle itself). With it the run starts at
+    the AIRBRAKE exit like D, C and B1 (`braking.airbrake_entry_state`: pitch `bp.theta_fw0`, the
+    rotors carrying what the wing does not). None builds a controller from the code defaults and
+    starts from the legacy hover state (rotors at hover speed, level), which no study path uses.
     """
     scen = Scenario(
         mp.ground_amsl_m + mp.h_bt_agl_m, mp.isa_offset_k, soc, ground_amsl_m=mp.ground_amsl_m
     )
+    x0 = None
     if bp is None:
         bp = BackTransitionParams.for_vehicle(vp, scen.rho, soc, scen.altitude_amsl_m)
-    r = braking.landing_error(vp, scen, v0, a_plan, bp, agl0=mp.h_bt_agl_m)
+    else:
+        x0, _ = braking.airbrake_entry_state(vp, scen, bp, v0)
+    r = braking.landing_error(vp, scen, v0, a_plan, bp, agl0=mp.h_bt_agl_m, x0=x0)
     if r.sim.terminated_by != "ground_speed_reached":
         raise RuntimeError(f"back-transition did not complete ({r.sim.terminated_by})")
     return SegmentResult(
