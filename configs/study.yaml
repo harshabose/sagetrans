@@ -168,7 +168,7 @@ B1:                        # open-loop least-energy back-transition from the AIR
   end_vh_band_ms: null                 # null = C.sink_tol_ms
   variants:                            # the wing limit is stated, never silent; no "no limit" variant
     - {name: attached,   alpha_margin: 0.85,  theta_cmd_max_deg: 34.4}   # |alpha_w| <= 0.85 alpha_s
-    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: 20.0}   # what C's ramp can reach: its ceiling is PTCH_LIM_MAX_DEG
+    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: null}   # what C's ramp can reach: null = its ceiling, the register's PTCH_LIM_MAX_DEG (20 deg)
   band_sweep: {eps_h_m: [3.0, 10.0], variant: c_envelope}   # sensitivity at the largest distance cap
   sens: {rotor_start_flip: true, end_vh_band_ms: 0.5, c_envelope_theta_cmd_deg: 34.4}   # first scenario only
   gap_c: null                          # C parameters for the gap: {T_bt, theta_A_deg, spin_min, q}; null = register at q = 2

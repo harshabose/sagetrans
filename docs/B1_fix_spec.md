@@ -125,7 +125,7 @@ B1:                        # open-loop least-energy back-transition from the AIR
   end_vh_band_ms: null                 # null = C.sink_tol_ms
   variants:
     - {name: attached,   alpha_margin: 0.85,  theta_cmd_max_deg: 34.4}
-    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: 30.0}
+    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: null}   # null = PTCH_LIM_MAX_DEG (20 deg since 2026-10-28; this block was 30 before)
   band_sweep: {eps_h_m: [3.0, 10.0], variant: c_envelope}
   sens: {rotor_start_flip: true, end_vh_band_ms: 0.5, c_envelope_theta_cmd_deg: 34.4}
 ```

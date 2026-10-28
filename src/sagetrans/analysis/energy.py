@@ -10,6 +10,15 @@ after the fixed segments and the reserve goes to cruise. Segment powers use one 
 charge (`MissionProfile.soc_mean`); `soc_trace.py` walks the SoC along the mission and checks each
 segment at both ends. The forward transition is a quasi-steady ESTIMATE until analyses B/C exist.
 
+STATED SIMPLIFICATION, the forward-transition wait. It uses Q2's worst-case acceleration (the
+minimum over speed and over the Q2 grid, `E.a_fwd_metric: min`) as a CONSTANT, so it overstates
+the wait where the pusher is weak: at 5000 m with the register's `TKOFF_THR_MAX` 0.8 it is 41.7 s
+and 124 kJ against FT's simulated 15 s and 73 kJ; at sea level the two agree (37 kJ). The rotor
+fade that follows is an estimate with `E.fade_wing_share` (0.4), a value TAKEN FROM FT's
+simulated hand-overs (0.39 to 0.44), so comparing E's fade with FT's is not an independent check:
+it shows that the rotor and motor model and the force balance reproduce FT, not that the wing
+share is right. Both are conservative for a range budget (more energy).
+
 STATED SIMPLIFICATION, the glide-to-exit deceleration. The descent ends at the glide speed (the
 cruise speed) and the back transition starts at the AIRBRAKE exit (`AIRSPEED_MIN - 2`, 15.0 to
 19.4 m/s TAS at the four sites against 21.1 to 27.3 m/s). The slowing in between is in no

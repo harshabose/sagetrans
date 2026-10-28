@@ -794,6 +794,14 @@ def alpha_limits(inp: StudyInputs) -> tuple[zero_loss.ActuatorLimits, float]:
     return lim, zero_loss._alpha_band(vp, lim)[1] + vp.wing.i_w
 
 
+def b1_ceiling_deg(inp: StudyInputs, variant: Any) -> float:
+    """The pitch-command ceiling of a B1 variant in degrees; `null` in the config is the
+    register's PTCH_LIM_MAX_DEG, so the `c_envelope` variant follows it."""
+    if variant.theta_cmd_max_deg is None:
+        return math.degrees(inp.theta_p)
+    return float(variant.theta_cmd_max_deg)
+
+
 def c_theta_a_hi_deg(inp: StudyInputs) -> float:
     """Upper bound of `Q_A_ANGLE_MAX` in degrees: `min(C.bounds.theta_A_deg[1], PTCH_LIM_MAX_DEG)`.
 
@@ -1408,9 +1416,9 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     v_s = runs.stall_speed(scen.vehicle_for(vp), scen.rho)
     variants = {v.name: v for v in b.variants}
     ceiling = variants.get("c_envelope")
-    if ceiling is not None and ceiling.theta_cmd_max_deg > math.degrees(inp.theta_p) + 1e-9:
+    if ceiling is not None and b1_ceiling_deg(inp, ceiling) > math.degrees(inp.theta_p) + 1e-9:
         raise ValueError(
-            f"B1 variant c_envelope: pitch command ceiling {ceiling.theta_cmd_max_deg:g} deg "
+            f"B1 variant c_envelope: pitch command ceiling {b1_ceiling_deg(inp, ceiling):g} deg "
             f"is above PTCH_LIM_MAX_DEG ({math.degrees(inp.theta_p):g} deg); it describes what "
             "C's ramp can reach"
         )
@@ -1419,7 +1427,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     def options(v: Any, band: float, theta_deg: float | None = None) -> coll.CollocationOptions:
         kw: dict[str, Any] = {
             "n": b.intervals, "max_iter": b.max_iter, "vh_band": band,
-            "theta_cmd_max": math.radians(theta_deg or v.theta_cmd_max_deg),
+            "theta_cmd_max": math.radians(theta_deg or b1_ceiling_deg(inp, v)),
         }  # fmt: skip
         if v.alpha_max_deg is not None:
             kw["alpha_max"] = math.radians(v.alpha_max_deg)
@@ -1479,7 +1487,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         theta_deg: float | None = None,
     ) -> tuple[dict[str, Any], Table, coll.B1Solution | None]:  # fmt: skip
         rs, band = rs or c.rotor_start, band or end_band
-        theta = theta_deg or v.theta_cmd_max_deg
+        theta = theta_deg or b1_ceiling_deg(inp, v)
         t0 = time.time()
         prob = problem(options(v, band, theta), rs)
         ver = coll.solve_verified(prob, eh, ex, "energy", ns=tuple(b.refine_from))

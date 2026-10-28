@@ -12,7 +12,7 @@ from typing import Any
 from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
-from sagetrans.io.stages import grid_winner
+from sagetrans.io.stages import b1_ceiling_deg, grid_winner
 
 Table = list[dict[str, Any]]
 
@@ -550,7 +550,7 @@ def assemble(
                 f"`{v.name}` ("
                 + (f"|alpha_w| <= {v.alpha_margin:g} alpha_s" if v.alpha_max_deg is None
                    else f"|alpha_w| <= {v.alpha_max_deg:g} deg")
-                + f", pitch command <= {v.theta_cmd_max_deg:g} deg)" for v in bc.variants
+                + f", pitch command <= {b1_ceiling_deg(inp, v):g} deg)" for v in bc.variants
             ) + ". A run with no wing limit is not part of the study. **The wing limit decides "
             "the number.** B1 is clairvoyant (it knows the scenario) and open loop, and it is not "
             "a strict lower bound (B-2). The end band on the vertical speed is "

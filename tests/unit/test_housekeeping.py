@@ -28,3 +28,14 @@ def test_python_311_is_dropped_and_the_pins_are_the_ones_ci_runs():
     assert not any("python_version" in d for d in proj["project"]["dependencies"])  # no markers
     ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
     assert ci["jobs"]["test"]["strategy"]["matrix"]["python-version"] == ["3.13"]
+
+
+def test_the_two_limits_of_e_are_stated_in_its_docstring_and_readme():
+    from sagetrans.analysis import energy
+
+    doc = energy.__doc__ or ""
+    readme = (ROOT / "src" / "sagetrans" / "analysis" / "README.md").read_text(encoding="utf-8")
+    for text in (doc, readme):
+        assert "worst-case acceleration" in text and "41.7 s" in text and "FT" in text
+        assert "fade_wing_share" in text and "not an independent" in text
+        assert "dissipated by drag" in text and "0.08 km" in text  # the glide-to-exit one

@@ -443,6 +443,14 @@ E_total = E_to + E_ft + E_climb + E_cruise + E_desc + E_bt + E_land + E_reserve
 
 ### What E computes
 
+* **Stated simplification: the forward-transition wait is a constant worst-case acceleration.**
+  It uses Q2's minimum over speed and over the Q2 grid (`E.a_fwd_metric: min`) as a constant,
+  so it overstates the wait where the pusher is weak: 41.7 s and 124 kJ at 5000 m with the
+  register `TKOFF_THR_MAX` 0.8, against FT's simulated 15 s and 73 kJ; at sea level they agree
+  (37 kJ). The fade after it uses `E.fade_wing_share` = 0.4, **taken from FT's simulated
+  hand-overs** (0.39 to 0.44), so E's fade against FT's is not an independent comparison: it
+  checks the rotor and motor model and the force balance, not the wing share. Both err on the
+  side of more energy.
 * **Stated simplification: the glide-to-exit deceleration.** The descent ends at the glide
   (cruise) speed, the back transition starts at the AIRBRAKE exit `AIRSPEED_MIN - 2` (15.0 to
   19.4 m/s TAS against 21.1 to 27.3). The slowing between them is in no segment: its kinetic

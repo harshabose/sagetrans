@@ -410,7 +410,8 @@ class B1VariantCfg(_Strict):
     name: str
     alpha_margin: float | None = Field(None, gt=0.0)  # |alpha_w| <= margin x alpha_s
     alpha_max_deg: float | None = Field(None, gt=0.0)  # |alpha_w| <= this angle
-    theta_cmd_max_deg: float = Field(34.4, gt=0.0)  # pitch-command limit
+    # pitch-command limit; None = the register's PTCH_LIM_MAX_DEG (what C's ramp can reach)
+    theta_cmd_max_deg: float | None = Field(34.4, gt=0.0)
 
     @model_validator(mode="after")
     def _one_limit(self) -> B1VariantCfg:
@@ -424,7 +425,7 @@ class B1VariantCfg(_Strict):
 def _default_variants() -> list[B1VariantCfg]:
     return [
         B1VariantCfg(name="attached", alpha_margin=0.85, theta_cmd_max_deg=34.4),
-        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=20.0),
+        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=None),
     ]
 
 
