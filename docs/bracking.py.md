@@ -433,7 +433,7 @@ From `docs/ardupilot_open_questions.md` (O-03, O-04, O-05):
 |`Q_BCK_PIT_LIM`|constant optional $\theta_B$|$\theta_{B0}(V_{min}/V)^2$, **only with the NEW forward-throttle scheme**|
 |entry|cruise-like, $\theta$ = 0, rotors at hover|follows AIRBRAKE; rotors already spooled, exit at $\approx \max(\text{AIRSPEED_MIN} - 2,\ \text{Q_ASSIST_SPEED})$|
 
-Config values (from `controller.yaml`): `Q_A_ANGLE_MAX` 30°, `PTCH_LIM_MAX_DEG` 35° (effective 30°), `Q_BACKTRANS_MS` 3000, `AIRSPEED_MIN` 17 TAS, `Q_M_SPIN_MIN` 0.1, `Q_M_SPIN_MAX` 0.95. The code defaults of `BackTransitionParams` are 20°/25°; a `BackTransitionParams()` with no overrides is **not** the project's configuration.
+Config values (from `controller.yaml`): `Q_A_ANGLE_MAX` 30°, `PTCH_LIM_MAX_DEG` 20° (effective 20°; 35° and 30° before 2026-10-28), `Q_BACKTRANS_MS` 3000, `AIRSPEED_MIN` 17 TAS, `Q_M_SPIN_MIN` 0.1, `Q_M_SPIN_MAX` 0.95. The code defaults of `BackTransitionParams` are 20°/25°; a `BackTransitionParams()` with no overrides is **not** the project's configuration.
 
 Effect on D (6.2): ramp start is second-order (about 12–14% at 8°); duration is first-order; `Q_BCK_PIT_LIM` could be dominant. Because the ramp covers the bulk of the stopping distance, D's `a_rec` is a statement about this ramp model.
 

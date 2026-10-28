@@ -395,7 +395,7 @@ def load_inputs(
     bt0 = BackTransitionParams()
     ap = "controller.ardupilot."
     theta_a = rd.get(ap + "Q_A_ANGLE_MAX", bt0.theta_A)
-    theta_p = rd.get(ap + "PTCH_LIM_MAX_DEG", math.radians(35.0))
+    theta_p = rd.get(ap + "PTCH_LIM_MAX_DEG", math.radians(20.0))
     t_bt = rd.get(ap + "Q_BACKTRANS_MS", bt0.T_bt)  # the register converts ms to s
     spin_min = rd.get(ap + "Q_M_SPIN_MIN", bt0.delta_min)
     spin_max = rd.get(ap + "Q_M_SPIN_MAX", bt0.delta_max)

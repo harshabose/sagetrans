@@ -1,8 +1,9 @@
 # ArduPilot factory defaults of the parameters this study decides or assumes. REFERENCE ONLY
 # (docs/DEFAULTS_spec.md): never a recommendation, never used as an input. Same format and status
 # words as controller.yaml. Every entry was read from the ArduPilot source at tag Plane-4.7.2 on
-# 2026-10-27. Names that no analysis decides (THR_SLEWRATE, the TECS_* group, PTCH_LIM_MIN_DEG) are
-# not listed: their register values in controller.yaml already are the defaults.
+# 2026-10-27. Names that no analysis decides (THR_SLEWRATE, the TECS_* group, PTCH_LIM_MIN_DEG,
+# PTCH_LIM_MAX_DEG) are not listed: their register values in controller.yaml already are the
+# defaults.
 #
 # Two entries store a "use another parameter" value as ArduPilot does and are resolved by
 # inputs.resolve_default: TKOFF_THR_MAX 0 means THR_MAX; Q_A_ANGLE_MAX is the attitude controller's

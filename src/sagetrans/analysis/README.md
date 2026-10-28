@@ -651,7 +651,7 @@ Record `result.search.spread` as `search_spreads={"C": …}` so the release gate
 **What is no longer optimised:** `AIRSPEED_MIN`, `Q_TRANSITION_MS` and `TKOFF_THR_MAX` (Q2 and E
 cover part of the forward side; nothing optimises `AIRSPEED_MIN` now, and if it comes back it is a
 fifth variable of this search, with the entry speed following it). Also not in the vector:
-`PTCH_LIM_MAX_DEG` (fixed at 35°), `Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled).
+`PTCH_LIM_MAX_DEG` (fixed at 20°, the ArduPilot default; 35° until 2026-10-28), `Q_TRANS_FAIL` (off), `BATT_WATT_MAX` (not modelled).
 
 **Legacy.** `evaluate_back`, `plan_decel`, `evaluate_full`, `optimise`, `BACK_BOUNDS`, `FULL_BOUNDS`,
 `DEFAULT_PARAMS` and `THETA_P` are untouched and marked legacy in their docstrings.

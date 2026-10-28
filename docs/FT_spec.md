@@ -193,7 +193,7 @@ Bounds validation: `lo < hi` for every pair; `tkoff_thr_max.lo > 0`.
 
 Rationale of the bounds: `AIRSPEED_MIN` upper end 20 stays under the cruise EAS so TECS has a speed to
 climb to; `Q_TRANSITION_MS` 2 to 12 s (the old `FULL_BOUNDS` range was 2 to 8 s; the first full run put the optimum at the 8 s bound, so the upper end was widened to 12 s, the owner's decision of 2026-10-27); `Q_TRAN_PIT_MAX` 1 to 10 deg gives
-a fade cap of 4 to 22 deg, below the 35 deg of `PTCH_LIM_MAX_DEG` and inside the wing band checked by
+a fade cap of 4 to 22 deg, which was below the 35 deg of `PTCH_LIM_MAX_DEG` (20 deg since 2026-10-28; the fade cap does not read it) and inside the wing band checked by
 the angle-of-attack flag. `at_bound` (the existing 10 % rule) names any variable that lands at a bound.
 
 ## 4. Controller model: `control/forward.py` (new file; the control layer imports no analysis)

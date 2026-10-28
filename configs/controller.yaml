@@ -12,7 +12,7 @@ ardupilot:
   Q_TRANS_FAIL: {value: 0.0, unit: "ms", source: "(DEFAULT ARDU VALUE) 0 disables the stuck-transition timeout (documented)", status: documented}
   Q_M_SPIN_MIN: {value: 0.1, unit: "-", source: "rotor throttle floor in altitude hold; set above the ESC dead zone", status: TBD}
   Q_M_SPIN_MAX: {value: 0.95, unit: "-", source: "rotor throttle ceiling", status: TBD}
-  PTCH_LIM_MAX_DEG: {value: 35.0, unit: "deg", source: "fixed-wing pitch limit (not a decision variable in analysis C)", status: TBD}
+  PTCH_LIM_MAX_DEG: {value: 20.0, unit: "deg", source: "(DEFAULT ARDU VALUE) PITCH_MAX 20 in ArduPlane/config.h, used by Parameters.cpp PTCH_LIM_MAX_DEG, Plane-4.7.2; fixed in analysis C, not searched (owner decision 2026-10-28)", status: TBD}
   Q_TRAN_PIT_MAX: {value: 3.0, unit: "deg", source: "(DEFAULT ARDU VALUE) pitch cap in the forward transition; the fade cap is (Q_TRAN_PIT_MAX + 1) x 2 (O-16)", status: TBD}
   TKOFF_THR_MIN: {value: 0.0, unit: "-", source: "(DEFAULT ARDU VALUE) 0 = use TRIM_THROTTLE as the pusher minimum in the forward transition (O-17)", status: TBD}
   TRIM_THROTTLE: {value: 0.45, unit: "-", source: "(DEFAULT ARDU VALUE) THROTTLE_CRUISE 45 percent (config.h). Set to the flown value: it is the pusher minimum during the forward transition and the TECS feed-forward", status: TBD}

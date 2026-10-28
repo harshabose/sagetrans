@@ -139,7 +139,7 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
   weights: {h_ref: 2.0, E_ref: 15000.0, x_ref: 100.0}   # normalisers; weights 1, 0.3, 0.5 and penalty 10 stay
   bounds:                  # search bounds [low, high]
     T_bt: [1.0, 6.0]
-    theta_A_deg: [10.0, 30.0]   # 30 is DEC-7 and binding
+    theta_A_deg: [10.0, 30.0]   # 30 is DEC-7; the effective upper bound is min(this, PTCH_LIM_MAX_DEG = 20), the pitch limit
     spin_min: [0.06, 0.25]
     q: [1.0, 3.0]               # Q_TRANS_DECEL, m/s^2
   z:                       # ArduPilot vertical loop (O-12): master 4.8.0-dev Plane defaults, not a pinned tag (O-08)
@@ -163,7 +163,7 @@ B1:                        # open-loop least-energy back-transition from the AIR
   end_vh_band_ms: null                 # null = C.sink_tol_ms
   variants:                            # the wing limit is stated, never silent; no "no limit" variant
     - {name: attached,   alpha_margin: 0.85,  theta_cmd_max_deg: 34.4}   # |alpha_w| <= 0.85 alpha_s
-    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: 30.0}   # what C's ramp can reach
+    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: 20.0}   # what C's ramp can reach: its ceiling is PTCH_LIM_MAX_DEG
   band_sweep: {eps_h_m: [3.0, 10.0], variant: c_envelope}   # sensitivity at the largest distance cap
   sens: {rotor_start_flip: true, end_vh_band_ms: 0.5, c_envelope_theta_cmd_deg: 34.4}   # first scenario only
   gap_c: null                          # C parameters for the gap: {T_bt, theta_A_deg, spin_min, q}; null = register at q = 2

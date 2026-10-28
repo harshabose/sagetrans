@@ -210,7 +210,8 @@ class CBoundsCfg(_Strict):
     """Search bounds of analysis C: (low, high) of each of the four variables."""
 
     T_bt: tuple[float, float] = (1.0, 6.0)  # Q_BACKTRANS_MS in seconds
-    theta_A_deg: tuple[float, float] = (10.0, 30.0)  # Q_A_ANGLE_MAX; 30 is DEC-7 and binding
+    # Q_A_ANGLE_MAX; 30 is DEC-7, the effective top is min(this, PTCH_LIM_MAX_DEG)
+    theta_A_deg: tuple[float, float] = (10.0, 30.0)
     spin_min: tuple[float, float] = (0.06, 0.25)  # Q_M_SPIN_MIN
     q: tuple[float, float] = (1.0, 3.0)  # Q_TRANS_DECEL, m/s^2
 
@@ -398,7 +399,7 @@ class B1VariantCfg(_Strict):
 def _default_variants() -> list[B1VariantCfg]:
     return [
         B1VariantCfg(name="attached", alpha_margin=0.85, theta_cmd_max_deg=34.4),
-        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=30.0),
+        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=20.0),
     ]
 
 

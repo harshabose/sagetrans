@@ -41,7 +41,7 @@ from sagetrans.dynamics import trim
 from sagetrans.dynamics.simulate import Result, simulate
 from sagetrans.physics.params import VehicleParams
 
-THETA_P = math.radians(35.0)
+THETA_P = math.radians(20.0)  # PTCH_LIM_MAX_DEG: the ArduPilot default (PITCH_MAX 20)
 
 BACK_BOUNDS = Bounds(
     ("T_bt", "theta_A", "spin_min"),

@@ -57,7 +57,7 @@ Frozen dataclass. Numbers are the code defaults. Gains are **ASSUMED placeholder
 | group | field | code default | register (`controller.yaml`) | ArduPilot analogue |
 | --- | --- | --- | --- | --- |
 | pitch envelope | `theta_A` | 20° | **30°** | `Q_A_ANGLE_MAX` |
-| | `theta_P` | 25° | **35°** | `PTCH_LIM_MAX_DEG` |
+| | `theta_P` | 20° | **20°** (35° before 2026-10-28) | `PTCH_LIM_MAX_DEG` |
 | | `theta_B` | `None` (no cap) | none (entry omitted) | `Q_BCK_PIT_LIM` |
 | | `T_bt` | 3 s | 3 s (3000 ms) | `Q_BACKTRANS_MS` |
 | altitude hold | `h_tgt` | 0 | set by caller | altitude to hold |
@@ -75,7 +75,7 @@ Frozen dataclass. Numbers are the code defaults. Gains are **ASSUMED placeholder
 | | `brake_at_limit` | False | False | worst-case switch for analysis D |
 
 > [!warning] Two sets of pitch caps
-> The register (`controller.yaml`) sets `Q_A_ANGLE_MAX` = 30° and `PTCH_LIM_MAX_DEG` = 35°; the code defaults are 20° and 25°. Analyses that go through `load_inputs` (D, C, B) use the register values, so the binding cap `min(θ_A, θ_P)` is **30°**. Code that builds `BackTransitionParams.for_vehicle(...)` without them gets **20°/25°, so a 20° cap**. Analysis E's back-transition segment does this (see [[analysis_E]], E-1). Numbers in this note that quote 20° are the code default.
+> The register (`controller.yaml`) sets `Q_A_ANGLE_MAX` = 30° and `PTCH_LIM_MAX_DEG` = 20° (the ArduPilot default; it was 35° until 2026-10-28); the code defaults are 20° and 20°. Analyses that go through `load_inputs` (D, C, B) use the register values, so the binding cap `min(θ_A, θ_P)` is **20°**, and `Q_A_ANGLE_MAX` above 20° changes nothing. Code that builds `BackTransitionParams.for_vehicle(...)` without them gets the same **20°/20°, so a 20° cap**. Analysis E's back-transition segment does this (see [[analysis_E]], E-1). Numbers in this note that quote 20° are the code default.
 
 ### `for_vehicle(vp, rho, soc, h_tgt, **kw)`
 

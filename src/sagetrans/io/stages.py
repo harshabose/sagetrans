@@ -775,12 +775,27 @@ def alpha_limits(inp: StudyInputs) -> tuple[zero_loss.ActuatorLimits, float]:
     return lim, zero_loss._alpha_band(vp, lim)[1] + vp.wing.i_w
 
 
+def c_theta_a_hi_deg(inp: StudyInputs) -> float:
+    """Upper bound of `Q_A_ANGLE_MAX` in degrees: `min(C.bounds.theta_A_deg[1], PTCH_LIM_MAX_DEG)`.
+
+    The pitch cap is `min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG)`, so an angle above the pitch limit
+    changes nothing and the search would wander on a flat region. The 30 deg of DEC-7 is now
+    only the pitch limit when `PTCH_LIM_MAX_DEG` is the smaller.
+    """
+    lo, hi = inp.study.C.bounds.theta_A_deg
+    eff = min(hi, math.degrees(inp.theta_p))
+    if eff <= lo:
+        raise ValueError(f"C.bounds.theta_A_deg {lo:g} is not below PTCH_LIM_MAX_DEG "
+                         f"({math.degrees(inp.theta_p):g} deg): nothing left to search")
+    return eff
+
+
 def c_bounds(inp: StudyInputs) -> Bounds:
     b = inp.study.C.bounds
     return Bounds(
         restricted.C_BOUNDS.names,
         (b.T_bt[0], math.radians(b.theta_A_deg[0]), b.spin_min[0], b.q[0]),
-        (b.T_bt[1], math.radians(b.theta_A_deg[1]), b.spin_min[1], b.q[1]),
+        (b.T_bt[1], math.radians(c_theta_a_hi_deg(inp)), b.spin_min[1], b.q[1]),
     )  # fmt: skip
 
 
@@ -837,6 +852,14 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     cev, base, w = c_settings(inp)
     bounds = c_bounds(inp)
     start = {k: inp.start_params[k] for k in ("T_bt", "theta_A", "spin_min")}
+    theta_hi = c_theta_a_hi_deg(inp)
+    theta_note = (
+        f"Q_A_ANGLE_MAX is searched up to {theta_hi:g} deg = min({c.bounds.theta_A_deg[1]:g}, "
+        f"PTCH_LIM_MAX_DEG {math.degrees(inp.theta_p):g}): the pitch cap is "
+        f"min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG), so "
+        + ("the 30 deg limit (DEC-7) is now the pitch limit." if theta_hi < c.bounds.theta_A_deg[1]
+           else "the pitch limit does not bind the search.")
+    )
     r = restricted.optimise_c(
         vp, scens, cev, base, w, start, bounds=bounds, seeds=tuple(c.seeds),
         popsize=c.popsize, maxiter=c.maxiter,
@@ -941,7 +964,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         row.pop("case", None)
     print(f"    C reports: {time.time() - t0:.0f} s", flush=True)
     return {
-        "result": r, "scens": scens, "notes": [dflt_note] if dflt_note else [],
+        "result": r, "scens": scens, "notes": [theta_note, *([dflt_note] if dflt_note else [])],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
                    "C_q_curve": q_curve, "C_sens": sens_rows, "C_history": history},
     }  # fmt: skip
@@ -1191,6 +1214,13 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     }  # fmt: skip
     v_s = runs.stall_speed(scen.vehicle_for(vp), scen.rho)
     variants = {v.name: v for v in b.variants}
+    ceiling = variants.get("c_envelope")
+    if ceiling is not None and ceiling.theta_cmd_max_deg > math.degrees(inp.theta_p) + 1e-9:
+        raise ValueError(
+            f"B1 variant c_envelope: pitch command ceiling {ceiling.theta_cmd_max_deg:g} deg "
+            f"is above PTCH_LIM_MAX_DEG ({math.degrees(inp.theta_p):g} deg); it describes what "
+            "C's ramp can reach"
+        )
     ex_max = max(b.eps_x_m)
 
     def options(v: Any, band: float, theta_deg: float | None = None) -> coll.CollocationOptions:

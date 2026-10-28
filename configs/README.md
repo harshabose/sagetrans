@@ -200,7 +200,7 @@ The `ardupilot` group uses the **real parameter names**.
 | `Q_TRANSITION_MS` | ms | 5000 | rotor fade time after `AIRSPEED_MIN` (documented default) |
 | `Q_BACKTRANS_MS` | ms | 3000 | back-transition pitch-limit ramp |
 | `Q_A_ANGLE_MAX` | deg | 20 | maximum VTOL lean angle |
-| `PTCH_LIM_MAX_DEG` | deg | 35 | fixed-wing pitch limit (fixed in analysis C, not searched) |
+| `PTCH_LIM_MAX_DEG` | deg | 20 | the ArduPilot default (`PITCH_MAX` 20, Plane-4.7.2); fixed in analysis C, not searched. The pitch cap is `min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG)`, so a `Q_A_ANGLE_MAX` above this does nothing |
 | `Q_BCK_PIT_LIM` | deg | *omitted* | back-transition pitch cap; omitted = none |
 | `TKOFF_THR_MAX` | - | 0.7 | pusher throttle in AUTO during the forward transition |
 | `Q_TRANS_FAIL` | ms | 0 | stuck-transition timeout; 0 disables it |

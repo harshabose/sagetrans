@@ -39,7 +39,7 @@ class BackTransitionParams:
     """
 
     theta_A: float = math.radians(20.0)  # Q_A_ANGLE_MAX
-    theta_P: float = math.radians(25.0)  # PTCH_LIM_MAX_DEG
+    theta_P: float = math.radians(20.0)  # PTCH_LIM_MAX_DEG (ArduPilot default)
     theta_B: float | None = None  # Q_BCK_PIT_LIM; None = no cap
     T_bt: float = 3.0  # Q_BACKTRANS_MS in seconds
     # altitude hold (8.5)
