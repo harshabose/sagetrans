@@ -35,7 +35,11 @@ class BackTransitionParams:
     `a_lim` is the deceleration limit of the position cascade, which never reads the planned
     deceleration. ArduPilot's Q_TRANS_DECEL does both jobs; this repo splits them: the planned
     value only places the target (`braking.landing_error`: x_tgt = V_ref^2 / (2 a_plan)).
-    The fields from `theta_fw0` on default to the original behaviour.
+    The fields from `theta_fw0` on default to the original behaviour. The code defaults (for
+    example `theta_A` 20 deg, `theta_P` 20 deg) are used only by code that builds the class without
+    the register; `load_inputs` overrides them with the register's values (`Q_A_ANGLE_MAX` 30 deg,
+    `PTCH_LIM_MAX_DEG` 20 deg, the Z loop and the rest), so a bare `BackTransitionParams()` is not
+    the project's configuration.
     """
 
     theta_A: float = math.radians(20.0)  # Q_A_ANGLE_MAX
@@ -309,6 +313,10 @@ class BaselineParams:
     fade over Q_TRANSITION_MS), a cruise stub (rate-limited pusher hand-off, speed and altitude
     hold), the switch-point test (8.11) and Position1. Not modelled: BATT_WATT_MAX, TECS energy
     blending, airbrake. Gains are ASSUMED. Q_M_SPIN_MIN is `back.delta_min`.
+
+    The class defaults (`airspeed_min` 14 m/s, `q_transition_s` 5 s, `tkoff_thr_max` 0.7) are the
+    legacy placeholders; `load_inputs` overrides them with the register (17 m/s, 5 s, 0.8), and a
+    register entry that is missing falls back to them and is listed in `StudyInputs.fallbacks`.
     """
 
     back: BackTransitionParams

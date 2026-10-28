@@ -342,7 +342,9 @@ numbers of `D_recommendation` are valid only inside `covers` (`ground_speed_min_
 `a_rec_design_ms2`, the curve value at that speed by linear interpolation; a speed outside the
 curve is an error. Analysis E keeps reading the single conservative `a_rec_min`. E enters faster
 than the curve ends (its entry EAS is 21 to 27 m/s TAS against 20 m/s), where `a_eq` is higher, so
-`a_rec_min` is conservative there; using the curve at E's entry speed is an open decision.
+`a_rec_min` is conservative there; using the curve at E's entry speed is an open decision. (E's back
+transition itself now starts at the AIRBRAKE exit, `AIRSPEED_MIN - 2`, the speed D uses, so the
+statement above about E entering faster than the curve ends describes the old cruise-speed entry.)
 
 ### Tables
 
@@ -551,9 +553,11 @@ current limits. An unreachable cell keeps a row with `a_min <= 0` and NaN `a_equ
 records `tkoff_thr_max` and its status; if the register entry is absent the 0.7 built-in is used and
 the row says `fallback (placeholder)`.
 
-**Airspeed convention.** `AIRSPEED_MIN` is registered as a true airspeed, so `tas` is the default feed
-to E, but the old Q2 read it as equivalent; both are tabulated until DEC-1 is settled. At 5000 m the
-two differ by 29 percent (17 EAS is 21.9 TAS).
+**Airspeed convention.** `AIRSPEED_MIN` is an equivalent airspeed (`Q2.feed_convention: eas`, since
+2026-10-28 the default, and the one D, C, B1 and FT use); both conventions are still tabulated. E
+converts it once, in `energy.mission_at_site` (the true airspeed at the clearance altitude above the
+site), so E's forward segment and Q2's end speed are the same number. At 5000 m EAS and TAS differ by
+29 percent (17 EAS is 21.9 TAS).
 
 **What it found (register values, `TKOFF_THR_MAX` 0.8, 17 m/s).** At E's own site (30 m, SoC 0.6,
 nominal mass) `a_min` is 1.24 m/s² (distance-equivalent 1.86, 7.9 s, 78 m); the command matters a

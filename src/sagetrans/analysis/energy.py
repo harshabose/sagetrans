@@ -438,8 +438,11 @@ def build_budget(
 ) -> BudgetResult:
     """First-pass budget of ONE leg from the component models and analyses D and F.
 
-    `bp` is the controller of the back transition and `v0_entry` its entry ground speed; None
-    keeps the old behaviour (code defaults, entry at the cruise speed).
+    `bp` is the controller of the back transition and `v0_entry` its entry ground speed. E and
+    the sensitivity pass the AIRBRAKE exit speed (`braking.entry_airspeed`, the speed D, C and B1
+    start from) and `inp.controller`; None keeps the legacy behaviour (code defaults, entry at the
+    cruise speed), which no study path uses any more. `mp.v_trans` is a true airspeed here
+    (`mission_at_site` converts the loaded AIRSPEED_MIN once).
     """
     soc = mp.soc_mean
     rho_cruise = float(atmosphere.density(mp.cruise_amsl_m, mp.isa_offset_k))
