@@ -521,7 +521,8 @@ def assemble(
             "**Front** (`J_point` is C's cost of the point; `j_best` marks the least per scenario "
             "and variant):", "",
             md_table(front, ["scenario", "variant", "eps_x_m", "converged", "replay_verified",
-                             "converged_attempts", "energy_kJ", "excursion_m", "distance_m",
+                             "replay_late_command_ok", "converged_attempts", "energy_kJ",
+                             "excursion_m", "distance_m",
                              "t_f_s", "below_vs", "t_rotor_on_s", "V_over_Vs_rotor_on",
                              "alpha_w_peak_above_vs_deg", "J_point", "j_best"]), "",
         ]  # fmt: skip
@@ -530,13 +531,25 @@ def assemble(
                          + "; ".join(unver) + ".** A point that did not converge from three "
                          "starts, or whose replay in the simulator disagrees, is a solver result, "
                          "not a proof that it is infeasible.", ""]  # fmt: skip
+        fragile = [f"{r['scenario']} {r['variant']} eps_x={r['eps_x_m']:g}" for r in front
+                   if r.get("replay_verified") and r.get("replay_late_command_ok") is False]
+        if fragile:
+            b1_parts += [
+                "**Verified, but not robust to a 10 ms late command: " + "; ".join(fragile)
+                + ".** Their replay agrees when the schedule is applied as the optimiser means it "
+                "(the step's mean command) and fails when each 20 ms step reads it at its start "
+                "(`replay_late_command_ok` = no; the excursion is in "
+                "`replay_late_command_excursion_m`): the optimum sits on the lift peak, a fraction "
+                "of a degree below the stall cliff. "
+                "Quote them as the best the model allows with exact timing, not as a flyable "
+                "schedule.", ""]  # fmt: skip
         if gap:
             b1_parts += [
                 "**Same-problem gap to C** (B1 at C's own excursion and distance; "
                 "B1 has no rotor lag where C has `rotor_lag_s`):", "",
                 md_table(gap, ["scenario", "variant", "c_source", "c_energy_kJ", "c_excursion_m",
                                "c_distance_m", "b1_converged", "b1_replay_verified",
-                               "b1_energy_kJ", "energy_margin"]), "",
+                               "b1_late_command_ok", "b1_energy_kJ", "energy_margin"]), "",
             ]  # fmt: skip
         if sens_rows:
             b1_parts += [

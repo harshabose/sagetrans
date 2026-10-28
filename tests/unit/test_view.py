@@ -332,7 +332,7 @@ def test_the_ft_chapter_shows_the_grid_with_the_winner_and_the_failed_spreads(tm
     assert "8 s (3.4%)" in ft  # the point above the T-12 limit is named
     assert 'class="mk s2' in ft  # the winner has its own mark
     assert "mk s1 hollow" in ft  # and the failed point is hollow
-    assert "Within 2 % of the best cost: Q_TRANSITION_MS 9, 10 s." in ft  # the flat part of the curve
+    assert "Within 2 % of the best cost: Q_TRANSITION_MS 9, 10 s." in ft  # the flat curve
 
 
 def test_the_defaults_chapter_compares_flag_counts_and_names_saving_or_increase(tmp_path):
@@ -355,3 +355,21 @@ def test_the_defaults_chapter_compares_flag_counts_and_names_saving_or_increase(
     assert "60 % saving" in d
     # more energy than the default (40 against 30) is an increase, not a negative saving
     assert "33 % increase" in d and "-33" not in d
+
+
+def test_the_b1_chapter_flags_verified_points_that_fail_with_late_commands(tmp_path):
+    write_table(tmp_path, "B1_front", [
+        {"scenario": "S-01", "variant": "c_envelope", "eps_x_m": 60.0, "converged": True,
+         "replay_verified": True, "replay_late_command_ok": False, "energy_kJ": 10.5,
+         "distance_m": 60.0, "excursion_m": 1.0},
+        {"scenario": "S-01", "variant": "attached", "eps_x_m": 60.0, "converged": True,
+         "replay_verified": True, "replay_late_command_ok": True, "energy_kJ": 11.3,
+         "distance_m": 60.0, "excursion_m": 1.0}])  # fmt: skip
+    write_table(tmp_path, "B1_gap", [
+        {"scenario": "S-01", "variant": "c_envelope", "c_energy_kJ": 16.0, "b1_energy_kJ": 10.5,
+         "b1_replay_verified": True, "b1_late_command_ok": False}])  # fmt: skip
+    write_record(tmp_path, schema_version=2)
+    html = build_html(load(tmp_path))
+    b1 = html.split('id="b1"')[1].split("</section>")[0]
+    assert "1 verified point(s) fail when the commands are 10 ms late" in b1
+    assert "B1-C gap quoted (S-01, c_envelope) comes from a schedule that fails" in b1

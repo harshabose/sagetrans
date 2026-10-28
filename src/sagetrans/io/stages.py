@@ -1432,6 +1432,9 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         if not (s.ok and ver.verified and ver.check is not None):
             return r
         chk = ver.check
+        if ver.delayed is not None:  # does the schedule survive commands that are 10 ms late?
+            r["replay_late_command_ok"] = ver.delay_robust
+            r["replay_late_command_excursion_m"] = ver.delayed.metrics["excursion"]
         fl = braking.braking_flags(
             chk.sim, vp, scen, base, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
             kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
@@ -1564,6 +1567,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
             if res is not None:
                 s_ = res.b1
                 g.update({"b1_converged": s_.ok, "b1_replay_verified": res.verified,
+                          "b1_late_command_ok": res.delay_robust,
                           "eps_h_m": s_.eps_h, "eps_x_m": s_.eps_x})  # fmt: skip
                 if res.verified:
                     g.update({

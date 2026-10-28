@@ -1050,6 +1050,10 @@ def build_b1(c: Ctx) -> Out:
                 o.items.append(Item("B1 below C", f"{(1 - bE / cE) * 100:.0f} %", "",
                                     f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
                                     f"1 - {bE:.2f}/{cE:.2f}"))  # fmt: skip
+            if r.get("b1_late_command_ok") is False:
+                o.flags.append(
+                    f"the B1-C gap quoted ({r['scenario']}, {r['variant']}) comes from a schedule "
+                    "that fails when its commands are 10 ms late")
     if front:
         bi = c.extreme("B1_front", "energy_kJ", min, lambda r: r.get("replay_verified") is True)
         if bi is not None:
@@ -1078,6 +1082,13 @@ def build_b1(c: Ctx) -> Out:
         )
         if nv < len(front):
             o.flags.append(f"{len(front) - nv} point(s) without a verified solution")
+        n_fragile = sum(1 for r in front if r.get("replay_verified") is True
+                        and r.get("replay_late_command_ok") is False)
+        if n_fragile:
+            o.flags.append(
+                f"{n_fragile} verified point(s) fail when the commands are 10 ms late "
+                "(replay_late_command_ok = no): the optimum sits on the lift peak, a fraction of a "
+                "degree below the stall cliff")
         panels, leg = [], {}
         for s in uniq([r["scenario"] for r in front]):
             series = []
