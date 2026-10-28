@@ -57,7 +57,10 @@ class MissionProfile:
     fwd_alt_gain_max_m: float = 10.0  # accepted altitude gain in the forward transition (FT)
     vz_takeoff: float = 2.0
     t_hover_pre: float = 10.0  # s of hover before lift-off
-    v_trans: float = 14.0  # AIRSPEED_MIN
+    # AIRSPEED_MIN as loaded, an EQUIVALENT airspeed. `mission_at_site` turns it into the TRUE
+    # airspeed at the clearance altitude, which is what the forward segment, Q2's acceleration
+    # profile and the SoC trace read, so none of them converts again.
+    v_trans: float = 14.0
     a_fwd: float = 1.5  # forward-transition acceleration (ASSUMED until analysis C)
     v_climb: float | None = None  # design TAS at `v_cruise_ref_amsl_m`; None = the cruise speed
     roc: float = 2.5
@@ -197,13 +200,24 @@ def design_speeds(mp: MissionProfile, altitude_amsl_m: float) -> tuple[float, fl
     return vc, vcl, vg
 
 
-def mission_at_site(mp: MissionProfile, site_amsl_m: float) -> MissionProfile:
+def mission_at_site(
+    mp: MissionProfile, site_amsl_m: float, v_trans_convention: str = "eas"
+) -> MissionProfile:
     """The profile for an airfield at `site_amsl_m`: cruise at site + climb height, the design
-    speeds converted to that altitude. The segment functions then run unchanged on it."""
+    speeds converted to that altitude. The segment functions then run unchanged on it.
+
+    `v_trans` of the result is a TRUE airspeed: the loaded AIRSPEED_MIN (an equivalent airspeed)
+    times sqrt(rho0 / rho) at the clearance altitude above the site. `v_trans_convention="tas"`
+    (Q2.feed_convention) keeps the loaded value as it is. Apply this once to a loaded profile.
+    """
     cruise = site_amsl_m + mp.climb_height_m
     vc, vcl, vg = design_speeds(mp, cruise)
+    v_trans = mp.v_trans
+    if v_trans_convention == "eas":
+        rho_c = float(atmosphere.density(site_amsl_m + mp.clearance_agl_m, mp.isa_offset_k))
+        v_trans = mp.v_trans * math.sqrt(float(atmosphere.density(0.0)) / rho_c)
     return replace(
-        mp, ground_amsl_m=site_amsl_m, cruise_amsl_m=cruise,
+        mp, ground_amsl_m=site_amsl_m, cruise_amsl_m=cruise, v_trans=v_trans,
         v_cruise=vc if mp.v_cruise is not None else None,
         v_climb=vcl if (mp.v_climb is not None or mp.v_cruise is not None) else None,
         v_glide=vg if (mp.v_glide is not None or mp.v_cruise is not None) else None,

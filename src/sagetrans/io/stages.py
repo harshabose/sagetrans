@@ -177,6 +177,11 @@ def q2_worst(cells: list[Q2Cell], conv: str) -> Q2Cell:
     return min((c for c in cells if c[0]["convention"] == conv), key=lambda c: c[1].a_min)
 
 
+def site_mission(inp: StudyInputs, site: float) -> energy.MissionProfile:
+    """The mission at a site, with `v_trans` as a true airspeed (Q2.feed_convention)."""
+    return energy.mission_at_site(inp.mission, site, inp.study.Q2.feed_convention)
+
+
 # ---- E: the mission budget per site -------------------------------------------------------------
 @dataclasses.dataclass
 class ECase:
@@ -203,7 +208,7 @@ def _fwd_accel_by_leg(
     if ec.a_fwd_mode == "worst":
         return dict.fromkeys(masses, worst)
     rho_c = float(atmosphere.density(mp.clearance_amsl, mp.isa_offset_k))
-    v_end = mp.v_trans if q2c.feed_convention == "tas" else mp.v_trans * math.sqrt(RHO0 / rho_c)
+    v_end = mp.v_trans  # already a true airspeed (`energy.mission_at_site`)
     out: dict[str, float] = {}
     for leg, m in masses.items():
         f = pusher.forward_accel(
@@ -223,7 +228,7 @@ def solve_e_case(
     Raises ValueError for a non-positive acceleration: there is no fallback to the mission value.
     """
     vp, ec = inp.vehicle, inp.study.E
-    mp = energy.mission_at_site(inp.mission, site)
+    mp = site_mission(inp, site)
     masses = {"out": vp.m, "ret": vp.m - mp.payload_kg} if kind == "round_trip" else {"leg": vp.m}
     rho_bt = float(atmosphere.density(site + mp.h_bt_agl_m, mp.isa_offset_k))
     v0 = inp.entry_eas * math.sqrt(RHO0 / rho_bt)  # D's entry EAS as a true airspeed
@@ -629,7 +634,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                     continue
                 mb, r = cs.mb, cs.r_max
                 budgets[name] = mb
-                mp_site = energy.mission_at_site(inp.mission, site)
+                mp_site = site_mission(inp, site)
                 rho_c = float(atmosphere.density(mp_site.cruise_amsl_m, mp_site.isa_offset_k))
                 v_c = mb.profiles[mb.legs[0][0]].v_cruise or math.nan
                 reqs = {f"{x:g}": x * 1e3 for x in inp.requirements_km}
@@ -1379,7 +1384,7 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
         inp.vehicle, scen, statuses=inp.input_statuses(), fractions=inp.input_fractions(),
         controller_nominals=inp.controller_nominals(),
     )  # fmt: skip
-    mp_site = energy.mission_at_site(inp.mission, scen.ground_amsl_m)
+    mp_site = site_mission(inp, scen.ground_amsl_m)
     budget = (mp_site, inp.window, inp.descent) if c.include_budget else None
     return sens.HeadlineModel(
         inp.vehicle, scen, inputs, prm=dict(inp.start_params), budget=budget,
