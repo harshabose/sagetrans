@@ -24,9 +24,11 @@ from SALib.sample import morris as morris_sample
 from SALib.sample import sobol as sobol_sample
 from scipy.stats import spearmanr
 
-from sagetrans.analysis import energy, restricted
+from sagetrans import atmosphere
+from sagetrans.analysis import braking, energy, restricted
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
 from sagetrans.analysis.descent import DescentLimits
+from sagetrans.control.ardupilot_like import BackTransitionParams
 from sagetrans.physics.params import VehicleParams
 
 # weakest evidence last; used to grade a result by its dominating inputs
@@ -123,6 +125,20 @@ def _builtin_inputs(
     ]  # fmt: skip
 
 
+def z_loop_inputs(z: Mapping[str, float]) -> list[UncertainInput]:
+    """The vertical-loop gains D and C run (`z_mode="ardupilot"`), +-50 %, graded `assumed`.
+
+    The register's altitude-hold gains (`alt_hold_Kvh`, `alt_hold_Ki`) belong to the other
+    vertical loop (`z_mode="repo"`) and do nothing in the AIRBRAKE-exit model, so they are not
+    offered with it. The nominals are the master defaults of study.yaml `C.z` (O-12, O-08).
+    """
+    return [
+        _rel(f"z_{k}", "control", f"z_{k}", float(z[k]), 0.5, "assumed",
+             "ArduPilot vertical loop (O-12)")
+        for k in ("vel_p", "acc_p", "acc_i")
+    ]
+
+
 def _set_path(obj: Any, parts: Sequence[str], value: float) -> Any:
     if len(parts) == 1:
         return replace(obj, **{parts[0]: value})
@@ -152,7 +168,16 @@ Model = Callable[[Mapping[str, float]], dict[str, float]]
 
 @dataclass
 class HeadlineModel:
-    """Maps input values to the headline outputs (back-transition, optionally the budget)."""
+    """Maps input values to the headline outputs (back-transition, optionally the budget).
+
+    With `c_eval` and `c_base` the back transition is the run D and C use: the stopping run from
+    the AIRBRAKE exit (`restricted.evaluate_c`, entry `braking.entry_airspeed`) of the register
+    start values at the register's `Q_TRANS_DECEL` (`restricted.C_Q_START`), which is the
+    "register at q = 2" row of C. Without them it is the LEGACY pre-AIRBRAKE model
+    (`restricted.evaluate_back`), kept for the unit tests of the machinery. The optional budget
+    uses `budget_bp` and the same exit speed as E's back transition. The sensitivity stays at the
+    REGISTER values: it does not follow the recommended settings of FT and C.
+    """
 
     vp: VehicleParams
     scen: Scenario
@@ -166,6 +191,9 @@ class HeadlineModel:
     theta_p: float = restricted.THETA_P
     a_plan_source: str = "simulated"
     v0_eas: float | None = None
+    c_eval: restricted.CEval | None = None  # set with `c_base`: the AIRBRAKE-exit model
+    c_base: BackTransitionParams | None = None
+    budget_bp: BackTransitionParams | None = None  # E's controller; None = code defaults
 
     @property
     def outputs(self) -> tuple[str, ...]:
@@ -179,11 +207,18 @@ class HeadlineModel:
     def __call__(self, values: Mapping[str, float]) -> dict[str, float]:
         vp, scen, ctl = apply_inputs(self.vp, self.scen, self.inputs, values)
         try:
-            m = restricted.evaluate_back(
-                vp, scen, dict(self.prm), self.v0_air,
-                controller_overrides={**self.controller, **ctl} or None,
-                a_plan_source=self.a_plan_source, theta_p=self.theta_p, v0_eas=self.v0_eas,
-            )
+            if self.c_eval is not None and self.c_base is not None:
+                m = restricted.evaluate_c(
+                    vp, scen, {**self.prm, "q": restricted.C_Q_START}, self.c_eval,
+                    replace(self.c_base, **dict[str, Any](ctl)),
+                )
+            else:
+                m = restricted.evaluate_back(
+                    vp, scen, dict(self.prm), self.v0_air,
+                    controller_overrides={**self.controller, **ctl} or None,
+                    a_plan_source=self.a_plan_source, theta_p=self.theta_p,
+                    v0_eas=self.v0_eas,
+                )
             stopped = "not_stopped" not in m.failures and "touchdown" not in m.failures
             out = {
                 "excursion_m": m.excursion,
@@ -195,8 +230,16 @@ class HeadlineModel:
         if self.budget is not None:
             mp, window, limits = self.budget
             mp = replace(mp, isa_offset_k=scen.isa_offset_k, soc_mean=scen.soc)
+            v0_entry = None
+            if self.c_eval is not None:  # E's back transition starts at the AIRBRAKE exit too
+                rho_bt = float(atmosphere.density(mp.ground_amsl_m + mp.h_bt_agl_m,
+                                                  mp.isa_offset_k))
+                v0_entry = braking.entry_airspeed(
+                    self.c_eval.airspeed_min, rho_bt, self.c_eval.entry_convention)
             try:
-                out[RANGE_OUTPUT] = energy.build_budget(vp, mp, window, limits).max_range_m / 1e3
+                out[RANGE_OUTPUT] = energy.build_budget(
+                    vp, mp, window, limits, bp=self.budget_bp, v0_entry=v0_entry
+                ).max_range_m / 1e3
             except (ValueError, RuntimeError):
                 out[RANGE_OUTPUT] = math.nan
         return out

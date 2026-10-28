@@ -1385,12 +1385,17 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
         inp.vehicle, scen, statuses=inp.input_statuses(), fractions=inp.input_fractions(),
         controller_nominals=inp.controller_nominals(),
     )  # fmt: skip
+    # the back transition is the AIRBRAKE-exit run of D and C (its vertical loop is the ArduPilot
+    # one), so the altitude-hold gains of the other loop are replaced by the Z-loop gains
+    inputs = [i for i in inputs if not i.name.startswith("alt_hold_")]
+    inputs += sens.z_loop_inputs(inp.study.C.z.model_dump())
+    cev, base, _ = c_settings(inp)
     mp_site = site_mission(inp, scen.ground_amsl_m)
     budget = (mp_site, inp.window, inp.descent) if c.include_budget else None
     return sens.HeadlineModel(
         inp.vehicle, scen, inputs, prm=dict(inp.start_params), budget=budget,
         controller=dict(inp.controller_overrides), theta_p=inp.theta_p,
-        a_plan_source="simulated", v0_eas=inp.airspeed_min - 2.0,
+        c_eval=cev, c_base=base, budget_bp=inp.controller,
     )  # fmt: skip
 
 
