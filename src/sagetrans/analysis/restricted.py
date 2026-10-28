@@ -222,7 +222,7 @@ def optimise(
         return ensemble_cost(metrics(bounds.to_physical(u)), weights)
 
     u0 = bounds.to_unit({**DEFAULT_PARAMS, **(start or {})})
-    res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter)
+    res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter, name=scope)
     best = bounds.to_physical(res.best_x)
     return RestrictedResult(
         scope, best, res.best_f, res.f_start, metrics(best), res,
@@ -410,7 +410,7 @@ def optimise_c(
         return ensemble_cost(metrics(bounds.to_physical(u)), weights)
 
     u0 = bounds.to_unit({"q": C_Q_START, **start})
-    res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter)
+    res = cma_minimise(cost, u0, seeds, popsize=popsize, maxiter=maxiter, name="c")
     best = bounds.to_physical(res.best_x)
     return RestrictedResult(
         "c", best, res.best_f, res.f_start, metrics(best), res,

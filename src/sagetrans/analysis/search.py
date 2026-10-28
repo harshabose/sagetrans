@@ -6,11 +6,14 @@ Evaluations run serially (CasADi functions are not picklable across processes).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import cma
 import numpy as np
+
+from sagetrans import progress
 
 
 @dataclass(frozen=True)
@@ -60,8 +63,12 @@ def cma_minimise(
     popsize: int = 8,
     maxiter: int = 30,
     tolfun: float = 1e-6,
+    name: str = "search",
 ) -> SearchResult:
-    """Minimise fn over [0, 1]^n starting at u0; results are cached per rounded vector."""
+    """Minimise fn over [0, 1]^n starting at u0; results are cached per rounded vector.
+
+    `name` only labels the progress events (`sagetrans.progress`); it does not change the search.
+    """
     cache: dict[tuple[float, ...], float] = {}
 
     def cached(u: np.ndarray) -> float:
@@ -70,15 +77,18 @@ def cma_minimise(
             cache[key] = float(fn(np.clip(u, 0.0, 1.0)))
         return cache[key]
 
+    t_search = time.perf_counter()
+    progress.search_start(name, len(seeds), maxiter)
     f_start = cached(u0)
     out: list[SeedResult] = []
-    for seed in seeds:
+    for k, seed in enumerate(seeds, start=1):
+        t_seed = time.perf_counter()
         opts = {
             "seed": seed, "popsize": popsize, "maxiter": maxiter, "bounds": [0.0, 1.0],
             "verbose": -9, "tolfun": tolfun, "tolx": 1e-6,
         }  # fmt: skip
         es = cma.CMAEvolutionStrategy(list(u0), sigma0, opts)
-        best_u, best_f, n = np.array(u0), f_start, 0
+        best_u, best_f, n, it = np.array(u0), f_start, 0, 0
         while not es.stop():
             xs = es.ask()
             fs = [cached(np.array(x)) for x in xs]
@@ -87,6 +97,11 @@ def cma_minimise(
             i = int(np.argmin(fs))
             if fs[i] < best_f:
                 best_f, best_u = fs[i], np.clip(np.array(xs[i]), 0.0, 1.0)
+            it += 1
+            progress.search_iter(k, it, n, best_f)
         out.append(SeedResult(seed, best_u, best_f, n))
+        progress.search_seed_done(k, best_f, n, time.perf_counter() - t_seed)
     best = min(out, key=lambda s: s.f)
-    return SearchResult(out, best.x, best.f, f_start)
+    res = SearchResult(out, best.x, best.f, f_start)
+    progress.search_done(res.best_f, res.spread, time.perf_counter() - t_search)
+    return res

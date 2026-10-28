@@ -24,7 +24,7 @@ from SALib.sample import morris as morris_sample
 from SALib.sample import sobol as sobol_sample
 from scipy.stats import spearmanr
 
-from sagetrans import atmosphere
+from sagetrans import atmosphere, progress
 from sagetrans.analysis import braking, energy, restricted
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
 from sagetrans.analysis.descent import DescentLimits
@@ -280,7 +280,8 @@ def oat(model: HeadlineModel) -> list[OATRow]:
     """Each input alone at +-50 % and +-100 % of its half-range (nominal elsewhere)."""
     base = model({})
     rows: list[OATRow] = []
-    for inp in model.inputs:
+    progress.phase("sensitivity: one at a time")
+    for n_in, inp in enumerate(model.inputs, start=1):
         pts = {
             "lo": inp.nominal - inp.half_range, "hi": inp.nominal + inp.half_range,
             "lo_half": inp.nominal - 0.5 * inp.half_range,
@@ -292,6 +293,7 @@ def oat(model: HeadlineModel) -> list[OATRow]:
                 OATRow(inp.name, out, inp.status, base[out], res["lo"][out], res["hi"][out],
                        res["lo_half"][out], res["hi_half"][out])
             )  # fmt: skip
+        progress.step(f"one at a time: {inp.name}", n_in, len(model.inputs))
     return rows
 
 
@@ -322,13 +324,18 @@ def _problem(inputs: Sequence[UncertainInput]) -> dict[str, Any]:
     }
 
 
-def _evaluate(model: HeadlineModel, x: np.ndarray) -> tuple[dict[str, np.ndarray], int]:
+def _evaluate(
+    model: HeadlineModel, x: np.ndarray, label: str = "sampling"
+) -> tuple[dict[str, np.ndarray], int]:
     names = [i.name for i in model.inputs]
     ys: dict[str, list[float]] = {o: [] for o in model.outputs}
-    for row in x:
+    every = max(1, len(x) // 30)  # a progress step per few percent of the sample
+    for i, row in enumerate(x, start=1):
         out = model(dict(zip(names, row.tolist(), strict=True)))
         for o in model.outputs:
             ys[o].append(out[o])
+        if i % every == 0 or i == len(x):
+            progress.step(f"{label}: {i} of {len(x)} samples", i, len(x))
     arr = {o: np.array(v) for o, v in ys.items()}
     n_failed = int(np.sum(np.isnan(np.column_stack(list(arr.values()))).any(axis=1)))
     better_high: frozenset[str] = getattr(model, "higher_is_better", frozenset())
@@ -343,7 +350,7 @@ def global_morris(model: HeadlineModel, r: int, seed: int = 0, levels: int = 4) 
     """Morris elementary effects with `r` trajectories: index = mu_star."""
     prob = _problem(model.inputs)
     x = morris_sample.sample(prob, N=r, num_levels=levels, seed=seed)
-    ys, n_failed = _evaluate(model, x)
+    ys, n_failed = _evaluate(model, x, f"Morris r={r}")
     index, detail = {}, {}
     for o, y in ys.items():
         res = morris_analyze.analyze(prob, x, y, num_levels=levels, seed=seed)
@@ -356,7 +363,7 @@ def global_sobol(model: HeadlineModel, n: int, seed: int = 0) -> GlobalResult:
     """Sobol first- and total-order indices from a Saltelli sample of base size `n` (power of 2)."""
     prob = _problem(model.inputs)
     x = sobol_sample.sample(prob, n, calc_second_order=False, seed=seed)
-    ys, n_failed = _evaluate(model, x)
+    ys, n_failed = _evaluate(model, x, f"Sobol n={n}")
     index, detail = {}, {}
     for o, y in ys.items():
         res = sobol_analyze.analyze(prob, y, calc_second_order=False, seed=seed)

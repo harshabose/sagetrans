@@ -63,7 +63,7 @@ ignore_missing_imports = true
 root_package = "sagetrans"
 
 [[tool.importlinter.contracts]]
-name = "Layering: analysis > control > dynamics > physics > atmosphere > config"
+name = "Layering: analysis > control > dynamics > physics > atmosphere > config > progress"
 type = "layers"
 layers = [
     "sagetrans.io",
@@ -73,6 +73,7 @@ layers = [
     "(sagetrans.physics)",
     "sagetrans.atmosphere",
     "sagetrans.config",
+    "sagetrans.progress",  # imports nothing; every layer may report progress through it
 ]
 
 # docs/OUTPUTS_spec.md 1: the viewer reads a results folder; it imports no analysis code.

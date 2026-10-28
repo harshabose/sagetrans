@@ -95,6 +95,10 @@ OUTPUT_ONLY = (
     "io/view/", "io/assemble.py", "io/cli.py", "io/study.py", "io/figures.py", "io/report.py",
     "io/gate.py", "io/recommended.py", "io/results.py", "io/record.py", "io/ci_check.py",
     "__main__.py",
+    # the progress hook and its sinks only report: a hook never calls the function it watches,
+    # never touches a random generator, and a sink fault is swallowed (tests/unit/test_progress.py
+    # checks that a search with a sink returns the same numbers as one without)
+    "progress.py", "io/runlog.py",
 )  # fmt: skip
 
 
