@@ -181,6 +181,40 @@ def _section_d(q: dict[str, Any]) -> str | None:
     return "\n".join(parts)
 
 
+def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any]) -> Table:
+    """E at the register and at the recommended settings, side by side, one row per case, site and
+    mission, with FT's mean energy of the whole forward transition at the same settings as an
+    information column (not a gate)."""
+    ft = {r["case"]: r for r in tables.get("FT_params", [])}
+    rows: Table = []
+    for case, suffix, ft_case, v, thr in (
+        ("register", "", "register", inp.airspeed_min,
+         inp.tkoff_thr_max_raw if inp.tkoff_thr_max_raw is not None else inp.tkoff_thr_max),
+        ("recommended", "_recommended", "optimum", rec["airspeed_min"], rec["tkoff_thr_max"]),
+    ):
+        fwd: dict[tuple[Any, Any], dict[str, Any]] = {}
+        for r in tables.get("E_segments" + suffix, []):
+            if r.get("segment") == "fwd_transition":
+                fwd.setdefault((r["site_amsl_m"], r["mission"]), r)
+        ft_e = ft.get(ft_case, {}).get("mean_energy_kJ")
+        for s in tables.get("E_summary" + suffix, []):
+            f = fwd.get((s["site_amsl_m"], s["mission"]), {})
+            e_kj = f["energy_Wh"] * 3.6 if isinstance(f.get("energy_Wh"), int | float) else None
+            ratio: float | str = ""
+            if e_kj is not None and isinstance(ft_e, int | float) and ft_e:
+                ratio = e_kj / ft_e
+            rows.append({
+                "case": case, "site_amsl_m": s["site_amsl_m"], "mission": s["mission"],
+                "airspeed_min_ms": v, "tkoff_thr_max": thr,
+                "max_range_km": s.get("max_range_km", ""),
+                "e_fwd_kJ": "" if e_kj is None else e_kj, "e_fwd_time_s": f.get("time_s", ""),
+                "e_fwd_distance_m": f.get("distance_m", ""),
+                "ft_mean_energy_kJ": ft_e if ft_e is not None else "",
+                "e_fwd_over_ft": ratio,
+            })
+    return rows
+
+
 def assemble(
     inp: StudyInputs,
     task_results: Mapping[str, dict[str, Any]],
@@ -368,6 +402,20 @@ def assemble(
                                                           "worst_sink_ms", "worst_stall_margin",
                                                           "n_flags"]),
         ])  # fmt: skip
+
+    rec_key = next((t for t in task_results if t.startswith("basics_rec:")), None)
+    if rec_key is not None:
+        rec_task = task_results[rec_key]
+        tables.update(rec_task["tables"])
+        errors += [f"recommended settings: {e}" for e in rec_task.get("errors", [])]
+        tables["E_cases"] = e_cases(inp, tables, rec_task)
+        sections["E and Q2 at the recommended settings"] = (  # the register case stays the headline
+            "AIRSPEED_MIN and TKOFF_THR_MAX of the FT optimum instead of the register's; the "
+            "register case above stays the headline. D is re-run at the recommended entry speed. "
+            "`ft_mean_energy_kJ` is the mean energy of FT's whole simulated forward transition at "
+            "the same settings, `e_fwd_over_ft` its ratio to E's quasi-steady estimate: "
+            "information only, not a check."
+            + "\n\n" + md_table(tables["E_cases"]))
 
     c_task = task_results.get("C", {})
     c_res = c_task.get("result")

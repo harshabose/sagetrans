@@ -1196,6 +1196,12 @@ def follow_up_tasks(
             tid = ft_task_id(results[win]["snapped"])
             if tid not in done:
                 out.append(tid)
+    # the recommended settings, once the FT report exists: E and Q2 are repeated at them
+    ft_done = next((t for t in results if t.startswith("FT:")), None)
+    if ft_done is not None and set(inp.study.analyses) & {"E", "Q2"}:
+        rec = rec_task_id(parse_ft_id(ft_done.split(":", 1)[1]))
+        if rec not in done:
+            out.append(rec)
     return out
 
 
@@ -1283,6 +1289,48 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
         "tables": {"FT_params": params, "FT_runs": run_rows, "FT_sens": sens_rows,
                    "FT_history": hist},
     }  # fmt: skip
+
+
+def with_settings(inp: StudyInputs, airspeed_min: float, tkoff_thr_max: float) -> StudyInputs:
+    """The inputs with `AIRSPEED_MIN` and `TKOFF_THR_MAX` replaced everywhere they are read."""
+    return dataclasses.replace(
+        inp, airspeed_min=airspeed_min, tkoff_thr_max=tkoff_thr_max,
+        tkoff_thr_max_raw=tkoff_thr_max,
+        mission=dataclasses.replace(inp.mission, v_trans=airspeed_min),
+        forward=dataclasses.replace(inp.forward, airspeed_min_eas=airspeed_min,
+                                    tkoff_thr_max=tkoff_thr_max),
+        start_params={**inp.start_params, "airspeed_min": airspeed_min,
+                      "tkoff_thr_max": tkoff_thr_max},
+    )
+
+
+def rec_task_id(optimum: dict[str, float]) -> str:
+    """`basics_rec:<AIRSPEED_MIN m/s>:<TKOFF_THR_MAX %>`: D, E and Q2 at the recommended settings.
+
+    The FT optimum's values are in the id, so a changed optimum is a new cache key (a re-run).
+    """
+    return f"basics_rec:{round(optimum['airspeed_min'])}:{round(optimum['tkoff_thr_max'] * 100)}"
+
+
+def task_basics_rec(inp: StudyInputs, arg: str) -> dict[str, Any]:
+    """E and Q2 (and D, whose recommendation E's back transition reads) at the recommended
+    `AIRSPEED_MIN` and `TKOFF_THR_MAX` of the FT optimum: the same code as `task_basics`, on
+    inputs with those two values replaced. The tables carry the suffix `_recommended`; the
+    `register` case stays the headline. The sensitivity is not repeated: it stays at the
+    register values.
+    """
+    v, thr = (int(x) for x in arg.split(":"))
+    keep = [a for a in inp.study.analyses if a in ("D", "E", "Q2")]
+    study = inp.study.model_copy(update={"analyses": keep})
+    inp2 = dataclasses.replace(with_settings(inp, float(v), thr / 100.0), study=study)
+    out = task_basics(inp2)
+    tables = {f"{k}_recommended": rows for k, rows in out["tables"].items()
+              if k.startswith(("E_", "Q2_"))}
+    return {"tables": tables, "errors": out.get("errors", []), "airspeed_min": float(v),
+            "tkoff_thr_max": thr / 100.0,
+            "notes": [f"E and Q2 at the FT optimum's AIRSPEED_MIN {v} m/s and TKOFF_THR_MAX "
+                       f"{thr} %: D is re-run at that entry speed, so E's back transition and its "
+                       "planned deceleration follow the recommended settings"]}
 
 
 def forward_runs(
@@ -1589,6 +1637,8 @@ def run_task(inp: StudyInputs, task: str) -> dict[str, Any]:
         return task_basics(inp)
     if kind == "C":
         return task_c(inp)
+    if kind == "basics_rec":
+        return task_basics_rec(inp, arg)
     if kind == "FT":
         return task_ft(inp, arg)
     if kind == "FT_grid":

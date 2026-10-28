@@ -16,6 +16,11 @@
 >   `braking.entry_airspeed(AIRSPEED_MIN, rho, D.entry_convention)`, the same speed D, C and B1 use, and the register
 >   entry `mission.speeds.entry_eas_ms` (22 / 20.9, a cruise speed) is gone. The kinetic energy between the glide speed
 >   and the exit speed is therefore not charged to any segment of E (it was charged, in part, to the back transition).
+> - **Recommended case (2026-10-28).** When FT runs with E or Q2, `basics_rec:<AIRSPEED_MIN>:<TKOFF_THR_MAX %>` repeats
+>   D, E and Q2 at the FT optimum's snapped values (tables `E_*_recommended`, `Q2_*_recommended`, and `E_cases` side by
+>   side with the register case, which stays the headline). The values are in the task id, so a new FT optimum re-runs it.
+>   The sensitivity stays at the register values. `E_cases` also prints E's forward-transition energy next to the mean
+>   energy of FT's simulated forward transition at the same settings (information only).
 >
 > Result (repo run, defaults): round-trip radius 45.9 / 46.3 / 46.5 / 46.4 km at 0 / 1500 / 2500 / 5000 m (flown distance about 92 to 93 km); one-way 92.1 / 93.1 / 93.7 / 94.4 km; reserve 150 to 161 Wh. (Since 2026-10-27 E reads `AIRSPEED_MIN` as an equivalent airspeed, `Q2.feed_convention: eas`; with the earlier true-airspeed reading the radii were 45.9 / 46.3 / 46.6 / 47.1 km and the one-way ranges 92.1 / 93.1 / 93.7 / 95.1 km.) **The "100 km fits only at 5000 m" reading in section 4 was an artefact of fixed TAS** and is withdrawn. Open: whether `eta_usable` should read 0.9 (if the battery cut-off is 0.1 rather than 0.2, the same pack gives more usable energy; O-15), DEC-1, DEC-8.
 

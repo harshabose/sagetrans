@@ -739,6 +739,22 @@ def build_e(c: Ctx) -> Out:
         ("E_hover_check", None),
         ("E_reserve", None),
     ]
+    cases = c.rows("E_cases")
+    if cases:
+        cols = ["case", "site_amsl_m", "mission", "airspeed_min_ms", "tkoff_thr_max", "max_range_km",
+                "e_fwd_kJ", "e_fwd_time_s", "e_fwd_distance_m", "ft_mean_energy_kJ", "e_fwd_over_ft"]
+        o.figures.append(panelbox(
+            "Register against recommended settings",
+            "E repeated at the AIRSPEED_MIN and TKOFF_THR_MAX of the FT optimum (D re-run at that entry "
+            "speed). The register case is the headline above. The last two columns are information "
+            "only: the mean energy of FT's simulated forward transition at the same settings and "
+            "E's quasi-steady estimate against it; a large difference is worth knowing about, it is "
+            "not a check.",
+            table_html("E_cases", [k for k in cols if any(k in r for r in cases)], cases),
+        ))
+        o.tables += [("E_summary_recommended", None), ("E_segments_recommended", None),
+                     ("E_budget_recommended", None), ("E_hover_check_recommended", None),
+                     ("Q2_pusher_margin_recommended", None), ("Q2_worst_recommended", None)]
     return o
 
 
@@ -1634,6 +1650,8 @@ def build_sens(c: Ctx) -> Out:
                 ch.multiples(panels, 2),
             )
         )
+    o.notes.append("The sensitivity is evaluated at the register settings (AIRSPEED_MIN, TKOFF_THR_MAX, "
+                   "Q_TRANS_DECEL and the other register values), not at the recommended ones.")
     o.tables = [("sens_oat", None), ("sens_global", None)]
     return o
 
