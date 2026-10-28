@@ -75,6 +75,7 @@ def cma_minimise(
         key = tuple(np.round(np.clip(u, 0.0, 1.0), 9).tolist())
         if key not in cache:
             cache[key] = float(fn(np.clip(u, 0.0, 1.0)))
+            progress.search_eval(len(cache))
         return cache[key]
 
     t_search = time.perf_counter()

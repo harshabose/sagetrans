@@ -116,15 +116,30 @@ def _worker(
 
 
 # ---- pre-flight --------------------------------------------------------------------------------
-def _task_estimate(inp: StudyInputs, work: Path | None, tasks: list[str]) -> tuple[float, int]:
-    """(seconds of work still to do, tasks that are cached) for the planned tasks."""
-    total, n_cached = 0.0, 0
-    for t in tasks:
-        if work and _cache_path(work, inp, t).is_file():
-            n_cached += 1
-        else:
-            total += TASK_COST.get(t.split(":")[0], 100)
-    return total, n_cached
+def _task_estimate(
+    inp: StudyInputs, work: Path | None, tasks: list[str], workers: int
+) -> tuple[float, int]:
+    """(wall seconds still to go, tasks that are cached) for the planned tasks.
+
+    The first wave takes as long as its longest task or, if there are more tasks than workers, the
+    work divided by the workers. The follow-up tasks (the fine pass, the FT report, E and Q2 at
+    the recommended settings) wait for it, so they add up. The costs are the observed ones
+    (`stages.TASK_COST`).
+    """
+    pending = [t for t in tasks if not (work and _cache_path(work, inp, t).is_file())]
+    n_cached = len(tasks) - len(pending)
+    if not pending:
+        return 0.0, n_cached
+    costs = [TASK_COST.get(t.split(":")[0], 100) for t in pending]
+    wall = max(max(costs), sum(costs) / max(1, workers))
+    wanted = set(inp.study.analyses)
+    if "FT" in wanted and any(t.startswith("FT_grid:") for t in pending):
+        if inp.study.FT.grid.fine_offsets_s:
+            wall += TASK_COST["FT_fine"]
+        wall += TASK_COST["FT"]
+        if wanted & {"E", "Q2"}:
+            wall += TASK_COST["basics_rec"]
+    return float(wall), n_cached
 
 
 def preflight(inp: StudyInputs, work: Path | None = None) -> list[str]:
@@ -150,9 +165,9 @@ def preflight(inp: StudyInputs, work: Path | None = None) -> list[str]:
         lines.append(f"  - {t:<14} {'cached' if cached else f'~{est:.0f} s'}")
     lines += wave_plan(inp)
     workers = _n_workers(inp, len(tasks), None)
-    total, _ = _task_estimate(inp, work, tasks)
+    total, _ = _task_estimate(inp, work, tasks, workers)
     if total:
-        mins = total / max(1, workers) / 60
+        mins = total / 60
         lines.append(f"estimated wall time: ~{mins:.0f}+ min on {workers} worker(s)")
     else:
         lines.append("estimated wall time: nothing to run (all cached)")
@@ -181,8 +196,8 @@ def banner(inp: StudyInputs, work: Path, workers: int | None) -> list[str]:
     libs = record.library_versions()
     tasks = plan_tasks(inp)
     n_work = _n_workers(inp, len(tasks), workers)
-    total, n_cached = _task_estimate(inp, work, tasks)
-    est = (f"estimated wall time ~{total / n_work / 60:.0f}+ min on {n_work} worker(s)"
+    total, n_cached = _task_estimate(inp, work, tasks, n_work)
+    est = (f"estimated wall time ~{total / 60:.0f}+ min on {n_work} worker(s)"
            if total else "nothing to run: every task is cached")
     kinds = Counter(t.split(":")[0] for t in tasks)
     lines = [
@@ -270,9 +285,8 @@ def run_study(
     outcome = StudyOutcome(EXIT_OK)
     rl = runlog.RunLog(run_dir, log, level=log_level, heartbeat=heartbeat)
     est_tasks = plan_tasks(inp)
-    est_total, _ = _task_estimate(inp, work, est_tasks)
-    rl.start(banner(inp, work, workers),
-             est_total / _n_workers(inp, len(est_tasks), workers) if est_total else None)
+    est_total, _ = _task_estimate(inp, work, est_tasks, _n_workers(inp, len(est_tasks), workers))
+    rl.start(banner(inp, work, workers), est_total or None)
 
     results: dict[str, dict[str, Any]] = {}
     failed: dict[str, str] = {}

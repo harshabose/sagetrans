@@ -293,3 +293,42 @@ def test_a_full_study_stays_inside_the_terminal_line_budget(tmp_path):
     rl.summary(3.5 * 3600, {}, "python run.py --view")
     assert len(lines) <= 400, len(lines)
     assert all(x.isascii() for x in lines)
+
+
+def test_evaluations_keep_a_task_alive_between_generations_and_the_log_stays_short(tmp_path):
+    clk = Clock()
+    rl, lines = _run(tmp_path, clk)
+    rl.submit(["FT_grid:17000"])
+    w = _worker_with_search(tmp_path, clk, "FT_grid:17000")
+    rl.poll()
+    w("search_start", {"name": "ft", "n_seeds": 3, "maxiter": 12})
+    for i in range(1, 21):  # 20 minutes without a generation ending, an evaluation every minute
+        clk.t += 60
+        w("search_eval", {"evals": i})
+        w.flush()
+        rl.poll()
+    assert not any("no update for" in x for x in lines)  # before: flagged after 5 minutes
+    st = runlog.read_json(w.state_path)
+    assert st is not None and st["search"]["evals_total"] == 20
+    # a burst of 1000 evaluations in one second writes one log line, not 1000
+    before = len(w.log_path.read_text(encoding="utf-8").splitlines())
+    for i in range(1000):
+        w("search_eval", {"evals": 100 + i})
+    after = len(w.log_path.read_text(encoding="utf-8").splitlines())
+    assert after - before <= 1
+    w.close(True)
+
+
+def test_the_banner_estimate_is_the_observed_wall_time_of_a_full_study():
+    from sagetrans.io.inputs import load_inputs
+    from sagetrans.io.stages import TASK_COST, plan_tasks
+
+    inp = load_inputs(ROOT / "configs")
+    tasks = plan_tasks(inp)
+    wall, cached = study._task_estimate(inp, None, tasks, 24)
+    assert cached == 0 and 3.8 * 3600 <= wall <= 4.4 * 3600  # the clean run took 4.1 h
+    assert wall >= TASK_COST["C"] + TASK_COST["FT_fine"] + TASK_COST["FT"]  # C, then the follow-ups
+    few, _ = study._task_estimate(inp, None, tasks, 4)
+    assert few > wall  # fewer workers than tasks: the work divided by the workers dominates
+    assert study._task_estimate(inp, None, [], 24) == (0.0, 0)
+    assert plan_tasks(inp)[0] == "C"  # the longest task starts first

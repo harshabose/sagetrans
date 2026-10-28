@@ -53,8 +53,13 @@ RHO0 = float(atmosphere.density(0.0))
 Table = list[dict[str, Any]]
 
 # rough wall-clock seconds on a laptop, for scheduling and for the pre-flight estimate
-TASK_COST = {"basics": 60, "C": 330, "FT": 300, "FT_grid": 3000, "FT_scan": 2000, "B1": 400,
-             "sensitivity": 220}
+# Seconds per task as observed in the last full clean run (2026-10-29: 24 workers on a 24-core
+# machine, all busy, so they include the slowdown of running side by side; one worker alone is
+# about 1.7 times faster). The run took 4.1 h: C 10269 s, FT_grid 6.7 to 8.6 ks, FT_scan 6.4 to
+# 9.1 ks, B1 1.0 to 1.7 ks, the fine-pass FT_grid points 3.9 to 4.0 ks, basics 848 s.
+# "FT_fine" is the fine pass (a FT_grid point planned after the first wave).
+TASK_COST = {"basics": 850, "C": 10300, "FT": 370, "FT_grid": 7700, "FT_fine": 4000,
+             "FT_scan": 7700, "B1": 1400, "sensitivity": 420, "basics_rec": 110}
 
 
 def tas(eas: float, scen: Scenario) -> float:
@@ -310,7 +315,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         maps: dict[str, Any] = {}
         rows: Table = []
         win: Table = []
-        for name in c.scenarios:
+        for k_sc, name in enumerate(c.scenarios, start=1):
+            progress.step(f"A: feasibility map of {name}", k_sc - 1, len(c.scenarios))
             sc = inp.scenarios[name]
             vps = sc.vehicle_for(vp)
             v_grid = [tas(v, sc) for v in c.v0_eas_ms]

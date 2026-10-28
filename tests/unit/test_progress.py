@@ -73,3 +73,17 @@ def test_a_search_reports_its_seed_and_iteration_numbers():
         f["evals"] for f in its if f["seed_idx"] == 1)
     done = [f for k, f in ev if k == "search_seed_done"]
     assert [f["seed_idx"] for f in done] == [1, 2, 3] and all(f["secs"] >= 0 for f in done)
+
+
+def test_a_search_reports_every_new_evaluation_not_only_every_generation():
+    ev: list[int] = []
+    progress.install(lambda kind, f: ev.append(f["evals"]) if kind == "search_eval" else None)
+    seen: list[float] = []
+
+    def bowl(u: np.ndarray) -> float:
+        seen.append(1.0)
+        return _bowl(u)
+
+    cma_minimise(bowl, np.array([0.5, 0.5]), seeds=(1,), popsize=4, maxiter=3)
+    assert ev and len(ev) == len(seen)  # one event per call of the cost function
+    assert ev == sorted(ev) and ev[-1] == len(seen)  # a running count of the cache

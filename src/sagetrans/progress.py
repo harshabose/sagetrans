@@ -54,6 +54,11 @@ def search_iter(seed_idx: int, it: int, evals: int, best: float) -> None:
     _emit("search_iter", seed_idx=seed_idx, it=it, evals=evals, best=best)
 
 
+def search_eval(evals: int) -> None:
+    """One cost evaluation finished (`evals` so far): the search is alive between generations."""
+    _emit("search_eval", evals=evals)
+
+
 def search_seed_done(seed_idx: int, f: float, evals: int, secs: float) -> None:
     _emit("search_seed_done", seed_idx=seed_idx, f=f, evals=evals, secs=secs)
 

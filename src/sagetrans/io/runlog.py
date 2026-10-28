@@ -109,6 +109,7 @@ class WorkerLog:
         self.log_path = logs / f"{stem(task)}.log"
         self.state_path = logs / f"{stem(task)}.state.json"
         self._lock = threading.Lock()
+        self._last_eval_log = -1e18
         self._fh = self.log_path.open("w", encoding="utf-8", buffering=1)
         now = clock()
         self.state: dict[str, Any] = {
@@ -142,10 +143,19 @@ class WorkerLog:
     def __call__(self, kind: str, f: dict[str, Any]) -> None:
         now = self.clock()
         with self._lock:
-            ms = int((now % 1) * 1000)
-            self._fh.write(f"{clock_text(now)}.{ms:03d}\t{kind}\t{json.dumps(f, default=str)}\n")
             st = self.state
             st["last_event"] = now
+            if kind == "search_eval":
+                # one per cost evaluation: it keeps the task visibly alive between generations
+                # (one generation of a 16-member ensemble takes minutes under load). The state
+                # takes it at once; the log gets a line at most every `interval` seconds.
+                if st["search"] is not None:
+                    st["search"]["evals_total"] = f["evals"]
+                if now - self._last_eval_log < self.interval:
+                    return
+                self._last_eval_log = now
+            ms = int((now % 1) * 1000)
+            self._fh.write(f"{clock_text(now)}.{ms:03d}\t{kind}\t{json.dumps(f, default=str)}\n")
             if kind == "phase":
                 st["phase"] = f["label"]
             elif kind == "search_start":

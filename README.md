@@ -96,6 +96,11 @@ A full study takes hours, so it reports what it is doing. Every line is plain AS
 | `heartbeat  1.2 h elapsed  tasks: 9 done, 22 running, 3 waiting` | followed by one line per running task: phase, seed `k/n`, iteration, best `J`, the task's elapsed time and a rough `~N min left` (from the pace so far, so only an estimate), or `no update for N min` when it has been silent for 5 min |
 | summary | every task with its seconds, the slowest task and the critical path (the slowest task of each wave, added), wall time against the estimate, failed tasks with the path of their log, and the next command |
 
+"Silent" means no progress event of any kind: a search reports every cost evaluation (the
+state file takes it at once, the log at most every 5 s), so a long first generation no longer
+looks stuck. The banner's time estimate is built from the times observed in the last full run
+(`TASK_COST` in `io/stages.py`): the longest task of the first wave plus the follow-up waves.
+
 The terminal shows a heartbeat block every 15 minutes at `normal` (every heartbeat at `verbose`, none at
 `quiet`), so a full clean study prints a few hundred lines. This is a deliberate limit: a line every
 60 s for 3.5 h would be 210 lines on its own. The heartbeat itself still runs every `--heartbeat` seconds
