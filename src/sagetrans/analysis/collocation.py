@@ -15,6 +15,13 @@ a stall-cliff the mesh cannot resolve returns a solution whose replay disagrees,
 solution is not `verified`. Controls are EFFECTIVE rotor throttles (ESC dead zone removed from
 the NLP model and re-applied in the replay).
 
+Entry. `make_problem` starts at level cruise (the legacy entry that B2 still starts from);
+`make_problem_exit` starts at the AIRBRAKE exit like analysis D and C
+(`braking.airbrake_entry_state`).
+The study's B1 is the exit problem: the least bus energy from the AIRBRAKE exit to the stop as a
+function of distance, under a STATED wing limit (`stall_margin` x alpha_s, or `alpha_max`). It is
+an energy-against-distance front to set beside C's `C_q_curve`, not a strict lower bound (B-2).
+
 Not modelled here: a sourced vortex-ring-state exclusion (no boundary available), and a free
 rotor start condition is an option (`prespin_max`) whose spin-up energy before entry is NOT
 counted, so comparisons with B2 and C use the default of rotors at rest.
@@ -29,8 +36,9 @@ from dataclasses import dataclass, field, replace
 import casadi as ca
 import numpy as np
 
-from sagetrans.analysis import runs
+from sagetrans.analysis import braking, runs
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
+from sagetrans.analysis.ensemble import RunMetrics
 from sagetrans.control.ardupilot_like import BackTransitionParams, Position1Controller
 from sagetrans.dynamics.simulate import Result, simulate
 from sagetrans.physics.params import VehicleParams
@@ -59,6 +67,8 @@ class CollocationOptions:
     mu_strategy: str = "monotone"
     stall_constraint: bool = True
     stall_margin: float = 0.85  # |alpha_w| <= margin * alpha_s while the wing carries load
+    # rad; if set, replaces stall_margin * alpha_s as the wing-angle limit (the C-envelope variant)
+    alpha_max: float | None = None
     vh_max: float | None = 3.0  # operational |v_h| limit at the nodes, m/s (None = free)
     tol: float = 1e-5
     hessian: str = "exact"  # limited-memory stalls on this model
@@ -159,13 +169,39 @@ def make_problem(
     return Problem(vps, scen, x0, opt or CollocationOptions(), dict(controller or {}), theta_p)
 
 
+def make_problem_exit(
+    vp: VehicleParams,
+    scen: Scenario,
+    base_bp: BackTransitionParams,
+    v_air: float,
+    opt: CollocationOptions,
+    controller: dict[str, float],
+    theta_p: float,
+    rotor_start: str = "carry",
+) -> Problem:
+    """Build a collocation problem from the AIRBRAKE-exit state at true airspeed `v_air`.
+
+    The entry is `braking.airbrake_entry_state(vps, scen, base_bp, v_air, rotor_start=...)`: the
+    same state and the same speed rule as analyses D and C. All nine states, the rotor speed
+    included, are fixed to it (`prespin_max` stays 0). `base_bp` supplies `theta_fw0` and, for an
+    `"idle"` start, `delta_min`. Raises `ValueError` if the ground speed is not above `opt.v_f`.
+    """
+    vps = scen.vehicle_for(vp)
+    x0, _ = braking.airbrake_entry_state(vps, scen, base_bp, v_air, opt.v_f, rotor_start)
+    return Problem(vps, scen, x0, opt, dict(controller), theta_p)
+
+
 # ---- initial guesses ---------------------------------------------------------------------------
 
 
 def baseline_run(
     prob: Problem, theta_a: float = math.radians(20.0), t_bt: float = 3.0
 ) -> Result:
-    """The baseline Position1 controller flown from the problem's entry state."""
+    """The baseline Position1 controller flown from the problem's entry state.
+
+    A guess generator only (it calls the legacy controller with the repo altitude hold from
+    `prob.x0`), not a baseline for comparison: see `bound_check_c` (B-1).
+    """
     from sagetrans.analysis import restricted
 
     vps, scen, opt = prob.vp, prob.scen, prob.opt
@@ -186,7 +222,10 @@ def baseline_run(
 def baseline_guess(
     prob: Problem, theta_a: float = math.radians(20.0), t_bt: float = 3.0
 ) -> tuple[np.ndarray, np.ndarray, float]:
-    """Dynamic guess from the baseline run: (x nodes, u nodes in effective throttle, T_f)."""
+    """Dynamic guess from the baseline run: (x nodes, u nodes in effective throttle, T_f).
+
+    A guess generator, not a baseline for comparison (B-1).
+    """
     sim = baseline_run(prob, theta_a, t_bt)
     t_f = float(sim.t[-1])
     tau = np.linspace(0.0, t_f, prob.opt.n + 1)
@@ -219,10 +258,13 @@ def _resample(
 
 
 def _stall_expr(aux: ca.MX, prob: Problem, v_s: float, opt: CollocationOptions) -> ca.MX:
-    """<= 0 when the wing is within its stall margin; relaxed below the 1g stall speed."""
+    """<= 0 when the wing is within its angle limit; relaxed below the 1g stall speed.
+
+    The limit is `opt.alpha_max` if set, else `opt.stall_margin` x alpha_s.
+    """
     aw = aux[I_ALPHA] + prob.vp.wing.i_w
     load = 1.0 / (1.0 + ca.exp(-(aux[I_V] - v_s)))
-    lim = opt.stall_margin * prob.vp.wing.alpha_s
+    lim = opt.alpha_max if opt.alpha_max is not None else opt.stall_margin * prob.vp.wing.alpha_s
     expr: ca.MX = load * (aw * aw - lim * lim)
     return expr
 
@@ -460,6 +502,44 @@ def replay(prob: Problem, sol: B1Solution) -> ReplayCheck:
     return ReplayCheck(sim, metrics, coll, rel)
 
 
+def schedule_summary(prob: Problem, check: ReplayCheck, gate: float = 5.0) -> dict[str, float]:
+    """The shape of a replayed schedule: when the rotors come in and the peaks.
+
+    `t_rotor_on` is the first time after the throttle has rested at its minimum (`idle`, the lowest
+    effective throttle of the run) that the effective rotor throttle exceeds `idle + 0.05`; the
+    airspeed and V / V_s at that time follow. The peak wing angle is taken over samples with the
+    airspeed at or above `gate` (`alpha_w_peak_gated_deg`) and over samples at or above the 1g stall
+    speed (`alpha_w_peak_above_vs_deg`). Pitch and rotor throttle peaks and the end climb rate
+    complete it. NaN where the rotors never come in.
+    """
+    sim = check.sim
+    dz = prob.dead_zone
+    eff = np.maximum(sim["delta_r"] - dz, 0.0) / (1.0 - dz)
+    v = sim["V"]
+    v_s = runs.stall_speed(prob.vp, prob.scen.rho)
+    alpha_w = sim["alpha"] + prob.vp.wing.i_w
+    idle = float(np.min(eff))
+    i_rest = int(np.argmax(eff <= idle + 1e-3))
+    after = np.flatnonzero(eff[i_rest:] > idle + 0.05)
+    k = i_rest + int(after[0]) if len(after) else None
+    nan = math.nan
+
+    def peak_deg(mask: np.ndarray) -> float:
+        return math.degrees(float(np.max(np.abs(alpha_w[mask])))) if mask.any() else nan
+
+    return {
+        "idle_throttle": idle,
+        "t_rotor_on_s": float(sim.t[k]) if k is not None else nan,
+        "V_rotor_on_ms": float(v[k]) if k is not None else nan,
+        "V_over_Vs_rotor_on": float(v[k] / v_s) if k is not None else nan,
+        "alpha_w_peak_gated_deg": peak_deg(v >= gate),
+        "alpha_w_peak_above_vs_deg": peak_deg(v >= v_s),
+        "theta_peak_deg": math.degrees(float(np.max(np.abs(sim["theta"])))),
+        "rotor_throttle_peak": float(np.max(eff)),
+        "vh_end_ms": float(sim["vh"][-1]),
+    }
+
+
 # ---- Pareto sweeps, robustness, comparison -----------------------------------------------------
 
 
@@ -536,12 +616,12 @@ def min_excursion(prob: Problem, eps_x: float) -> Verified:
 
 
 def with_options(prob: Problem, **kw: float | None) -> Problem:
-    """The same problem with some options changed."""
-    return make_problem(
-        prob.vp, prob.scen, float(prob.x0[2] + prob.scen.headwind_ms),
+    """The same problem (same entry state, cruise or AIRBRAKE exit) with some options changed."""
+    return Problem(
+        prob.vp, prob.scen, prob.x0,
         replace(prob.opt, **kw),  # type: ignore[arg-type]
         prob.controller, prob.theta_p,
-    )
+    )  # fmt: skip
 
 
 # ---- comparison with the baseline, C and B2 ----------------------------------------------------
@@ -549,17 +629,25 @@ def with_options(prob: Problem, **kw: float | None) -> Problem:
 
 @dataclass
 class BoundCheck:
-    """B1 against the baseline controller on the constraints the baseline itself satisfies."""
+    """B1 against a reference controller run on the constraints that run itself satisfies."""
 
     baseline: dict[str, float]
     b1: B1Solution
     energy_margin: float  # (baseline - B1) / baseline; >= 0 means B1 is the bound
+    check: ReplayCheck | None = None  # replay of `b1` (T-11); `bound_check_c` sets it
+
+    @property
+    def verified(self) -> bool:
+        return self.b1.ok and self.check is not None and self.check.passes()
 
 
 def bound_check(
     prob: Problem, theta_a: float = math.radians(20.0), t_bt: float = 3.0
 ) -> BoundCheck:
-    """B1 at the baseline's own excursion and distance, under B1's operational limits.
+    """LEGACY: B1 at the baseline's own excursion and distance, under B1's operational limits.
+
+    The baseline here is the 20 deg / 3 s guess controller with the repo altitude hold (B-1), not
+    analysis C: the study uses `bound_check_c`.
 
     B1 keeps |v_h|, slew and stall-margin limits that the baseline does not respect. If it is
     still cheaper than the baseline there, the bound (which has fewer limits) is at least that
@@ -585,18 +673,63 @@ def bound_check(
     return BoundCheck(base, sol, (base["energy"] - sol.energy) / base["energy"])
 
 
+def bound_check_c(
+    prob: Problem, c: RunMetrics, margin: float = 1.02, ns: Sequence[int] = (20,)
+) -> BoundCheck:
+    """B1 at analysis C's own excursion and distance: the same-problem gap.
+
+    `c` is C's `evaluate_c` result for the same scenario (at the C optimum, or at the register
+    parameters with q = 2). B1 is solved for least energy with `eps_h = max(c.excursion x margin,
+    0.3)` and `eps_x = c.distance x margin`, from the three starts of `solve_verified`, and
+    replayed.
+    `energy_margin = (c.energy - B1 energy) / c.energy`. B1 is clairvoyant and open loop, and it
+    has no rotor lag where C has `rotor_lag_s`, so the gap is an upper bound on what the structure
+    of the ArduPilot controller costs. A solver failure (`b1.ok` false) is not infeasibility.
+    """
+    v = solve_verified(
+        prob, max(c.excursion * margin, 0.3), c.distance * margin, "energy", ns=ns
+    )
+    base = {"energy": c.energy, "excursion": c.excursion, "distance": c.distance}
+    return BoundCheck(base, v.sol, (c.energy - v.sol.energy) / c.energy, v.check)
+
+
 def compare(
     prob: Problem,
     b1: B1Solution,
     c_params: dict[str, float] | None = None,
     b2_params: object = None,
+    *,
+    c_eval: object = None,
+    c_base: BackTransitionParams | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Excursion, energy and distance of B1, the baseline (C) and the free-form law (B2)."""
+    """Excursion, energy and distance of B1, C (`restricted.evaluate_c`) and the free-form law (B2).
+
+    The C row is C's run from the AIRBRAKE exit at the problem's own entry air speed. `c_params`
+    are C's four variables (default: the register values at q = 2); `c_eval` is a
+    `restricted.CEval` and `c_base` the C controller parameters (defaults: the entry rule reduced
+    to the problem's air speed, the ArduPilot Z loop, rotor lag 0.25 s, the problem's controller
+    gains). The B2 row is the free-form law at the level-cruise entry, which is not the AIRBRAKE
+    exit yet: it is not comparable with the others (B-9 stays open until B2 migrates).
+    """
     from sagetrans.analysis import freeform_opt, restricted
 
     v0_air = float(prob.x0[2] + prob.scen.headwind_ms)
     out = {"B1": {"excursion": b1.excursion, "energy": b1.energy, "distance": b1.distance}}
-    c = restricted.evaluate_back(prob.vp, prob.scen, c_params or restricted.DEFAULT_PARAMS, v0_air)
+    cev = c_eval if isinstance(c_eval, restricted.CEval) else restricted.CEval(
+        airspeed_min=v0_air + 2.0, rotor_start="carry", end_speed=prob.opt.v_f,
+    )  # entry max(AIRSPEED_MIN - 2, 0) is exactly v0_air
+    if c_base is None:
+        gains = {k: v for k, v in prob.controller.items() if k != "delta_min"}
+        c_base = BackTransitionParams.for_vehicle(
+            prob.vp, prob.scen.rho, prob.scen.soc, prob.scen.altitude_amsl_m,
+            theta_P=prob.theta_p or restricted.THETA_P, z_mode="ardupilot", rotor_lag_s=0.25,
+            **gains,
+        )  # fmt: skip
+    prm = {
+        "T_bt": 3.0, "theta_A": math.radians(30.0), "spin_min": 0.1, "q": restricted.C_Q_START,
+        **(c_params or {}),
+    }  # fmt: skip
+    c = restricted.evaluate_c(prob.vp, prob.scen, prm, cev, c_base)
     out["C"] = {"excursion": c.excursion, "energy": c.energy, "distance": c.distance}
     if b2_params is not None:
         b = freeform_opt.evaluate(prob.vp, prob.scen, b2_params, v0_air)  # type: ignore[arg-type]

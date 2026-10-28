@@ -299,39 +299,62 @@ def assemble(
             f"B2**{'' if met else ', so this result is not reproducible'}.", "",
             md_table(tables["B2_search"]), "", md_table(tables["B2_ensemble_runs"])])  # fmt: skip
 
-    # B1 per scenario
-    b1_parts: list[str] = []
-    first_b1: dict[str, Any] | None = None
-    for task, res in task_results.items():
-        if not task.startswith("B1:"):
-            continue
-        name = res["name"]
-        first_b1 = first_b1 or res
-        tables[f"B1_pareto_{name}"] = res["points"]
-        b1_parts += [f"**{name}**, entry {res['v0']:.1f} m/s true airspeed:", "",
-                     md_table(res["points"], ["eps_h_m", "converged", "replay_verified",
-                                              "excursion_m", "energy_J", "distance_m", "t_f_s",
-                                              "converged_attempts"]), ""]  # fmt: skip
-        unver = [p["eps_h_m"] for p in res["points"] if not p.get("replay_verified")]
+    # B1 from the AIRBRAKE exit: one table per kind over every scenario that ran
+    b1_runs = [(n, task_results[f"B1:{n}"]) for n in inp.study.B1.scenarios
+               if f"B1:{n}" in task_results]  # fmt: skip
+    if b1_runs:
+        bc = inp.study.B1
+        for key, tab in (("points", "B1_front"), ("gap", "B1_gap"), ("sens", "B1_sens")):
+            tables[tab] = [r for _, res in b1_runs for r in res[key]]
+        tables["B1_schedule"] = b1_runs[0][1]["schedule"]
+        for n, res in b1_runs:
+            errors += [f"B1 {n}: {e}" for e in res["errors"]]
+        front, gap, sens_rows = tables["B1_front"], tables["B1_gap"], tables["B1_sens"]
+        unver = [f"{r['scenario']} {r['variant']} eps_x={r['eps_x_m']:g}" for r in front
+                 if not r.get("replay_verified")]  # fmt: skip
+        b1_parts = [
+            "Least bus energy from the AIRBRAKE exit to the stop, as a function of the distance "
+            f"cap, with the altitude held to {', '.join(f'{e:g}' for e in bc.eps_h_m)} m, "
+            "under a **stated wing limit**: " + "; ".join(
+                f"`{v.name}` ("
+                + (f"|alpha_w| <= {v.alpha_margin:g} alpha_s" if v.alpha_max_deg is None
+                   else f"|alpha_w| <= {v.alpha_max_deg:g} deg")
+                + f", pitch command <= {v.theta_cmd_max_deg:g} deg)" for v in bc.variants
+            ) + ". A run with no wing limit is not part of the study. **The wing limit decides "
+            "the number.** B1 is clairvoyant (it knows the scenario) and open loop, and it is not "
+            "a strict lower bound (B-2). The end band on the vertical speed is "
+            f"{bc.end_vh_band_ms or inp.study.C.sink_tol_ms:g} m/s (C's sink tolerance; B1 bounds "
+            "climb as well as sink). The entry, the sink tolerance and the rotor start are C's and "
+            "D's. B2 still starts at level cruise, so B2 and B1 are not comparable yet.", "",
+            "**Front** (`J_point` is C's cost of the point; `j_best` marks the least per scenario "
+            "and variant):", "",
+            md_table(front, ["scenario", "variant", "eps_x_m", "converged", "replay_verified",
+                             "converged_attempts", "energy_kJ", "excursion_m", "distance_m",
+                             "t_f_s", "below_vs", "t_rotor_on_s", "V_over_Vs_rotor_on",
+                             "alpha_w_peak_above_vs_deg", "J_point", "j_best"]), "",
+        ]  # fmt: skip
         if unver:
-            b1_parts += ["**Not replay-verified (do not quote): eps_h = "
-                         + ", ".join(f"{u:g}" for u in unver) + " m.** A converged solution whose "
-                         "replay in the simulator disagrees is not trusted.", ""]
-        if res["bound"]:
-            bd = res["bound"]
-            tag = "replay-verified" if bd.get("b1_replay_verified") else "NOT checked"
+            b1_parts += ["**No verified solution (energy blank, do not quote): "
+                         + "; ".join(unver) + ".** A point that did not converge from three "
+                         "starts, or whose replay in the simulator disagrees, is a solver result, "
+                         "not a proof that it is infeasible.", ""]  # fmt: skip
+        if gap:
             b1_parts += [
-                f"Baseline controller at the same excursion/distance: "
-                f"{bd['baseline']['energy']:.0f} J, {bd['baseline']['excursion']:.1f} m, "
-                f"{bd['baseline']['distance']:.0f} m. B1 under its operational limits: "
-                f"{bd['b1_energy_J']:.0f} J ({bd['energy_margin']:.0%} less; {tag}).", ""]
-        errors += [f"B1 {name}: {e}" for e in res["errors"]]
-        good = [p for p in res["points"] if p.get("replay_verified") and "energy_J" in p]
-        if len(good) >= 2:
-            figs[f"B1_pareto_{name}"] = figures.pareto_figure(
-                [(p["excursion_m"], p["energy_J"], p["distance_m"]) for p in good])
-    if b1_parts:
-        sections["B1 — open-loop optimum (direct collocation)"] = "\n".join(b1_parts)
+                "**Same-problem gap to C** (B1 at C's own excursion and distance; "
+                "B1 has no rotor lag where C has `rotor_lag_s`):", "",
+                md_table(gap, ["scenario", "variant", "c_source", "c_energy_kJ", "c_excursion_m",
+                               "c_distance_m", "b1_converged", "b1_replay_verified",
+                               "b1_energy_kJ", "energy_margin"]), "",
+            ]  # fmt: skip
+        if sens_rows:
+            b1_parts += [
+                "**Sensitivities** (altitude band on every scenario, the rest on the first):", "",
+                md_table(sens_rows, ["scenario", "sensitivity", "value", "variant", "eps_x_m",
+                                     "converged", "replay_verified", "energy_kJ", "distance_m",
+                                     "t_f_s"]), "",
+            ]  # fmt: skip
+        sections["B1 — least energy from the AIRBRAKE exit (direct collocation)"] = "\n".join(
+            b1_parts)
 
     # sensitivity
     s_res = task_results.get("sensitivity", {}).get("result")

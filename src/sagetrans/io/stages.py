@@ -13,6 +13,7 @@ import math
 import time
 import traceback
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -758,6 +759,17 @@ def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams
     return cev, base, w
 
 
+def alpha_limits(inp: StudyInputs) -> tuple[zero_loss.ActuatorLimits, float]:
+    """The wing-angle band of analysis A and the wing angle at its top (D's 0.8 C_L,max flag)."""
+    vp = inp.vehicle
+    lim = zero_loss.ActuatorLimits(
+        alpha_min=0.0 if inp.study.A.alpha_min_deg is None
+        else math.radians(inp.study.A.alpha_min_deg),
+        cl_frac=inp.study.A.cl_frac or 0.8,
+    )  # fmt: skip
+    return lim, zero_loss._alpha_band(vp, lim)[1] + vp.wing.i_w
+
+
 def c_bounds(inp: StudyInputs) -> Bounds:
     b = inp.study.C.bounds
     return Bounds(
@@ -816,12 +828,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
               for sr in r.search.seeds]  # fmt: skip
 
     # per member: the run, the capability ceiling, D's alpha and VRS checks (reporting only)
-    lim = zero_loss.ActuatorLimits(
-        alpha_min=0.0 if inp.study.A.alpha_min_deg is None
-        else math.radians(inp.study.A.alpha_min_deg),
-        cl_frac=inp.study.A.cl_frac or 0.8,
-    )  # fmt: skip
-    alpha_hi = zero_loss._alpha_band(vp, lim)[1] + vp.wing.i_w
+    lim, alpha_hi = alpha_limits(inp)
     run_rows: Table = []
     for i, (s, cr) in enumerate(zip(scens, opt, strict=True)):
         vps = s.vehicle_for(vp)
@@ -874,7 +881,9 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     }  # fmt: skip
 
 
-def _b1_problem(inp: StudyInputs, scen: Scenario) -> coll.Problem:
+def _b1_problem_cruise(inp: StudyInputs, scen: Scenario) -> coll.Problem:
+    """LEGACY: the level-cruise B1 problem that B2 still starts from (B2 is not on the AIRBRAKE
+    exit yet). B1 itself starts at the exit: see `task_b1`."""
     c = inp.study.B1
     opts = coll.CollocationOptions(n=c.intervals, max_iter=c.max_iter)
     return coll.make_problem(
@@ -885,7 +894,7 @@ def _b1_problem(inp: StudyInputs, scen: Scenario) -> coll.Problem:
 def task_b2(inp: StudyInputs) -> dict[str, Any]:
     c = inp.study.B2
     scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
-    prob = _b1_problem(inp, scens[c.start.scenario_index % len(scens)])
+    prob = _b1_problem_cruise(inp, scens[c.start.scenario_index % len(scens)])
     ver = coll.solve_verified(
         prob, c.start.eps_h_m, c.start.eps_x_m, "energy", ns=tuple(inp.study.B1.refine_from)
     )
@@ -898,48 +907,213 @@ def task_b2(inp: StudyInputs) -> dict[str, Any]:
 
 
 def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
-    c = inp.study.B1
+    """Analysis B1 for one scenario: least-energy back-transition from the AIRBRAKE exit.
+
+    Per wing-limit variant, the front (energy against the distance cap at the headline band), the
+    altitude-band sweep, the same-problem gap to C and, for the first scenario, the sensitivities.
+    A point that did not converge or replay stays in the table with its energy blank: it means the
+    solver failed from three starts, not that the point is infeasible.
+    """
+    b, c, d, vp = inp.study.B1, inp.study.C, inp.study.D, inp.vehicle
     scen = inp.scenarios[scen_name]
-    prob = _b1_problem(inp, scen)
-    points: Table = []
-    sols: list[Any] = []
+    cev, c_base, w = c_settings(inp)
+    base = exit_params(inp, rotor_lag_s=c.rotor_lag_s)  # the entry state reads theta_fw0, delta_min
+    v_air = braking.entry_airspeed(
+        inp.airspeed_min, d.q_assist_speed_ms, scen.rho, d.entry_convention
+    )
+    end_band = b.end_vh_band_ms or c.sink_tol_ms
+    lim, alpha_hi = alpha_limits(inp)
     errors: list[str] = []
-    for eh in c.eps_h_m:
-        t = time.time()
-        try:
-            ver = coll.solve_verified(prob, eh, c.eps_x_m, "energy", ns=tuple(c.refine_from))
-            s = ver.sol
-            points.append({
-                "scenario": scen_name, "eps_h_m": eh, "eps_x_m": c.eps_x_m, "converged": s.ok,
-                "replay_verified": ver.verified, "status": s.status,
-                "attempts": len(ver.attempts),
-                "converged_attempts": sum(a.ok for a in ver.attempts),
-                "excursion_m": s.excursion, "energy_J": s.energy, "distance_m": s.distance,
-                "t_f_s": s.t_f,
-                **({f"replay_err_{k}": e for k, e in ver.check.rel_error.items()}
-                   if ver.check else {}),
-            })  # fmt: skip
-            sols.append(ver)
-            print(f"    {scen_name} eps_h={eh}: ok={s.ok} verified={ver.verified} "
-                  f"E={s.energy:.0f} J ({time.time() - t:.0f} s)", flush=True)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"eps_h={eh}: {type(exc).__name__}: {exc}")
-            points.append({"scenario": scen_name, "eps_h_m": eh, "converged": False,
-                           "replay_verified": False, "status": str(exc)})  # fmt: skip
-    bound = None
-    try:
-        bc = coll.bound_check(prob)
-        chk = coll.replay(prob, bc.b1) if bc.b1.ok else None
-        bound = {
-            "baseline": bc.baseline, "b1_energy_J": bc.b1.energy,
-            "b1_excursion_m": bc.b1.excursion, "b1_distance_m": bc.b1.distance,
-            "b1_ok": bc.b1.ok, "energy_margin": bc.energy_margin,
-            "b1_replay_verified": bool(chk.passes()) if chk else False,
+    out: dict[str, Any] = {
+        "points": [], "gap": [], "sens": [], "schedule": [], "sols": [], "errors": errors,
+        "v0": v_air, "scen": scen, "name": scen_name,
+    }  # fmt: skip
+    v_s = runs.stall_speed(scen.vehicle_for(vp), scen.rho)
+    variants = {v.name: v for v in b.variants}
+    ex_max = max(b.eps_x_m)
+
+    def options(v: Any, band: float, theta_deg: float | None = None) -> coll.CollocationOptions:
+        kw: dict[str, Any] = {
+            "n": b.intervals, "max_iter": b.max_iter, "vh_band": band,
+            "theta_cmd_max": math.radians(theta_deg or v.theta_cmd_max_deg),
         }  # fmt: skip
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"bound_check: {type(exc).__name__}: {exc}")
-    return {"points": points, "sols": sols, "bound": bound, "errors": errors,
-            "v0": tas(inp.entry_eas, scen), "scen": scen, "name": scen_name}  # fmt: skip
+        if v.alpha_max_deg is not None:
+            kw["alpha_max"] = math.radians(v.alpha_max_deg)
+        else:
+            kw["stall_margin"] = v.alpha_margin
+        return coll.CollocationOptions(**kw)
+
+    def problem(opt: coll.CollocationOptions, rotor_start: str) -> coll.Problem:
+        return coll.make_problem_exit(
+            vp, scen, base, v_air, opt, inp.controller_overrides, inp.theta_p, rotor_start
+        )
+
+    def series(prob: coll.Problem, chk: coll.ReplayCheck) -> Table:
+        sim = chk.sim
+        aw = np.degrees(sim["alpha"] + prob.vp.wing.i_w)
+        cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
+                "theta": np.degrees(sim["theta"]), "alpha_w_deg": aw, "delta_r": sim["delta_r"],
+                "theta_cmd": np.degrees(sim["theta_cmd"]), "omega_r": sim["omega_r"]}  # fmt: skip
+        return [{k: float(v[i]) for k, v in cols.items()} for i in range(0, len(sim.t), 5)]
+
+    def row(
+        prob: coll.Problem, ver: coll.Verified, variant: str, eh: float, ex: float, rs: str,
+        band: float, theta_deg: float,
+    ) -> dict[str, Any]:  # fmt: skip
+        s = ver.sol
+        r: dict[str, Any] = {
+            "scenario": scen_name, "variant": variant, "eps_h_m": eh, "eps_x_m": ex,
+            "end_vh_band_ms": band, "rotor_start": rs, "theta_cmd_max_deg": theta_deg,
+            "converged": s.ok, "replay_verified": ver.verified,
+            "converged_attempts": sum(a.ok for a in ver.attempts), "status": s.status,
+            "V0_air_ms": v_air, "V0_ground_ms": float(prob.x0[2]), "Vs_ms": v_s,
+            "below_vs": v_air < v_s,
+        }  # fmt: skip
+        if not (s.ok and ver.verified and ver.check is not None):
+            return r
+        chk = ver.check
+        fl = braking.braking_flags(
+            chk.sim, vp, scen, base, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
+            kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
+        )  # fmt: skip
+        sm = coll.schedule_summary(prob, chk, d.alpha_gate_ms)
+        j = (w.w_E * s.energy / w.E_ref + w.w_x * s.distance / w.x_ref
+             + w.w_h * s.excursion / w.h_ref)  # fmt: skip
+        r.update({
+            "energy_kJ": s.energy / 1e3, "excursion_m": s.excursion, "distance_m": s.distance,
+            "t_f_s": s.t_f, **{f"replay_err_{k}": e for k, e in chk.rel_error.items()},
+            "J_point": j, **{k: _num(v) for k, v in sm.items()},
+            **{k: _num(fl[k]) for k in ("vrs_min", "t_above_alpha_08_s", "alpha_max_gated_deg")},
+        })  # fmt: skip
+        return r
+
+    def solve_point(
+        v: Any, eh: float, ex: float, *, rs: str | None = None, band: float | None = None,
+        theta_deg: float | None = None,
+    ) -> tuple[dict[str, Any], Table, coll.B1Solution | None]:  # fmt: skip
+        rs, band = rs or c.rotor_start, band or end_band
+        theta = theta_deg or v.theta_cmd_max_deg
+        t0 = time.time()
+        prob = problem(options(v, band, theta), rs)
+        ver = coll.solve_verified(prob, eh, ex, "energy", ns=tuple(b.refine_from))
+        rw = row(prob, ver, v.name, eh, ex, rs, band, theta)
+        e = rw.get("energy_kJ")
+        print(f"    {scen_name} {v.name} eps_h={eh:g} eps_x={ex:g}: ok={ver.sol.ok} "
+              f"verified={ver.verified}" + (f" E={e:.2f} kJ" if e is not None else "")
+              + f" ({time.time() - t0:.0f} s)", flush=True)  # fmt: skip
+        ser = series(prob, ver.check) if ver.verified and ver.check is not None else []
+        return rw, ser, ver.sol
+
+    def attempt(label: str, fn: Callable[[], Any]) -> Any:
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{label}: {type(exc).__name__}: {exc}")
+            return None
+
+    try:
+        problem(options(b.variants[0], end_band), c.rotor_start)  # the entry must exist
+    except ValueError as exc:
+        errors.append(str(exc))
+        return out
+
+    # -- the front: per variant, the headline band(s) against the distance caps
+    kept: dict[str, list[tuple[dict[str, Any], Table]]] = {v.name: [] for v in b.variants}
+    for v in b.variants:
+        for eh in b.eps_h_m:
+            for ex in b.eps_x_m:
+                label = f"{v.name} eps_h={eh:g} eps_x={ex:g}"
+                got = attempt(label, partial(solve_point, v, eh, ex))
+                if got is None:
+                    out["points"].append({
+                        "scenario": scen_name, "variant": v.name, "eps_h_m": eh, "eps_x_m": ex,
+                        "converged": False, "replay_verified": False, "status": errors[-1],
+                    })  # fmt: skip
+                    continue
+                rw, ser, sol = got
+                out["points"].append(rw)
+                out["sols"].append((v.name, eh, ex, sol))
+                if "J_point" in rw:
+                    kept[v.name].append((rw, ser))
+    for v in b.variants:  # the point with the least C cost per variant
+        if kept[v.name]:
+            best = min(kept[v.name], key=lambda t: t[0]["J_point"])
+            best[0]["j_best"] = True
+            out["schedule"] += [{"scenario": scen_name, "variant": v.name,
+                                 "eps_x_m": best[0]["eps_x_m"], **r} for r in best[1]]  # fmt: skip
+    for r in out["points"]:
+        r.setdefault("j_best", False)
+
+    # -- sensitivities: the altitude band (every scenario), the rest on the first scenario
+    def sens(kind: str, value: Any, **kw: Any) -> None:
+        v = kw.pop("variant")
+        eh = kw.pop("eps_h")
+        got = attempt(f"sens {kind}={value}", partial(solve_point, v, eh, ex_max, **kw))
+        if got is None:
+            out["sens"].append({"scenario": scen_name, "sensitivity": kind, "value": value,
+                                "variant": v.name, "converged": False, "replay_verified": False,
+                                "status": errors[-1]})  # fmt: skip
+            return
+        out["sens"].append({"sensitivity": kind, "value": value, **got[0]})
+
+    bv = variants[b.band_sweep.variant]
+    for eh in b.band_sweep.eps_h_m:
+        sens("eps_h_m", eh, variant=bv, eps_h=eh)
+    if scen_name == b.scenarios[0]:
+        v0, eh0 = b.variants[0], b.eps_h_m[0]
+        if b.sens.rotor_start_flip:
+            other = "idle" if c.rotor_start == "carry" else "carry"
+            sens("rotor_start", other, variant=v0, eps_h=eh0, rs=other)
+        if b.sens.end_vh_band_ms is not None:
+            sens("end_vh_band_ms", b.sens.end_vh_band_ms, variant=v0, eps_h=eh0,
+                 band=b.sens.end_vh_band_ms)  # fmt: skip
+        abs_v = next((v for v in b.variants if v.alpha_max_deg is not None), None)
+        if abs_v is not None and b.sens.c_envelope_theta_cmd_deg is not None:
+            sens("theta_cmd_max_deg", b.sens.c_envelope_theta_cmd_deg, variant=abs_v, eps_h=eh0,
+                 theta_deg=b.sens.c_envelope_theta_cmd_deg)  # fmt: skip
+
+    # -- the same-problem gap: B1 at C's own excursion and distance
+    if b.gap_c is None:
+        gp = {"T_bt": inp.start_params["T_bt"], "theta_A": inp.start_params["theta_A"],
+              "spin_min": inp.start_params["spin_min"], "q": restricted.C_Q_START}  # fmt: skip
+        src = f"register parameters at q = {restricted.C_Q_START:g}"
+    else:
+        gc = b.gap_c
+        gp = {"T_bt": gc.T_bt, "theta_A": math.radians(gc.theta_A_deg), "spin_min": gc.spin_min,
+              "q": gc.q}  # fmt: skip
+        src = "B1.gap_c (the C optimum, pasted from C_params)"
+    cm = attempt("C at the gap parameters", lambda: restricted.evaluate_c(
+        vp, scen, gp, cev, c_base))  # fmt: skip
+    if cm is not None and "not_stopped" in cm.failures:
+        errors.append(f"C at the gap parameters did not stop ({','.join(cm.failures)}): no gap")
+        cm = None
+    if cm is not None:
+        for v in b.variants:
+            t0 = time.time()
+
+            def gap_solve(v: Any = v) -> coll.BoundCheck:
+                prob = problem(options(v, end_band), c.rotor_start)
+                return coll.bound_check_c(prob, cm, ns=tuple(b.refine_from))
+
+            res = attempt(f"gap {v.name}", gap_solve)
+            g: dict[str, Any] = {
+                "scenario": scen_name, "variant": v.name, "c_source": src,
+                "c_energy_kJ": cm.energy / 1e3, "c_excursion_m": cm.excursion,
+                "c_distance_m": cm.distance, "c_flags": ",".join(cm.failures),
+            }  # fmt: skip
+            if res is not None:
+                s_ = res.b1
+                g.update({"b1_converged": s_.ok, "b1_replay_verified": res.verified,
+                          "eps_h_m": s_.eps_h, "eps_x_m": s_.eps_x})  # fmt: skip
+                if res.verified:
+                    g.update({
+                        "b1_energy_kJ": s_.energy / 1e3, "b1_excursion_m": s_.excursion,
+                        "b1_distance_m": s_.distance, "energy_margin": res.energy_margin,
+                    })  # fmt: skip
+                print(f"    {scen_name} gap {v.name}: ok={s_.ok} verified={res.verified} "
+                      f"({time.time() - t0:.0f} s)", flush=True)  # fmt: skip
+            out["gap"].append(g)
+    return out
 
 
 def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
