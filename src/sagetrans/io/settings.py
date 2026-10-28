@@ -373,9 +373,7 @@ class FTCfg(_Strict):
     final_ensemble_n: int = Field(32, ge=1)
     ensemble_seed: int = 8
     headwind_ms: list[float] = [0.0, 5.0]  # the ensemble's headwind range (low, high)
-    seeds: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
-    popsize: int = Field(8, ge=4)
-    maxiter: int = Field(20, ge=1)
+    popsize: int = Field(8, ge=4)  # of every FT search; seeds and iterations: scan.*, grid.*
     rotor_lag_s: float = Field(0.25, ge=0.0)  # as C
     t_end_s: float = Field(90.0, gt=0.0)  # no hand-over by then: a "no_handover" failure
     t_settle_s: float = Field(10.0, ge=0.0)  # simulated after DONE, to see the recovery

@@ -373,3 +373,21 @@ def test_the_b1_chapter_flags_verified_points_that_fail_with_late_commands(tmp_p
     b1 = html.split('id="b1"')[1].split("</section>")[0]
     assert "1 verified point(s) fail when the commands are 10 ms late" in b1
     assert "B1-C gap quoted (S-01, c_envelope) comes from a schedule that fails" in b1
+
+
+def test_the_e_chapter_explains_what_the_fwd_energy_ratio_means(tmp_path):
+    write_table(tmp_path, "E_summary", [
+        {"site_amsl_m": 0.0, "mission": "one_way", "max_range_km": 92.0, "fixed_Wh": 100.0}])
+    write_table(tmp_path, "E_cases", [
+        {"case": "register", "site_amsl_m": 0.0, "mission": "one_way", "airspeed_min_ms": 17.0,
+         "tkoff_thr_max": 0.8, "max_range_km": 92.0, "e_fwd_kJ": 37.4, "e_fwd_time_s": 10.0,
+         "e_fwd_distance_m": 85.0, "ft_mean_energy_kJ": 62.1, "e_fwd_over_ft": 0.60},
+        {"case": "register", "site_amsl_m": 5000.0, "mission": "one_way", "airspeed_min_ms": 17.0,
+         "tkoff_thr_max": 0.8, "max_range_km": 94.1, "e_fwd_kJ": 124.4, "e_fwd_time_s": 36.7,
+         "e_fwd_distance_m": 404.0, "ft_mean_energy_kJ": 62.1, "e_fwd_over_ft": 2.0}])  # fmt: skip
+    write_record(tmp_path, schema_version=2)
+    html = build_html(load(tmp_path))
+    e = html.split('id="e"')[1].split("</section>")[0]
+    assert "e_fwd_over_ft" in e and "0.6" in e and "2" in e
+    assert "averaged over FT" in e and "rises with the site altitude" in e
+    assert "not a like-for-like comparison" in e

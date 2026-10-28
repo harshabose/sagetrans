@@ -747,9 +747,13 @@ def build_e(c: Ctx) -> Out:
             "Register against recommended settings",
             "E repeated at the AIRSPEED_MIN and TKOFF_THR_MAX of the FT optimum (D re-run at that entry "
             "speed). The register case is the headline above. The last two columns are information "
-            "only: the mean energy of FT's simulated forward transition at the same settings and "
-            "E's quasi-steady estimate against it; a large difference is worth knowing about, it is "
-            "not a check.",
+            "only. ft_mean_energy_kJ is the mean energy of FT's whole simulated forward transition "
+            "(hover, wait, hand-over, fade) at the same settings, averaged over FT's ensemble: "
+            "altitudes 0 to 5000 m, masses, ISA offsets, headwinds and SoC. e_fwd_over_ft is E's "
+            "quasi-steady estimate at ONE site (pusher acceleration over the distance to the "
+            "transition speed) divided by that ensemble mean. It is below 1 at low sites and "
+            "rises with the site altitude because E is read at the site and FT is not; it is not "
+            "a like-for-like comparison and not a check. E is not changed for it.",
             table_html("E_cases", [k for k in cols if any(k in r for r in cases)], cases),
         ))
         o.tables += [("E_summary_recommended", None), ("E_segments_recommended", None),

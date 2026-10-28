@@ -429,8 +429,10 @@ def assemble(
             "AIRSPEED_MIN and TKOFF_THR_MAX of the FT optimum instead of the register's; the "
             "register case above stays the headline. D is re-run at the recommended entry speed. "
             "`ft_mean_energy_kJ` is the mean energy of FT's whole simulated forward transition at "
-            "the same settings, `e_fwd_over_ft` its ratio to E's quasi-steady estimate: "
-            "information only, not a check."
+            "the same settings, averaged over FT's ensemble (altitudes 0 to 5000 m, masses, ISA, "
+            "headwinds, SoC); `e_fwd_over_ft` is E's quasi-steady estimate at ONE site divided by "
+            "it, so it rises with the site altitude by construction: information only, not a "
+            "like-for-like comparison and not a check."
             + "\n\n" + md_table(tables["E_cases"]))
 
     c_task = task_results.get("C", {})

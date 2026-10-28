@@ -117,9 +117,7 @@ TINY_FT = """
 FT:
   ensemble_n: 2
   history_scenarios: [S-01]
-  seeds: [1]
   popsize: 4
-  maxiter: 1
   scan: {airspeed_min_eas_ms: [16.0], seeds: [1], maxiter: 1}
   sens:
     TECS_TIME_CONST: [5.0]

@@ -155,9 +155,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
   ensemble_n: 32           # same Sobol sample (seed) as C, so the members compare
   ensemble_seed: 8
   headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed
-  seeds: [1, 2, 3, 4, 5, 6, 7, 8]
-  popsize: 8
-  maxiter: 20
+  popsize: 8               # of every FT search; the seeds and iterations are under scan and grid
   rotor_lag_s: 0.25        # as C
   t_end_s: 90.0            # a run that has not reached the hand-over by then is a "no_handover" failure
   t_settle_s: 10.0         # simulated after DONE, to see the recovery
@@ -387,7 +385,7 @@ every 5th sample (as `series()` in `task_b1`).
 3. `gate.py`: `SEARCH_ANALYSES` gains `"FT"`; `record.search_spreads["FT"] = result.search.spread`.
 4. `cli.py`: `--only FT` works through `ALL_ANALYSES`.
 5. Time: measure one ensemble evaluation on the first run and report it in the PR; the budget is
-   `ensemble_n x popsize x maxiter x seeds` evaluations as in C. If it exceeds C's by more than 2x, reduce
+   `ensemble_n x popsize x maxiter x seeds` evaluations as in C (the `maxiter` and `seeds` of `FT.grid`). If it exceeds C's by more than 2x, reduce
    `ensemble_n` in the config, not the model.
 
 ### 6.1 Tables written (the viewer's contract; names fixed)
@@ -506,7 +504,8 @@ the other three are searched at each value (a three-variable CMA-ES, as `FT_scan
 6. Task graph. The grid points run first; the fine pass is planned from their results (a second wave of
    `run_study`) and the report of the winner, `FT:<AIRSPEED_MIN>:<ms>:<percent>:<deg>`, from all of them (a
    third wave). The winner's values are in the task id, so they are in its cache key. The older
-   four-variable search (`FT.seeds`, `FT.maxiter`) is no longer run.
+   four-variable search is no longer run, and its settings `FT.seeds` and `FT.maxiter` were removed
+   (2026-10-28; a config that still has them is refused, the settings model forbids unknown keys).
 7. Viewer: the FT chapter shows the snapped cost against `Q_TRANSITION_MS` with the winner marked and every
    point above the T-12 limit hollow and named, and the `Q_TRANSITION_MS` values whose cost is within 2 % of
    the best (`FT_grid.within_2pct`, `context.ft_grid.within_2pct_q_transition_s`, a note). That range, not the

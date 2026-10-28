@@ -92,9 +92,7 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
   final_ensemble_n: 32     # the optimum, the register start and the ArduPilot default are reported on the first 32 points (the search uses ensemble_n)
   ensemble_seed: 8
   headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed
-  seeds: [1, 2, 3, 4, 5, 6, 7, 8]   # the older 4-variable search only; the grid has its own seeds and iterations
-  popsize: 8
-  maxiter: 20
+  popsize: 8               # of every FT search; seeds and iterations are set under scan and grid
   rotor_lag_s: 0.25        # as C
   t_end_s: 90.0            # a run that has not reached the hand-over by then is a "no_handover" failure
   t_settle_s: 10.0         # simulated after DONE, to see the recovery

@@ -6,16 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "sagetrans"
 version = "0.0.1"
 description = "Sage VTOL transition and landing-approach simulation toolkit"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 # The numerical libraries are pinned to the versions the results were made with (a compatible
 # release, ~=), because a library version can move an optimum without a code change. They are
-# also recorded in run_record.json and are part of the task-cache key. numpy and scipy of the
-# newest release have no Python 3.11 wheels, so 3.11 gets the newest release that has them.
+# also recorded in run_record.json and are part of the task-cache key. CI runs Python 3.13 and the
+# pins are what that run uses; all of them have 3.13 wheels.
 dependencies = [
-    "numpy~=2.5.3; python_version >= '3.12'",
-    "numpy~=2.4.6; python_version < '3.12'",
-    "scipy~=1.18.1; python_version >= '3.12'",
-    "scipy~=1.17.1; python_version < '3.12'",
+    "numpy~=2.5.3",
+    "scipy~=1.18.1",
     "casadi~=3.8.1",
     "pydantic~=2.13.5",
     "pyyaml",
@@ -50,7 +48,7 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "B", "UP", "N"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 files = ["src"]
 plugins = ["pydantic.mypy"]

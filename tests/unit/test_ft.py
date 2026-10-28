@@ -93,9 +93,7 @@ FT:
   ensemble_n: 2
   final_ensemble_n: 4
   headwind_ms: [0.0, 5.0]
-  seeds: [1]
   popsize: 4
-  maxiter: 1
   history_scenarios: [S-01]
   scan: {airspeed_min_eas_ms: [16.0, 18.0], seeds: [1], maxiter: 1}
   grid: {q_transition_s: [4.0, 6.0], fine_offsets_s: [-0.5, 0.5, 2.0], seeds: [1], maxiter: 1,
