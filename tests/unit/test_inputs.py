@@ -203,7 +203,7 @@ def test_only_selects_analyses_and_partial_results_are_never_reused(cfgdir, tmp_
     assert stages.plan_tasks(part) == ["basics"]
     expected = {"basics", "C", "B1:S-01", "B1:S-02", "sensitivity"}
     assert set(stages.plan_tasks(full)) == expected
-    assert stages.plan_tasks(full)[0] in ("B1:S-01", "B1:S-02")  # most expensive first
+    assert stages.plan_tasks(full)[0] == "C"  # most expensive first (the observed times)
     work = tmp_path / "w"
     assert study._cache_path(work, full, "basics") != study._cache_path(work, part, "basics")
     assert part.study.analyses == ["A", "F"] and set(ALL_ANALYSES) >= set(part.study.analyses)
