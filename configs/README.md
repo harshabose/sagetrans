@@ -189,7 +189,6 @@ a measured table is not supported yet (see "Not supported yet").
 | `descent.kappa` | - | 0.25 | vortex-ring fraction of induced velocity. **Unsourced: must come from a sourced boundary (Johnson, NASA).** Analysis F refuses to run without it |
 | `descent.v_fragility`, `v_sensor`, `h_slow`, `v_final` | m/s, m/s, m, m/s | 3, *omitted*, 5, 0.5 | payload-fragility and sensor limits; the final slow descent |
 | `requirements.range_primary_km`, `range_p95_km` | km | 100, 113 | range requirements the budget is checked against |
-| `speeds.entry_eas_ms` | m/s | 22 | equivalent airspeed at the start of the back-transition |
 
 ## `controller.yaml` reference
 

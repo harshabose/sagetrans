@@ -40,6 +40,3 @@ descent:         # analysis F
 requirements:    # the range requirements the budget is checked against
   range_primary_km: {value: 100.0, unit: "km", source: "specified range requirement", status: stated}
   range_p95_km: {value: 120.0, unit: "km", source: "about 113 km needed for the 95th-percentile mission", status: stated}
-
-speeds:          # entry and transition speeds used by the studies
-  entry_eas_ms: {value: 20.9, unit: "m/s", source: "equivalent airspeed at the start of the back-transition", status: derived}

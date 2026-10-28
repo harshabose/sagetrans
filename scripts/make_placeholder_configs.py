@@ -197,9 +197,6 @@ def mission_yaml() -> str:
         f"  range_primary_km: {rec(100.0, 'km', 'specified range requirement', 'stated')}",
         f"  range_p95_km: {rec(113.0, 'km', 'about 113 km needed for the 95th-percentile mission', 'stated')}",
         "",
-        "speeds:          # entry and transition speeds used by the studies",
-        f"  entry_eas_ms: {r(22.0, 'm/s', 'equivalent airspeed at the start of the back-transition (cruise speed)', 'assumed')}",
-        "",
     ])
 
 

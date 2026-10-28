@@ -231,7 +231,8 @@ def solve_e_case(
     mp = site_mission(inp, site)
     masses = {"out": vp.m, "ret": vp.m - mp.payload_kg} if kind == "round_trip" else {"leg": vp.m}
     rho_bt = float(atmosphere.density(site + mp.h_bt_agl_m, mp.isa_offset_k))
-    v0 = inp.entry_eas * math.sqrt(RHO0 / rho_bt)  # D's entry EAS as a true airspeed
+    # the stopping run starts at the AIRBRAKE exit, as in D, C and B1 (AIRSPEED_MIN - 2)
+    v0 = braking.entry_airspeed(inp.airspeed_min, rho_bt, inp.study.D.entry_convention)
     e_nom = vp.battery.e_nominal_wh * 3600.0
     src = None
     if ec.a_fwd_mode != "mission":
@@ -1389,7 +1390,7 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
     return sens.HeadlineModel(
         inp.vehicle, scen, inputs, prm=dict(inp.start_params), budget=budget,
         controller=dict(inp.controller_overrides), theta_p=inp.theta_p,
-        a_plan_source="simulated", v0_eas=inp.entry_eas,
+        a_plan_source="simulated", v0_eas=inp.airspeed_min - 2.0,
     )  # fmt: skip
 
 

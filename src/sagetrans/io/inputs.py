@@ -134,7 +134,6 @@ class StudyInputs:
     start_params: dict[str, float]  # the register's values as analysis C's starting point
     theta_p: float  # PTCH_LIM_MAX_DEG in rad
     requirements_km: tuple[float, float]
-    entry_eas: float
     airspeed_min: float  # AIRSPEED_MIN, m/s (also `mission.v_trans`)
     tkoff_thr_max: float  # TKOFF_THR_MAX as flown: the pusher command in AUTO (0 -> THR_MAX)
     scenarios: dict[str, Scenario]
@@ -214,7 +213,6 @@ def _known_paths() -> set[str]:
         "mission.descent.kappa", "mission.descent.v_fragility", "mission.descent.v_sensor",
         "mission.descent.h_slow", "mission.descent.v_final",
         "mission.requirements.range_primary_km", "mission.requirements.range_p95_km",
-        "mission.speeds.entry_eas_ms",
     }  # fmt: skip
     known |= {f"controller.ardupilot.{n}" for n in ARDUPILOT_PARAMS}
     known |= {f"controller.tecs.{n}" for n in TECS_PARAMS}
@@ -393,7 +391,6 @@ def load_inputs(
     )
     r1 = rd.get("mission.requirements.range_primary_km", 100e3) / 1e3
     r2 = rd.get("mission.requirements.range_p95_km", 113e3) / 1e3
-    entry_eas = rd.get("mission.speeds.entry_eas_ms", 22.0)
     # controller
     bt0 = BackTransitionParams()
     ap = "controller.ardupilot."
@@ -512,7 +509,7 @@ def load_inputs(
         config_dir=root, mode=chosen, config=cfg, vehicle=vehicle, mission=mission,
         window=window, descent=descent, controller=controller,
         controller_overrides=gains, baseline_overrides=baseline_overrides, start_params=start,
-        theta_p=theta_p, requirements_km=(r1, r2), entry_eas=entry_eas, airspeed_min=airspeed_min,
+        theta_p=theta_p, requirements_km=(r1, r2), airspeed_min=airspeed_min,
         tkoff_thr_max=tkoff,
         scenarios=scenarios,
         ensemble_axes=axes, study=study, fallbacks=tuple(rd.fallbacks),

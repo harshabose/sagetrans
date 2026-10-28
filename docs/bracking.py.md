@@ -168,7 +168,7 @@ D uses three different structures. They are easy to confuse.
 |---|---|---|---|
 |`D_a_eq`|named scenarios S-01, S-02, S-03, S-05, S-06, S-07 × `mass_factors` (0.80, 1.0, 1.15): 54 rows, **deterministic grid**|`v0_eas_ms` = 16, 17.1, 20.9 (EAS), each converted with `tas()` and used as the initial **ground** speed|none, just rows|
 |`D_recommendation_ensemble`, `a_rec`, `a_rec_pct`|**Latin-hypercube ensemble**, $n$ = 32, seed 8 (the same ensemble as B2 and C)|`v0_ground_ms` = 16 and 20.9, the same for every sample: 64 runs|min and 5th percentile|
-|`D_trade_curve`|the **first** named scenario only (S-01)|`entry_eas` = 20.9|none|
+|`D_trade_curve`|the **first** named scenario only (S-01)|`AIRSPEED_MIN - 2` EAS (the AIRBRAKE exit)|none|
 
 The `study.yaml` comment explains the grid: 16 and 17.1 EAS are 1.2 × the stall speed at nominal and at 1.15× mass; 20.9 EAS is cruise (22.5 TAS at 1500 m).
 
@@ -250,7 +250,7 @@ One row per scenario × mass factor × entry speed. Each row is a **worst-case b
 
 ### 5.3 `D_trade_curve`
 
-Rows over $a_{plan}$ × headwind × speed test × $a_{lim}$ $\in {bp.a_{lim},, a_{plan}}$, all for the first scenario at `entry_eas`. Each row uses the **real cascade** from the planned switch point.
+Rows over $a_{plan}$ × headwind × speed test × $a_{lim}$ $\in {bp.a_{lim},, a_{plan}}$, all for the first scenario at the AIRBRAKE exit speed (`AIRSPEED_MIN - 2`). Each row uses the **real cascade** from the planned switch point.
 
 |column|meaning|
 |---|---|

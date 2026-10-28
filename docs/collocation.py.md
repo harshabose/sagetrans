@@ -24,7 +24,7 @@ $$\text{B: what is the best the hardware and physics allow, and how far is the a
 
 | input | where it comes from |
 | --- | --- |
-| B1 scenarios | `study.yaml` → `B1.scenarios` (S-01…S-06); entry at `mission.speeds.entry_eas_ms` = 20.9 m/s **equivalent**, converted to TAS (20.9 at sea level, 27.0 at 5000 m) |
+| B1 scenarios | `study.yaml` → `B1.scenarios` (S-01…S-06); entry at the AIRBRAKE exit, `AIRSPEED_MIN - 2` (`braking.entry_airspeed`, converted at the scenario density) |
 | B1 sweep | $\varepsilon_h$ ∈ {20, 10, 6, 3} m, $\varepsilon_x$ = 300 m, `intervals` 40, `refine_from` [20], `max_iter` 800 |
 | B2 ensemble | the same 32 scenarios, seed and weights as C, so costs are comparable |
 | B2 start | a B1 solution for ensemble member 0 (4789 m, ISA +4.6 K, SoC 0.78, 24.9 kg) at $\varepsilon_h$ = 10, $\varepsilon_x$ = 300, replotted against $V/V_s$ |
@@ -258,5 +258,5 @@ Status: **bug** = fix needed; **decision** = a choice that belongs to the projec
 | B2 | `freeform_opt.optimise`, `init_from_collocation`, `init_from_zero_loss`, `evaluate`, `BOUNDS` |
 | cost | `ensemble.ensemble_cost` (10.1), [[analysis_C]] §2.2 |
 | drivers | `io/stages.py`: `task_b1`, `task_b2` |
-| inputs | `study.yaml` (`B1`, `B2`), `scenarios.yaml`, `controller.yaml`, `mission.yaml` (`speeds.entry_eas_ms`) |
+| inputs | `study.yaml` (`B1`, `B2`), `scenarios.yaml`, `controller.yaml`, `mission.yaml` |
 | related | [[analysis_C]], [[analysis_D]], [[analysis_A]], [[analysis_F]] (VRS), proposal §10B, eq. (10.4), (8.1), (8.2) |

@@ -10,7 +10,12 @@
 > - **Cruise design speed 22.5 m/s TAS at 1500 m, converted to constant dynamic pressure** (EAS 20.91) at other altitudes; climb and glide default to the cruise speed (optional overrides). This removes the fixed-TAS altitude benefit: Wh/km goes from 18.3 (0 m) to 14.4 (5000 m) at fixed TAS, but only 16.9 to 16.2 at constant EAS.
 > - **Throttle check is report-only against `TKOFF_THR_MAX` (0.8)**; a segment fails only when the trim is infeasible (command above 1, current limit, bus voltage under `V_min`). The 200 m climb at 5000 m at cruise speed needs a command above 1.0 at low SoC, and that is reported as a failure, not hidden.
 > - **SoC trace** from `soc_start` (default 1.0, full pack) down to `1 - eta_usable` = 0.2, checked at both ends of each segment (worse one reported); `a_fwd` per site, leg and SoC from Q2 (two passes). Reserve counted once (largest of the landings); `n_diversion_transitions` stays at 0.
-> - **E-1** (use the configured controller, entry at `entry_eas` converted to TAS) and **E-4** (visible `a_plan_source`, `a_plan_fallback_ms2`) are fixed; the mission geometry moves from `mission.yaml` to `study.yaml` (`sites_amsl_m`, `missions`, `ranges_km`, `a_fwd_mode`, `a_fwd_metric`), and `cruise_amsl_m` and `ground_amsl_m` leave `mission.yaml`. New `analysis/soc_trace.py`.
+> - **E-1** (use the configured controller, entry at the AIRBRAKE exit `AIRSPEED_MIN - 2`, converted to TAS; `mission.speeds.entry_eas_ms` was dropped, see below) and **E-4** (visible `a_plan_source`, `a_plan_fallback_ms2`) are fixed; the mission geometry moves from `mission.yaml` to `study.yaml` (`sites_amsl_m`, `missions`, `ranges_km`, `a_fwd_mode`, `a_fwd_metric`), and `cruise_amsl_m` and `ground_amsl_m` leave `mission.yaml`. New `analysis/soc_trace.py`.
+> - **Entry speed of the back transition (2026-10-28, one entry speed).** E's back-transition segment IS analysis D's
+>   stopping run from the AIRBRAKE exit; there is no separate cruise-to-exit deceleration leg in E. It now starts at
+>   `braking.entry_airspeed(AIRSPEED_MIN, rho, D.entry_convention)`, the same speed D, C and B1 use, and the register
+>   entry `mission.speeds.entry_eas_ms` (22 / 20.9, a cruise speed) is gone. The kinetic energy between the glide speed
+>   and the exit speed is therefore not charged to any segment of E (it was charged, in part, to the back transition).
 >
 > Result (repo run, defaults): round-trip radius 45.9 / 46.3 / 46.5 / 46.4 km at 0 / 1500 / 2500 / 5000 m (flown distance about 92 to 93 km); one-way 92.1 / 93.1 / 93.7 / 94.4 km; reserve 150 to 161 Wh. (Since 2026-10-27 E reads `AIRSPEED_MIN` as an equivalent airspeed, `Q2.feed_convention: eas`; with the earlier true-airspeed reading the radii were 45.9 / 46.3 / 46.6 / 47.1 km and the one-way ranges 92.1 / 93.1 / 93.7 / 95.1 km.) **The "100 km fits only at 5000 m" reading in section 4 was an artefact of fixed TAS** and is withdrawn. Open: whether `eta_usable` should read 0.9 (if the battery cut-off is 0.1 rather than 0.2, the same pack gives more usable energy; O-15), DEC-1, DEC-8.
 
@@ -39,7 +44,7 @@ E runs in the quick **basics** task after D and F (order A, D, F, E, Q2), so it 
 > - E sets `a_plan = a_rec`, so its back-transition segment describes the **aggressive end** of the trade: the **shortest** switch distance and the **lowest** VTOL energy and time for this controller. Planning with a lower `a_plan` switches earlier and costs more. From D's trade curve (S-01, 20.9 m/s): $a_{plan}$ 2.5 → 1.5 adds 58 m of VTOL distance and about 11.5 kJ (3.2 Wh).
 > - For Q1 this does not matter: the back transition is 4.5 Wh, about 0.27 km of range. For anything that depends on **where** the aircraft ends up (fixed distance, landing-point error, altitude excursion) it does matter, and E's value is a lower bound.
 > - The link is automatic: if D is not in the run (`--only E`), `a_plan` **silently falls back to 2.5**. The fallback should be visible in the output.
-> - E enters the back transition at cruise speed (22.5 m/s), above D's slowest entry (16 m/s) that sets `a_rec`, so `a_rec` is conservative for E's entry.
+> - E enters the back transition at the AIRBRAKE exit (`AIRSPEED_MIN - 2` EAS), the same speed as D, so `a_rec` is the right one for E's entry.
 
 ---
 

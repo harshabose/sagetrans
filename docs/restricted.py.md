@@ -25,7 +25,7 @@ C shares the ensemble, the seed, the weights and the search with B2, so their co
 | input | where it comes from |
 | --- | --- |
 | ensemble (n = 32, seed 8) | `study.yaml` → `C`; axes from `scenarios.yaml` (altitude 0–5000 m, ISA −10..+20 K, mass ×0.80–1.15, headwind −5..+5 m/s, SoC 0.2–1.0) |
-| entry speed | `mission.speeds.entry_eas_ms` = 20.9 m/s **equivalent**, converted to true airspeed at each scenario's density (21–28 m/s TAS); ground speed = TAS − headwind |
+| entry speed | the AIRBRAKE exit, `AIRSPEED_MIN - 2` (`braking.entry_airspeed`, converted at the scenario density); ground speed = TAS − headwind |
 | start point | the register's own values (`Q_BACKTRANS_MS` 3 s, `Q_A_ANGLE_MAX` 30°, `Q_M_SPIN_MIN` 0.1, `AIRSPEED_MIN` 17, `Q_TRANSITION_MS` 5 s, `TKOFF_THR_MAX` 0.8) |
 | fixed controller values | altitude-hold and position-cascade gains from `controller.yaml`; `PTCH_LIM_MAX_DEG` 35° |
 | search effort | 8 seeds, population 8, 20 generations, `a_plan_source: simulated` |
@@ -319,5 +319,5 @@ Status: **bug** = fix needed; **decision** = a choice that belongs to the projec
 | metrics and flags | `runs.run_metrics`, `runs.segment_stats`, `runs.failure_flags` |
 | controller | `ardupilot_like.Position1Controller` (back), `BaselineController` (full), [[ardupilot_like]] |
 | driver | `io/stages.py`: `task_c` |
-| inputs | `study.yaml` (`C`), `controller.yaml`, `scenarios.yaml` (ensemble axes), `mission.yaml` (`speeds.entry_eas_ms`) |
+| inputs | `study.yaml` (`C`), `controller.yaml`, `scenarios.yaml` (ensemble axes), `mission.yaml` |
 | related | [[analysis_D]] (planner, feed-forward), [[analysis_Q2]] (pusher margin, `AIRSPEED_MIN`), proposal §10C, §10B (B1, B2), eq. (10.1) |
