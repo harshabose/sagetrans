@@ -58,7 +58,8 @@ def _cache_path(work: Path, inp: StudyInputs, task: str) -> Path:
     # inputs hash: the register and the settings; source hash: the code that decides what a task
     # computes. An entry written under another pair (or by a version before the source hash existed,
     # which has no third field in its name) is never looked up, so it cannot be misread.
-    key = f"{inp.inputs_hash[:16]}.{sagetrans.__version__}.{record.source_hash()[:12]}"
+    key = (f"{inp.inputs_hash[:16]}.{sagetrans.__version__}.{record.source_hash()[:12]}"
+           f".{record.library_hash()[:8]}")
     return work / f"{safe}{tag}.{key}.pkl"
 
 

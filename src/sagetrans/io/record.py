@@ -5,10 +5,12 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import platform
 import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +74,9 @@ class FullRunRecord:
     # hash of the source files that decide what a task computes (see `source_hash`); also part of
     # the task-cache key, so a code change cannot serve an old pickle
     source_hash: str = ""
+    # Python and the numerical libraries that can move an optimum without a code change; also
+    # part of the task-cache key (see `library_versions`)
+    library_versions: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -110,6 +115,29 @@ def source_hash(root: Path | None = None) -> str:
         data = p.read_bytes().replace(b"\r\n", b"\n")  # line endings do not count
         h.update(data + b"\0")
     return h.hexdigest()
+
+
+# the libraries whose versions can change a result: pinned in pyproject.toml, recorded here and in
+# the cache key
+LIBRARIES = ("numpy", "scipy", "casadi", "cma", "SALib", "pydantic", "matplotlib")
+
+
+@lru_cache(maxsize=1)
+def library_versions() -> dict[str, str]:
+    """Python and the versions of `LIBRARIES` as installed ("not installed" is recorded too)."""
+    out = {"python": platform.python_version()}
+    for name in LIBRARIES:
+        try:
+            out[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            out[name] = "not installed"
+    return out
+
+
+def library_hash() -> str:
+    """sha256 of `library_versions`: the library part of the task-cache key."""
+    blob = json.dumps(library_versions(), sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()
 
 
 def build_record(
@@ -160,7 +188,7 @@ def build_record(
         settings_hash=settings_hash,
         fallbacks=fallbacks,
         override=override,
-        source_hash=source_hash(),
+        source_hash=source_hash(), library_versions=dict(library_versions()),
     )
 
 

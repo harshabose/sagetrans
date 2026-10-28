@@ -94,7 +94,9 @@ pytest && ruff check . && mypy && lint-imports # the checks the gate reads
 
 `--fresh-cache` deletes `<output_dir>/<run_name>/_work` first, so nothing is served from an earlier
 run; `--force` only ignores the entries it finds. The cache is also keyed by the source of the analysis
-code (`run_record.json` has `source_hash`), so a code change never serves an old result. Add
+code (`run_record.json` has `source_hash`) and by the versions of Python and the numerical libraries
+(`library_versions`, pinned in `pyproject.toml`), so neither a code change nor a library change serves an old
+result. Add
 `--workers N` to choose the number of processes; B1 solves are memory-heavy, so keep it at 3 or fewer
 on a small machine when running `--only B1`.
 

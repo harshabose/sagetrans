@@ -64,7 +64,7 @@ def test_the_cache_path_carries_the_inputs_the_version_and_the_source(tmp_path, 
     work = tmp_path / "w"
     a = study._cache_path(work, inp, "basics")
     assert inp.inputs_hash[:16] in a.name and sagetrans.__version__ in a.name
-    assert record.source_hash()[:12] in a.name
+    assert record.source_hash()[:12] in a.name and record.library_hash()[:8] in a.name
     monkeypatch.setattr(record, "source_hash", lambda root=None: "f" * 64)
     b = study._cache_path(work, inp, "basics")
     assert b != a and "ffffffffffff" in b.name  # other code, other entry
@@ -87,7 +87,7 @@ def test_a_code_change_or_a_register_change_invalidates_and_an_old_entry_is_igno
     inp = load_inputs(cfg)
     work = out.folder / "_work"
     new = study._cache_path(work, inp, "basics")
-    old = new.with_name(new.name.rsplit(".", 2)[0] + ".pkl")
+    old = new.with_name(new.name.rsplit(".", 3)[0] + ".pkl")
     assert old != new
     old.write_bytes(pickle.dumps({"tables": {"F_descent": [{"sentinel": 1}]}, "errors": []}))
     new.unlink()
@@ -115,6 +115,9 @@ def test_the_run_record_carries_the_source_hash(tmp_path):
     out = study.run_study(cfg, out_dir=tmp_path / "res", workers=1, log=lambda s: None)
     rec = json.loads((out.folder / "run_record.json").read_text(encoding="utf-8"))
     assert rec["source_hash"] == record.source_hash() and len(rec["source_hash"]) == 64
+    libs = rec["library_versions"]
+    assert set(libs) == {"python", *record.LIBRARIES} and libs == record.library_versions()
+    assert all(v and v != "not installed" for v in libs.values())
 
 
 def test_fresh_cache_deletes_the_cache_and_computes_every_task(tmp_path):
@@ -141,3 +144,27 @@ def test_workers_get_one_blas_thread_unless_the_user_chose(monkeypatch):
     study._one_blas_thread_per_worker()
     assert os.environ["OPENBLAS_NUM_THREADS"] == "1" and os.environ["MKL_NUM_THREADS"] == "1"
     assert os.environ["OMP_NUM_THREADS"] == "4"  # the user's choice stays
+
+
+def test_a_library_version_is_part_of_the_cache_key(tmp_path, monkeypatch):
+    inp = load_inputs(CONFIGS)
+    a = study._cache_path(tmp_path, inp, "basics")
+    changed = {**record.library_versions(), "scipy": "0.0.0"}
+    monkeypatch.setattr(record, "library_versions", lambda: changed)
+    assert study._cache_path(tmp_path, inp, "basics") != a  # another scipy: another entry
+
+
+def test_the_pins_cover_the_recorded_libraries_and_hold_the_installed_versions():
+    import tomllib
+
+    from packaging.requirements import Requirement
+
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "dependencies"]
+    reqs = [Requirement(d) for d in deps]
+    for name in record.LIBRARIES:
+        active = [r for r in reqs if r.name.lower() == name.lower()
+                  and (r.marker is None or r.marker.evaluate())]
+        assert len(active) == 1, name  # one pin applies to this Python
+        assert "~=" in str(active[0].specifier), name  # a compatible release, not a floor
+        assert active[0].specifier.contains(record.library_versions()[name]), name
