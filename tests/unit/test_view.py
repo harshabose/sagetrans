@@ -330,3 +330,25 @@ def test_the_ft_chapter_shows_the_grid_with_the_winner_and_the_failed_spreads(tm
     assert "8 s (3.4%)" in ft  # the point above the T-12 limit is named
     assert 'class="mk s2' in ft  # the winner has its own mark
     assert "mk s1 hollow" in ft  # and the failed point is hollow
+
+
+def test_the_defaults_chapter_compares_flag_counts_and_names_saving_or_increase(tmp_path):
+    write_table(tmp_path, "FT_params", [
+        {"case": "optimum", "J": 0.8, "mean_energy_kJ": 40.0, "worst_stall_margin": 1.2},
+        {"case": "register", "J": 5.0, "mean_energy_kJ": 41.0, "worst_stall_margin": 1.0},
+        {"case": "ardupilot_default", "J": 2.0, "mean_energy_kJ": 30.0, "worst_stall_margin": 0.0}])
+    write_table(tmp_path, "FT_runs", [  # fmt: skip
+        {"case": "optimum", "member": 0, "flags": "alt_loss"},
+        {"case": "optimum", "member": 1, "flags": ""},
+        {"case": "ardupilot_default", "member": 0, "flags": "alt_loss"},
+        {"case": "ardupilot_default", "member": 1, "flags": "alt_loss"},
+        {"case": "ardupilot_default", "member": 2, "flags": "stall_margin"}])
+    write_record(tmp_path, schema_version=2)
+    html = build_html(load(tmp_path))
+    d = html.split('id="defaults"')[1].split("</section>")[0]
+    # alt_loss fires in both cases but more often in the default; stall_margin only in the default
+    assert "alt_loss in 2 member(s) against 1" in d and "stall_margin in 1 member(s)" in d
+    # the cost 0.8 against 2.0 is a saving
+    assert "60 % saving" in d
+    # more energy than the default (40 against 30) is an increase, not a negative saving
+    assert "33 % increase" in d and "-33" not in d

@@ -1658,10 +1658,16 @@ def build_sens(c: Ctx) -> Out:
 
 # ------------------------------------------------------------------------------- defaults
 def _pct(opt: float, dflt: float) -> tuple[str, str]:
-    """The change from the default as text and the expression `1 - optimum/default`."""
+    """The change from the default as text and the expression `1 - optimum/default`.
+
+    A positive value is a saving, a negative one an increase (a worse cost is not a negative
+    saving); nothing is printed when the default is zero or either side is missing.
+    """
     if not (ok(opt) and ok(dflt)) or dflt == 0:
         return "", ""
-    return f"{(1 - opt / dflt) * 100:.0f} %", f"1 - {opt:.4g}/{dflt:.4g}"
+    pct = (1 - opt / dflt) * 100
+    text = f"{pct:.0f} % saving" if pct >= 0 else f"{-pct:.0f} % increase"
+    return text, f"1 - {opt:.4g}/{dflt:.4g}"
 
 
 def build_defaults(c: Ctx) -> Out:
@@ -1758,8 +1764,8 @@ def build_defaults(c: Ctx) -> Out:
         o.figures.append(
             panelbox(
                 f"{name}: results by case",
-                f"From {table}. The percentage is "
-                "1 - optimum/default; hover it for the expression.",
+                f"From {table}. The change is the saving 1 - optimum/default (a negative value "
+                "is printed as an increase); hover it for the expression.",
                 blocks_html,
             )
         )
@@ -1776,20 +1782,25 @@ def build_defaults(c: Ctx) -> Out:
                 dcnt = dict(cnt)
             else:
                 ocnt = dict(cnt)
-        only = {k: n for k, n in dcnt.items() if k not in ocnt}
+        # a flag the default raises that the optimum does not, or raises more often (the counts
+        # are compared, not only the names)
+        worse = {k: (n, ocnt.get(k, 0)) for k, n in dcnt.items() if n > ocnt.get(k, 0)}
         fails.append(
             f"{name}: "
             + (
-                ", ".join(f"{k} in {n} member(s)" for k, n in sorted(only.items()))
-                if only
-                else "no flag that the optimum does not also raise"
+                ", ".join(
+                    f"{k} in {n} member(s)" if m == 0 else f"{k} in {n} member(s) against {m}"
+                    for k, (n, m) in sorted(worse.items())
+                )
+                if worse
+                else "no flag that the default raises more often than the optimum"
             )
         )
     o.figures.append(
         panelbox(
             "Where the default fails",
-            "Flags the default case raises that the optimum "
-            "does not, counted over the ensemble members.",
+            "Flags the default case raises that the optimum does not, or raises more often "
+            "(the count for the optimum is given), counted over the ensemble members.",
             "<ul>" + "".join(f"<li>{esc_cell(f)}</li>" for f in fails) + "</ul>",
         )
     )
