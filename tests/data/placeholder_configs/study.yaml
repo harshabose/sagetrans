@@ -35,7 +35,7 @@ F:                         # landing descent profile
   scenarios: [S-01, S-02]
 
 E:                         # energy budget
-  cruise_amsl_m: [1000, 5000]      # one budget per cruise altitude
+  sites_amsl_m: [0, 5000]          # airfield elevations
   ranges_km: [50, 100, 113, 150]   # ranges shorter than the climb+descent distance are skipped
 
 Q2:                        # pusher thrust margin at AIRSPEED_MIN

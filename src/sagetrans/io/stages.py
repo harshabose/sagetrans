@@ -28,6 +28,7 @@ from sagetrans.analysis import (
     pusher,
     restricted,
     runs,
+    soc_trace,
     zero_loss,
 )
 from sagetrans.analysis import collocation as coll
@@ -147,6 +148,83 @@ def q2_cells(inp: StudyInputs, conventions: list[str]) -> list[Q2Cell]:
 def q2_worst(cells: list[Q2Cell], conv: str) -> Q2Cell:
     """The cell with the smallest minimum acceleration in one convention (never clipped at 0)."""
     return min((c for c in cells if c[0]["convention"] == conv), key=lambda c: c[1].a_min)
+
+
+# ---- E: the mission budget per site -------------------------------------------------------------
+@dataclasses.dataclass
+class ECase:
+    """One solved (site, mission): the budget, its range, the SoC trace and the checks."""
+
+    mb: energy.MissionBudget
+    r_max: float
+    rows: list[soc_trace.TraceRow]
+    soc_before: float
+    soc_after: float
+    checks: list[soc_trace.SegmentCheck]
+    a_fwd: dict[str, float]
+
+
+def _fwd_accel_by_leg(
+    inp: StudyInputs, vp: VehicleParams, mp: energy.MissionProfile, masses: dict[str, float],
+    socs: dict[str, float], worst: float,
+) -> dict[str, float]:
+    """Forward-transition acceleration of each leg: Q2 at the site, mass and SoC of the leg
+    (`case`), the global worst over the Q2 grid (`worst`) or the mission file (`mission`)."""
+    ec, q2c = inp.study.E, inp.study.Q2
+    if ec.a_fwd_mode == "mission":
+        return dict.fromkeys(masses, mp.a_fwd)
+    if ec.a_fwd_mode == "worst":
+        return dict.fromkeys(masses, worst)
+    rho_c = float(atmosphere.density(mp.clearance_amsl, mp.isa_offset_k))
+    v_end = mp.v_trans if q2c.feed_convention == "tas" else mp.v_trans * math.sqrt(RHO0 / rho_c)
+    out: dict[str, float] = {}
+    for leg, m in masses.items():
+        f = pusher.forward_accel(
+            dataclasses.replace(vp, m=m), rho_c, v_end, socs[leg], inp.tkoff_thr_max, q2c.n_speed
+        )
+        out[leg] = f.a_min if ec.a_fwd_metric == "min" else f.a_equiv
+    return out
+
+
+def solve_e_case(
+    inp: StudyInputs, site: float, kind: str, a_plan: float, worst: float
+) -> ECase:
+    """Solve one site and mission: the range, the SoC trace and the segment checks.
+
+    Pass 1 takes every leg's forward-transition acceleration at the mean SoC; pass 2 at the SoC the
+    trace gives at the start of that leg's forward transition (only `case` mode depends on it).
+    Raises ValueError for a non-positive acceleration: there is no fallback to the mission value.
+    """
+    vp, ec = inp.vehicle, inp.study.E
+    mp = energy.mission_at_site(inp.mission, site)
+    masses = {"out": vp.m, "ret": vp.m - mp.payload_kg} if kind == "round_trip" else {"leg": vp.m}
+    rho_bt = float(atmosphere.density(site + mp.h_bt_agl_m, mp.isa_offset_k))
+    v0 = inp.entry_eas * math.sqrt(RHO0 / rho_bt)  # D's entry EAS as a true airspeed
+    e_nom = vp.battery.e_nominal_wh * 3600.0
+    src = None
+    if ec.a_fwd_mode != "mission":
+        src = f"quasi-steady estimate, a_fwd from Q2 ({ec.a_fwd_mode})"
+    socs = dict.fromkeys(masses, mp.soc_mean)
+    for n_pass in (1, 2):
+        a = _fwd_accel_by_leg(inp, vp, mp, masses, socs, worst)
+        bad = {k: v for k, v in a.items() if not (math.isfinite(v) and v > 0.0)}
+        if bad:
+            raise ValueError(
+                f"a_fwd = {', '.join(f'{k} {v:.3g}' for k, v in bad.items())} m/s2 "
+                f"({ec.a_fwd_mode}, {ec.a_fwd_metric}): the pusher cannot reach AIRSPEED_MIN at "
+                f"TKOFF_THR_MAX = {inp.tkoff_thr_max:g}"
+            )
+        mb = energy.build_mission(vp, mp, inp.window, inp.descent, a_plan, kind, a,
+                                  bp=inp.controller, v0_entry=v0, a_fwd_source=src)  # fmt: skip
+        r_max = mb.max_range_m
+        if r_max <= 0.0:
+            raise ValueError("the usable energy does not cover the fixed segments and the reserve")
+        rows, s_before, s_after = soc_trace.trace(mb, r_max, inp.window.soc_start, e_nom)
+        if n_pass == 2 or ec.a_fwd_mode != "case":
+            break
+        socs = {r.leg: r.soc_start for r in rows if r.segment == "fwd_transition"}
+    checks = soc_trace.check_mission(mb, rows, inp.tkoff_thr_max)
+    return ECase(mb, r_max, rows, s_before, s_after, checks, a)
 
 
 # ---- task: basics (A, D, F, E, Q2) -------------------------------------------------------------
@@ -447,96 +525,109 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         out["tables"]["F_descent"] = rows
 
     def stage_e() -> None:
+        ec, q2c = inp.study.E, inp.study.Q2
         a_rec = out.get("a_rec")
         if a_rec is None or not math.isfinite(a_rec):
-            a_plan, a_source = inp.study.E.a_plan_fallback_ms2, "fallback"
+            a_plan, a_source = ec.a_plan_fallback_ms2, "fallback"
             errors.append(f"E: no recommendation from D, a_plan = {a_plan:g} m/s2 (fallback)")
         else:
             a_plan, a_source = float(a_rec), "D"
-        # forward-transition acceleration from Q2: E's own site ("case"), the worst over the Q2
-        # grid ("worst") or the mission file; all three are reported, one is used
-        ec, q2c = inp.study.E, inp.study.Q2
-        mp0 = inp.mission
-        rho_c = float(atmosphere.density(mp0.clearance_amsl, mp0.isa_offset_k))
-        feed_tas = q2c.feed_convention == "tas"
-        v_end = mp0.v_trans if feed_tas else mp0.v_trans * math.sqrt(RHO0 / rho_c)
-        case = pusher.forward_accel(vp, rho_c, v_end, mp0.soc_mean, inp.tkoff_thr_max, q2c.n_speed)
-        worst_row, worst = q2_worst(q2_grid([q2c.feed_convention]), q2c.feed_convention)
-
-        def pick(f: pusher.FwdAccel) -> float:
-            return f.a_min if ec.a_fwd_metric == "min" else f.a_equiv
-
-        a_case, a_worst = pick(case), pick(worst)
-        a_used = {"case": a_case, "worst": a_worst, "mission": mp0.a_fwd}[ec.a_fwd_mode]
-        fwd_cols = {"a_fwd_used_ms2": _num(a_used), "a_fwd_case_ms2": _num(a_case),
-                    "a_fwd_worst_ms2": _num(a_worst), "a_fwd_mode": ec.a_fwd_mode}  # fmt: skip
-        fwd_src = None if ec.a_fwd_mode == "mission" else (
-            f"quasi-steady estimate, a_fwd from Q2 ({ec.a_fwd_mode})")  # fmt: skip
+        # the global worst of the Q2 grid, for `worst` mode and as a reference column
+        worst = math.nan
+        if ec.a_fwd_mode == "worst" or "Q2" in wanted:
+            w_f = q2_worst(q2_grid([q2c.feed_convention]), q2c.feed_convention)[1]
+            worst = w_f.a_min if ec.a_fwd_metric == "min" else w_f.a_equiv
+        tabs = out["tables"]
         budgets: dict[str, Any] = {}
-        ranges = sorted({*inp.study.E.ranges_km, *inp.requirements_km})
-        usable = math.isfinite(a_used) and a_used > 0.0
-        v_target = worst_row["v_end_tas_ms"] if ec.a_fwd_mode == "worst" else v_end
-        if not usable:  # no fallback to the mission value: that silent default is what Q2 removes
-            msg = (f"a_fwd = {a_used:.3g} m/s2 ({ec.a_fwd_mode}, {ec.a_fwd_metric}): the pusher "
-                   f"cannot reach {v_target:.1f} m/s at TKOFF_THR_MAX = {inp.tkoff_thr_max:g}")
-            errors.append(f"E forward transition: {msg}")
-            out["tables"].setdefault("E_summary", []).append(
-                {"case": "forward_transition", "error": msg, **fwd_cols}
-            )
-        for alt in inp.study.E.cruise_amsl_m if usable else []:
-            name = f"cruise_{alt:.0f}m"
-            mp = dataclasses.replace(inp.mission, cruise_amsl_m=alt, a_fwd=a_used)
-            try:
-                b = energy.build_budget(vp, mp, inp.window, inp.descent, a_plan, fwd_src)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"E budget {name}: {type(exc).__name__}: {exc}")
-                out["tables"].setdefault("E_summary", []).append({"case": name, "error": str(exc)})
-                continue
-            budgets[name] = b
-            ok_ranges = [r * 1e3 for r in ranges if r * 1e3 >= b.fixed_distance_m]
-            for row in b.table(ok_ranges):
-                out["tables"].setdefault("E_budget", []).append({"case": name, **row})
-            conf = b.conflicts(tuple(r * 1e3 for r in inp.requirements_km))
-            out["tables"].setdefault("E_summary", []).append({
-                "case": name, "v_cruise_ms": b.notes["v_cruise"],
-                "fixed_segments_distance_km": b.fixed_distance_m / 1e3,
-                "p_cruise_W": b.notes["p_cruise_W"],
-                "e_cruise_Wh_per_km": b.e_cruise_J_per_m * 1e3 / 3600.0,
-                "max_range_km": b.max_range_m / 1e3, "usable_Wh": b.usable_J / 3600.0,
-                "reserve_Wh": b.reserve_J / 3600.0,
-                **{f"conflict_{r:g}km": c for r, c in zip(inp.requirements_km, conf.values(),
-                                                          strict=True)},
-                "a_plan_ms2": a_plan, "a_plan_source": a_source, **fwd_cols,
-            })  # fmt: skip
-            for seg, s in b.segments.items():
-                out["tables"].setdefault("E_segments", []).append({
-                    "case": name, "segment": seg, "energy_Wh": s.energy_J / 3600.0,
-                    "time_s": s.time_s, "distance_m": s.distance_m,
-                    "source": s.source})  # fmt: skip
+        ranges = sorted({*ec.ranges_km, *inp.requirements_km})
+        window = inp.window
+        for site in ec.sites_amsl_m:
+            for kind in ec.missions:
+                name = f"{site:.0f}m_{kind}"
+                try:
+                    cs = solve_e_case(inp, site, kind, a_plan, worst)
+                except (ValueError, RuntimeError) as exc:
+                    errors.append(f"E {name}: {exc}")
+                    tabs.setdefault("E_summary", []).append(
+                        {"site_amsl_m": site, "mission": kind, "error": str(exc)})
+                    continue
+                mb, r = cs.mb, cs.r_max
+                budgets[name] = mb
+                mp_site = energy.mission_at_site(inp.mission, site)
+                rho_c = float(atmosphere.density(mp_site.cruise_amsl_m, mp_site.isa_offset_k))
+                v_c = mb.profiles[mb.legs[0][0]].v_cruise or math.nan
+                reqs = {f"{x:g}": x * 1e3 for x in inp.requirements_km}
+                summ = soc_trace.summarise(cs.checks)
+                row: dict[str, Any] = {
+                    "site_amsl_m": site, "mission": kind, "cruise_amsl_m": mp_site.cruise_amsl_m,
+                    "v_cruise_tas_ms": v_c, "v_cruise_eas_ms": v_c * math.sqrt(rho_c / RHO0),
+                    "max_range_km": r / 1e3,
+                    "flown_total_km": r * len(mb.legs) / 1e3,
+                    "fixed_Wh": mb.fixed_J / 3600.0,
+                    **{f"fixed_{n}_Wh": b.fixed_J / 3600.0 for n, _, b in mb.legs},
+                    "cruise_Wh": (mb.total_J(r) - mb.fixed_J - mb.reserve_J - mb.drop_J) / 3600.0,
+                    "reserve_Wh": mb.reserve_J / 3600.0,
+                    "reserve_binding_leg": mb.notes["reserve_binding_leg"],
+                    "drop_Wh": mb.drop_J / 3600.0, "usable_Wh": mb.usable_J / 3600.0,
+                    "soc_start": window.soc_start, "soc_end_before_reserve": cs.soc_before,
+                    "soc_end_after_reserve": cs.soc_after,
+                    "window_ok": cs.soc_after >= window.soc_eod - 1e-9, **summ,
+                    "a_fwd_mode": ec.a_fwd_mode,
+                    "a_fwd_out_ms2": cs.a_fwd.get("out", cs.a_fwd.get("leg")),
+                    "a_fwd_ret_ms2": cs.a_fwd.get("ret", ""), "a_fwd_worst_ms2": _num(worst),
+                    "a_plan_ms2": a_plan, "a_plan_source": a_source,
+                }  # fmt: skip
+                for lab, rm in reqs.items():
+                    ok = rm >= mb.fixed_distance_m
+                    row[f"margin_Wh_at_{lab}km"] = mb.margin_J(rm) / 3600.0 if ok else ""
+                    row[f"conflict_{lab}km"] = mb.max_range_m < rm
+                tabs.setdefault("E_summary", []).append(row)
+                ok_ranges = [x * 1e3 for x in ranges if x * 1e3 >= mb.fixed_distance_m]
+                for brow in mb.table(ok_ranges):
+                    tabs.setdefault("E_budget", []).append(
+                        {"site_amsl_m": site, "mission": kind, **brow})
+                by_leg = {n: (m, b) for n, m, b in mb.legs}
+                for chk in cs.checks:
+                    mass, b = by_leg[chk.leg]
+                    if chk.segment == "cruise":
+                        dist = r - b.fixed_distance_m
+                        t_s, src = dist / (v_c or math.nan), "level trim, pusher model"
+                    else:
+                        sr = b.segments[chk.segment]
+                        dist, t_s, src = sr.distance_m, sr.time_s, sr.source
+                    tabs.setdefault("E_segments", []).append({
+                        "site_amsl_m": site, "mission": kind, "leg": chk.leg,
+                        "segment": chk.segment,
+                        "mass_kg": mass, "energy_Wh": chk.energy_Wh, "time_s": t_s,
+                        "distance_m": dist, "source": src, "soc_start": chk.soc_start,
+                        "soc_end": chk.soc_end, "feasible": chk.feasible, "limit": chk.limit,
+                        "pusher_cmd_max": _num(chk.pusher_cmd_max),
+                        "rotor_cmd_max": _num(chk.rotor_cmd_max),
+                        "over_ceiling": chk.over_ceiling,
+                        "roc_at_ceiling_ms": _num(chk.roc_at_ceiling_ms),
+                    })  # fmt: skip
+                last = mb.legs[-1][0]
+                land_start = next(x.soc_start for x in reversed(cs.rows)
+                                  if x.leg == last and x.segment == "landing")  # fmt: skip
+                for point, soc in (("stress (soc_eod)", window.soc_eod),
+                                   ("landing start", land_start),
+                                   ("after reserve", max(cs.soc_after, 0.0))):  # fmt: skip
+                    tabs.setdefault("E_hover_check", []).append({
+                        "site_amsl_m": site, "mission": kind, "point": point, "soc": soc,
+                        **energy.hover_check(mb.vehicles[last], mb.profiles[last], window, soc),
+                    })  # fmt: skip
         out["budgets"] = budgets
-        hc: Table = []
-        for soc_eod in sorted({inp.window.soc_eod, min(1.0, inp.window.soc_eod + 0.1)}):
-            w = dataclasses.replace(inp.window, soc_eod=soc_eod)
-            for g in sorted({inp.mission.ground_amsl_m, inp.mission.ground_amsl_m + 2000.0}):
-                mp = dataclasses.replace(inp.mission, ground_amsl_m=g, cruise_amsl_m=g + 1000.0)
-                hc.append({"soc_end_of_discharge": soc_eod, "landing_elevation_m": g,
-                           **energy.hover_check(vp, mp, w)})  # fmt: skip
-        out["tables"]["E_hover_check"] = hc
         first = next(iter(budgets.values()), None)
         if first is not None:
-            res = energy.reserve_energy(
-                vp, inp.mission, inp.mission.soc_mean, first.e_cruise_J_per_m,
-                first.segments["fwd_transition"].energy_J,
-                first.segments["back_transition"].energy_J,
-            )  # fmt: skip
-            out["tables"]["E_reserve"] = [{"component": k, "energy_Wh": v / 3600.0}
-                                          for k, v in res.items()]  # fmt: skip
+            binding = str(first.notes["reserve_binding_leg"])
+            tabs["E_reserve"] = [{"component": k, "energy_Wh": v / 3600.0}
+                                 for k, v in first.reserve_parts[binding].items()]  # fmt: skip
         for name in inp.study.F.scenarios:
             sc = inp.scenarios[name]
             speeds = np.linspace(1.1 * energy.stall_speed_1g(sc.vehicle_for(vp), sc.rho), 40.0, 30)
             sw = energy.cruise_sweep(sc.vehicle_for(vp), sc.rho, inp.mission.soc_mean, speeds)
             for v, pw, j in zip(sw["V"], sw["power_W"], sw["J_per_m"], strict=True):
-                out["tables"].setdefault("E_cruise_sweep", []).append({
+                tabs.setdefault("E_cruise_sweep", []).append({
                     "scenario": name, "altitude_m": sc.altitude_amsl_m, "V_tas_ms": float(v),
                     "power_W": float(pw), "Wh_per_km": float(j) * 1e3 / 3600.0})  # fmt: skip
 
@@ -655,7 +746,8 @@ def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
         inp.vehicle, scen, statuses=inp.input_statuses(), fractions=inp.input_fractions(),
         controller_nominals=inp.controller_nominals(),
     )  # fmt: skip
-    budget = (inp.mission, inp.window, inp.descent) if c.include_budget else None
+    mp_site = energy.mission_at_site(inp.mission, scen.ground_amsl_m)
+    budget = (mp_site, inp.window, inp.descent) if c.include_budget else None
     return sens.HeadlineModel(
         inp.vehicle, scen, inputs, prm=dict(inp.start_params), budget=budget,
         controller=dict(inp.controller_overrides), theta_p=inp.theta_p,

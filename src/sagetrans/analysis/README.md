@@ -400,6 +400,52 @@ E_total = E_to + E_ft + E_climb + E_cruise + E_desc + E_bt + E_land + E_reserve
           <= eta_usable * SoH * f(T) * E_nom                                              (10.6)
 ```
 
+### What E computes
+
+* **Two missions per site.** `round_trip`: a loaded outbound leg, the payload drop, an empty
+  return leg (`vehicle mass - payload_kg`); each leg has its own take-off, forward transition,
+  climb, cruise, glide, back transition and landing, so every fixed segment appears twice and the
+  reserve is counted once (the larger of the two landings' reserves). `one_way`: a single loaded
+  leg. `MissionBudget` composes the legs (`BudgetResult` is one leg and is unchanged).
+* **The range is an output.** Whatever energy is left after the fixed segments and the reserve goes
+  to cruise (`max_range_m`, in closed form: the energy is linear in the distance). It is the
+  one-way distance, or the radius of a round trip (which flies twice that). The 100 and 120 km
+  requirements are comparison columns (`margin_Wh_at_<R>km`, `conflict_<R>km`); they never enter the
+  solve.
+* **Site and climb height.** The swept quantity is the airfield elevation (`E.sites_amsl_m`);
+  take-off and landing are at the same elevation and the cruise altitude is the site plus
+  `mission.profile.climb_height_m` (200 m, so the climb is 170 m above the 30 m clearance). The
+  5000 m site is a design-envelope check, not a delivery site.
+* **Speeds follow the dynamic pressure.** `v_cruise` is the design TAS at
+  `v_cruise_ref_amsl_m` (22.5 m/s at 1500 m, an EAS of 20.9); at any other altitude the TAS follows
+  from the density (`design_speeds`, `mission_at_site`). Climb and glide use the same speed unless
+  `v_climb` or `v_glide` are given.
+* **Forward-transition acceleration** comes from Q2 per site, per leg mass and per leg SoC
+  (`E.a_fwd_mode`: `case` default, `worst`, `mission`; `E.a_fwd_metric`: `min` or `equiv`). In
+  `case` mode a second pass takes each leg's SoC at the start of its forward transition from the
+  trace. A non-positive acceleration gives an error row and no budget (there is no fallback).
+* **Back transition** uses the configured controller (as D does) and enters at D's entry EAS
+  converted to TAS at the site.
+
+### `soc_trace.py`: the SoC along the mission and the feasibility of each segment
+
+Segment energies use the mean SoC (`soc_mean`, now the mean of the trace). The trace starts at
+`soc_start` (a full pack, 1.0) and falls with the cumulative energy over the nominal capacity; the
+usable energy is `eta_usable` of nominal, so it ends at 0.2 after the reserve (`window_ok` reports
+that this stays above `soc_eod`, the stress point of the hover check). Every segment is checked at
+**both** its start and end SoC and the worse is reported: the bus voltage falls with the charge, so
+the same thrust needs a higher command (a sea-level climb at 2.5 m/s needs 0.80 at SoC 1.0 and 0.95
+at 0.2). A segment **fails** only when its operating point is infeasible: a pusher or rotor command
+above 1, a motor current limit, a bus voltage below `V_min`, a pack that cannot deliver the power,
+or (forward transition) a pusher that cannot reach `AIRSPEED_MIN`. A pusher command above
+`TKOFF_THR_MAX` (the ceiling) is only **reported** (`over_ceiling`); `roc_at_ceiling_ms` is the best
+rate of climb at the ceiling. At the defaults nothing fails; every climb is above the 0.8 ceiling,
+and the 5000 m return climb is within about 0.01 of the limit of 1. With `soc_start` 0.8 that climb
+fails (command 1.04) and `window_ok` is False.
+
+Tables: `E_summary` (one row per site and mission), `E_budget`, `E_segments` (with the checks),
+`E_hover_check` (stress point, landing start, after the reserve), `E_reserve`, `E_cruise_sweep`.
+
 | Segment | How it is computed |
 | --- | --- |
 | Take-off | hover power times (pre-lift-off hover + vertical climb to clearance) plus `m g h` divided by the electrical-to-lift efficiency |
@@ -420,10 +466,10 @@ for the hand-calculated reference case).
 **`hover_check`** confirms hover power can be delivered at end of discharge:
 `P_hover,req <= V_bus(eod) * I_available`, plus the motor-level throttle and current check.
 
-**Assumptions to know about:** one leg at one mass (a return leg is a second call); every segment
-uses one **mean state of charge** (`soc_mean`) rather than tracking the open-circuit voltage; the
+**Assumptions to know about:** every segment's energy uses one **mean state of charge**
+(`soc_mean`); the trace and the checks use the actual SoC; the
 usable-energy window (`BatteryWindow`: `eta_usable 0.8`, `SoH 1`, temperature factor 1) is assumed
-(open question O-15); the forward transition is an estimate. `E_summary` carries `a_fwd_used_ms2`, `a_fwd_case_ms2`, `a_fwd_worst_ms2` and `a_fwd_mode`. If the acceleration is not positive (the pusher cannot reach the speed) the stage records an error and writes no budget; it never falls back to the mission value. `E.a_fwd_metric` is `min` (worst over speed, default) or `equiv` (the constant acceleration covering the same distance).
+(open question O-15); the forward transition is an estimate.
 
 **What it found (placeholder).** Hover is about 1.2 kW (it was 3.5 kW before the ESC bus-current
 correction — see `physics/README.md`). The placeholder budget comes out at several hundred km maximum

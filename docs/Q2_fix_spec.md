@@ -1,6 +1,8 @@
 # Analysis Q2 fix specification (pusher acceleration, feed to E): hand-off for an implementing agent
 
-Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: implemented** (branch `feat/q2-pusher-accel`; section 11 checks 1 to 12 were run, tests are left to the owner) (written 26 Oct 2026). The numbers below come from scratch scripts run on the repo's real configs in draft mode (`vehicle.yaml`, `study.yaml` Q2 grid, `controller.yaml`); they are expected values for the acceptance checks, not repo changes. See section 11 for how they were made.
+Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: implemented** (branch `feat/q2-pusher-accel`; section 11 checks 1 to 12 were run, tests are left to the owner) (written 26 Oct 2026). The numbers below come from scratch scripts run on the repo's real configs in draft mode (`vehicle.yaml`, `study.yaml` Q2 grid, `controller.yaml`); they are expected values for the acceptance checks, not repo changes. See section 12 for how they were made.
+
+**Hand-off order.** This spec is self-contained and goes first. It leaves E's structure as it is today (one leg, the existing cruise-altitude loop, one mean SoC). A separate redesign of E (`E_fix_spec.md`: airfield-elevation sweep, round-trip and one-way missions, two leg masses, SoC per leg) is written afterwards against the code this spec produces; it reuses `pusher.forward_accel` unchanged and only changes how often, and with which mass and SoC, `stage_e` calls it (see the scope note in section 6).
 
 ## 0. Decisions already taken by the project owner (do not re-open)
 
@@ -12,6 +14,7 @@ Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **
    - `worst`: the **global worst over the Q2 grid** (altitude x mass factor x SoC).
    - `mission` keeps today's behaviour (`mp.a_fwd` from `mission.yaml`, 1.5 m/s^2) so the old numbers can be reproduced.
    Q2 always reports both numbers; E carries whichever mode is set and records all three in `E_summary`.
+   In this PR E keeps its current structure; the redesign of E is a later, separate spec (see the header).
    *Reading note:* "case matched with global worst as worst" was read as "case-matched value for E, global worst as the worst-case figure". If the intent was the reverse default, change only the default of `E.a_fwd_mode`.
 5. **Airspeed convention.** `AIRSPEED_MIN` is registered as TAS in `controller.yaml`; the old Q2 read it as EAS. **Both are kept**: Q2 reports every row in both conventions (`convention` column). The value fed to E uses `Q2.feed_convention` (default `tas`, because E treats `v_trans` as TAS). DEC-1 (the project-wide TAS/EAS decision) is still open and changes these numbers at altitude; see section 10.
 
@@ -199,6 +202,8 @@ a_used = {"case": a_case, "worst": a_worst, "mission": mp0.a_fwd}[mode]
 - Each budget then uses `mp = dataclasses.replace(inp.mission, cruise_amsl_m=alt, a_fwd=a_used)`.
 - `E_summary` gets four columns per row: `a_fwd_used_ms2`, `a_fwd_case_ms2`, `a_fwd_worst_ms2`, `a_fwd_mode`. `E_segments` is unchanged (its `source` text for the forward transition becomes `"quasi-steady estimate, a_fwd from Q2 (<mode>)"`, or the old text in `mission` mode).
 - The case altitude is the clearance altitude (ground + `clearance_agl_m`), the same one `forward_transition_estimate` uses for density, so Q2's case and E's segment see the same air. It does **not** depend on the cruise altitude, so compute `a_case` once.
+
+**Scope note.** "Compute once" holds only for E as it is today, where the airfield stays at `mission.yaml`'s `ground_amsl_m` while the cruise altitude is swept. The planned E redesign sweeps the airfield elevation and flies two legs at different masses and SoCs, so it will call `pusher.forward_accel` once per site and per leg (same function, different `rho`, `vp.m`, `soc`). Do not build a cache or a signature in this PR that assumes a single site, mass or SoC: pass them as arguments, as `forward_accel` already does.
 - E's `v_trans` stays a TAS target inside `forward_transition_estimate`. With `feed_convention = "eas"` the case speed is `v_trans * sqrt(RHO0 / rho_c)`, which at 30 m ISA is 0.2 percent above `v_trans` (17.03 against 17.00), so the two E models agree to rounding. At the case altitude the convention hardly matters; at altitude it matters a lot (section 10).
 
 ## 7. Config and inputs

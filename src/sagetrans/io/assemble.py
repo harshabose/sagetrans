@@ -173,16 +173,24 @@ def assemble(
     budget_main = next(iter(budgets.values()), None)
     if "E_summary" in tables:
         parts = [md_table(tables["E_summary"]), "",
-                 "Ranges shorter than the climb + descent distance (`fixed_segments_distance_km`) "
-                 "do not exist for that profile and are not tabulated.", "",
-                 "Budget by range:", "",
-                 md_table(tables.get("E_budget", []), ["case", "range_km", "total_Wh",
-                                                        "reserve_Wh", "usable_Wh", "margin_Wh",
-                                                        "fits"]), "",
+                 "The range is an OUTPUT: what is left after the fixed segments and the reserve "
+                 "goes to cruise (the radius for a round trip, which flies twice that). The "
+                 "requirements are comparison columns only. A pusher command above "
+                 "`TKOFF_THR_MAX` is reported (`over_ceiling`); a segment fails only above 1 or at "
+                 "another limit (`feasible`, `limit`).", "",
+                 "Budget by range (a range shorter than the largest leg's fixed distance is "
+                 "not tabulated):", "",
+                 md_table(tables.get("E_budget", []), ["site_amsl_m", "mission", "range_km",
+                                                        "cruise_Wh", "reserve_Wh", "total_Wh",
+                                                        "usable_Wh", "margin_Wh", "fits"]), "",
                  "Segments:", "",
-                 md_table(tables.get("E_segments", []), ["case", "segment", "energy_Wh", "time_s",
-                                                         "distance_m", "source"]), "",
-                 "Hover power at end of discharge:", "", md_table(tables.get("E_hover_check", [])),
+                 md_table(tables.get("E_segments", []), ["site_amsl_m", "mission", "leg",
+                                                         "segment", "energy_Wh", "soc_start",
+                                                         "soc_end", "pusher_cmd_max",
+                                                         "over_ceiling",
+                                                         "feasible", "limit"]), "",
+                 "Hover power check (stress point, landing start, after the reserve):", "",
+                 md_table(tables.get("E_hover_check", [])),
                  "", "Reserve (go-around, hold, diversion):", "",
                  md_table(tables.get("E_reserve", []))]  # fmt: skip
         sections["E — energy budget and reserve"] = "\n".join(parts)

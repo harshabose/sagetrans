@@ -67,8 +67,9 @@ VEHICLE_GROUPS: dict[str, tuple[str, type]] = {
 # fields whose dataclass unit is not SI: SI value / divisor = native value
 NATIVE_DIVISOR = {"vehicle.battery.capacity_Ah_pack": 3600.0}  # coulombs -> Ah
 
-MISSION_OPTIONAL = {"v_cruise"}  # absent means "choose automatically" (best-range speed)
+MISSION_OPTIONAL = {"v_cruise", "v_climb", "v_glide"}  # absent: best-range / the cruise speed
 MISSION_FROM_CONTROLLER = {"v_trans"}  # taken from ardupilot.AIRSPEED_MIN, not mission.yaml
+MISSION_FROM_STUDY = {"cruise_amsl_m", "ground_amsl_m"}  # set per site by analysis E
 
 # controller.yaml: ardupilot name -> (BackTransitionParams / decision-dict key, kind)
 ARDUPILOT_PARAMS = (
@@ -188,7 +189,7 @@ def _known_paths() -> set[str]:
     known |= {
         f"mission.profile.{f.name}"
         for f in dataclasses.fields(MissionProfile)
-        if f.name not in MISSION_FROM_CONTROLLER
+        if f.name not in MISSION_FROM_CONTROLLER | MISSION_FROM_STUDY
     }
     known |= {f"mission.battery_window.{f.name}" for f in dataclasses.fields(BatteryWindow)}
     known |= {
@@ -299,7 +300,7 @@ def load_inputs(
     # mission
     airspeed_min = rd.get("controller.ardupilot.AIRSPEED_MIN", 14.0)
     mission = rd.build(
-        MissionProfile, "mission.profile", skip=set(MISSION_FROM_CONTROLLER),
+        MissionProfile, "mission.profile", skip=set(MISSION_FROM_CONTROLLER | MISSION_FROM_STUDY),
         optional=set(MISSION_OPTIONAL),
     )  # fmt: skip
     mission = replace(mission, v_trans=airspeed_min)
@@ -396,6 +397,12 @@ def load_inputs(
     }  # fmt: skip
     ax = scen_file.ensemble.axes
     axes = EnsembleAxes(ax.altitude_m, ax.isa_offset_k, ax.mass_factor, ax.headwind_ms, ax.soc)
+    stub_v = baseline_overrides["v_cruise"]
+    if mission.v_cruise is not None and abs(mission.v_cruise - stub_v) > 1e-9:
+        problems.append(
+            f"mission.profile.v_cruise ({mission.v_cruise:g} m/s) and "
+            f"controller.cruise_stub.v_cruise ({stub_v:g} m/s) must be the same design speed"
+        )
     # cross-references between study.yaml and scenarios.yaml
     wanted = {
         "A": study.A.scenarios, "D": study.D.scenarios, "B1": study.B1.scenarios,
