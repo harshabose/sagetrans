@@ -93,14 +93,40 @@ def _section_d(q: dict[str, Any]) -> str | None:
     t = q.get("tables", {})
     if "D_a_eq" not in t:
         return None
-    parts = [md_table(t["D_a_eq"], ["scenario", "mass_kg", "V0_eas_ms", "a_eq_ms2", "x_actual_m",
-                                    "alt_gain_m", "alt_loss_m",
-                                    "peak_bus_current_A"]), ""]  # fmt: skip
-    if "a_rec" in q:
-        pct = (f"; {q.get('pct'):g}th percentile {q['a_rec_pct']:.2f} m/s²"
-               if "a_rec_pct" in q else "")
-        parts += [f"**Q_TRANS_DECEL recommendation** (minimum worst-case a_eq over the ensemble "
-                  f"and entry speeds): **{q['a_rec']:.2f} m/s²**{pct}.", ""]
+    parts = [
+        "Entry is the AIRBRAKE exit: the rotors already carry what the wing does not, the pusher "
+        "is off, and the pitch limit ramps from the last fixed-wing pitch to the cap over "
+        "`Q_BACKTRANS_MS`. The entry air speed comes from the exit rule "
+        "`max(AIRSPEED_MIN - 2, Q_ASSIST_SPEED)`; the ground speed is that minus the headwind.", "",
+        md_table(t["D_a_eq"], ["scenario", "mass_kg", "V0_air_ms", "V0_ground_ms", "a_eq_ms2",
+                               "x_actual_m", "alt_gain_m", "alt_loss_m", "alpha_max_gated_deg",
+                               "t_above_alpha_s_s", "vh_end_ms", "sinking"]), "",
+        "**Read the angle-of-attack columns first.** With the altitude held the wing angle of "
+        "attack equals the pitch, so the pitch ramp is a wing angle of attack well above the stall "
+        "angle "
+        "for most of the braking, and the rotors carry the weight. `a_eq` here is the most the "
+        "idealised controller can do in that state, not validated hardware performance: the lift "
+        "and drag beyond the stall angle are a flat-plate placeholder. Setting `D.enforce_alpha` "
+        "holds the angle to the top of A's band and shows the other bound (see `D_sensitivity`). "
+        "`D.ff_mode: lift_aware` is an oracle at its defaults (it reads the simulated lift). "
+        "Altitude excursions are lower bounds: ideal actuators, assumed gains, no gusts. "
+        "`D.theta_fw0_deg` is a placeholder until a SITL run or flight log gives the pitch at the "
+        "AIRBRAKE exit.", ""]  # fmt: skip
+    rec = t.get("D_recommendation")
+    if "a_rec" in q and rec:
+        r0 = rec[0]
+        parts += [
+            f"**Q_TRANS_DECEL recommendation** ({r0['n']} Sobol runs, seed {r0['seed']}, "
+            f"{r0['n_corners']} corners, entry `{r0['convention']}`): "
+            f"**{q['a_rec_pct']:.2f} m/s²** at the {q['pct']:g}th percentile "
+            f"(bootstrap 90% interval {q['a_rec_ci'][0]:.2f} to {q['a_rec_ci'][1]:.2f}); "
+            f"the minimum over sample and corners is **{q['a_rec']:.2f} m/s²** "
+            f"(set by {r0['min_set_by']}). {r0['n_below_vs']} of {r0['n']} sample entries are "
+            "below their own 1g stall speed (flagged, not dropped).", "",
+            md_table(rec), ""]  # fmt: skip
+    if t.get("D_sensitivity"):
+        parts += ["One change at a time, first scenario at nominal mass (excursion columns: lower "
+                  "bound, ideal actuators):", "", md_table(t["D_sensitivity"]), ""]
     parts += ["Trade curve (switch earlier = smaller a_plan = more VTOL distance and energy):", "",
               md_table(t["D_trade_curve"], ["a_plan_ms2", "a_lim_ms2", "speed_test", "headwind_ms",
                                             "x_plan_m", "x_actual_m", "overshoot_m", "energy_J"]),

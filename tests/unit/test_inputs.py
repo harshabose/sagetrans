@@ -232,7 +232,7 @@ D:
   scenarios: [S-01]
   mass_factors: [1.0]
   v0_eas_ms: [22]
-  recommendation: {ensemble_n: 2, ensemble_seed: 1, v0_ground_ms: [22], percentile: null}
+  recommendation: {ensemble_n: 2, ensemble_seed: 1, percentile: 5}
   trade: {a_plan_ms2: [2.5], headwinds_ms: [0]}
 F: {scenarios: [S-01]}
 E: {cruise_amsl_m: [1000], ranges_km: [100]}

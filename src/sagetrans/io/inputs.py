@@ -124,6 +124,7 @@ class StudyInputs:
     theta_p: float  # PTCH_LIM_MAX_DEG in rad
     requirements_km: tuple[float, float]
     entry_eas: float
+    airspeed_min: float  # AIRSPEED_MIN, m/s (also `mission.v_trans`)
     scenarios: dict[str, Scenario]
     ensemble_axes: EnsembleAxes
     study: StudyCfg
@@ -419,7 +420,8 @@ def load_inputs(
         config_dir=root, mode=chosen, config=cfg, vehicle=vehicle, mission=mission,
         window=window, descent=descent, controller=controller,
         controller_overrides=gains, baseline_overrides=baseline_overrides, start_params=start,
-        theta_p=theta_p, requirements_km=(r1, r2), entry_eas=entry_eas, scenarios=scenarios,
+        theta_p=theta_p, requirements_km=(r1, r2), entry_eas=entry_eas, airspeed_min=airspeed_min,
+        scenarios=scenarios,
         ensemble_axes=axes, study=study, fallbacks=tuple(rd.fallbacks),
         draft_reasons=tuple(draft_reasons),
         settings_hash=hashlib.sha256(settings_blob.encode()).hexdigest(),
