@@ -22,7 +22,7 @@ from sagetrans.analysis import collocation, runs
 from sagetrans.analysis.common import RunRecord, Scenario, make_record
 from sagetrans.analysis.ensemble import CostWeights, RunMetrics, ensemble_cost
 from sagetrans.analysis.search import Bounds, SearchResult, cma_minimise
-from sagetrans.analysis.zero_loss import DecelProfile, analyse
+from sagetrans.analysis.zero_loss import LEGACY_LIMITS, DecelProfile, analyse
 from sagetrans.control.freeform import S_KNOTS, FreeFormController, FreeFormParams
 from sagetrans.dynamics.simulate import simulate
 from sagetrans.physics.params import VehicleParams
@@ -53,7 +53,10 @@ def init_from_zero_loss(
     """Initial knots: analysis A's pre-spun schedule re-plotted against V / V_s."""
     vps = scen.vehicle_for(vp)
     vs = runs.stall_speed(vps, scen.rho)
-    r = analyse(vps, scen, v0_air - scen.headwind_ms, DecelProfile(a_init), n=60)
+    # the legacy limits keep B2's start exactly as it was (the angle band is analysis A's own)
+    r = analyse(
+        vps, scen, v0_air - scen.headwind_ms, DecelProfile(a_init), limits=LEGACY_LIMITS, n=60
+    )
     s = r.V / vs
     ok = np.isfinite(r.theta) & np.isfinite(r.delta_cmd)
     prm: dict[str, float] = {}

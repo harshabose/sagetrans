@@ -9,7 +9,7 @@ scenario and options to a results object. Analysis letters follow the proposal's
 
 | Module | Proposal | Question answered |
 | --- | --- | --- |
-| `zero_loss.py` | **A** — zero-altitude-loss reference and feasibility | Can the hardware hold altitude through a given deceleration? What binds first? |
+| `zero_loss.py` | **A** — quasi-steady zero-altitude-loss feasibility | For which constant decelerations at which speeds can the hardware hold altitude, inside an angle-of-attack band? What fails at each edge? |
 | `collocation.py` | **B1** — open-loop optimum by direct collocation | What is the best trajectory under the constraints? (energy against excursion and distance) |
 | `freeform_opt.py` | **B2** — speed-scheduled law tuned over an ensemble | What does a robust, feedback-free speed law achieve? |
 | `restricted.py` | **C** — ArduPilot-parameter optimisation | What can the autopilot be *configured* to do? |
@@ -80,14 +80,19 @@ a stall failure if that time exceeds 0.3 s.
 
 ---
 
-## A — zero-altitude-loss reference and feasibility (`zero_loss.py`)
+## A — quasi-steady zero-altitude-loss feasibility (`zero_loss.py`)
 
-**Question.** If the aircraft must hold altitude exactly while decelerating, what throttle and
-pitch does that take, and can the actuators deliver it?
+**Question.** In an idealised case, can the hardware hold altitude through a constant deceleration,
+and for which decelerations at which speeds?
 
-**Method.** Prescribe the airspeed history from `V0` and a deceleration profile with `vh = 0`,
-`gamma = 0`, no wind, pusher thrust fixed (default zero). Eliminating the rotor thrust from the
-force balance leaves one equation in pitch:
+**Scope — an idealised scan, not a simulation.** A constant deceleration `a` from a free entry speed
+`V0` down to `v_end` (1 m/s), `gamma = 0`, no wind, **pusher off** (`t_p = 0`; the argument is kept
+but is not a config axis). The rotors are always treated as **pre-spun**: their speed at the first
+sample is the first schedule value. There is no entry step and no jerk limit. The argument for
+treating the rotor start speed as a decision variable now lives in B1 (`prespin_max`) and D.
+
+**Method.** At each speed the force balance leaves pitch as the one unknown. Eliminating the rotor
+thrust gives one equation in pitch:
 
 ```
 R(theta) = (T_p - H) + (m a - D(theta)) cos(theta) - (W - L(theta)) sin(theta) = 0
@@ -97,30 +102,89 @@ which reduces to eq. (10.3), `tan(theta) = (m a - D)/(W - L)`, `T_r = sqrt((m a 
 when `H = T_p = 0`, and to `tan(theta) = a/g` at low speed. (`H` is the rotors' in-plane force; it
 depends on the rotor speed, so it is iterated.) The rotor map is then inverted for the rotor speed
 that gives `T_r` (`dynamics.trim`), and the motor equation for the throttle **including the
-rotor-acceleration term** `I_rot * omega_dot`. Roots of `R` are found on a 61-point grid then refined;
-continuity of `theta` along the profile picks the root, preferring those with `T_r >= 0`.
+rotor-acceleration term** `I_rot * omega_dot`.
 
-**Entry discontinuity — the important design point.** At entry the wing carries the weight and the
-rotors are at rest, so `T_r` and `omega` must jump from their entry values to the schedule's first
-values, and `theta` must jump from level trim. If the schedule were evaluated pointwise and
-differentiated, this jump would be invisible and the torque, current and pitch-rate checks would
-pass wrongly. So every result carries **two verdicts**:
+**The angle-of-attack band.** The wing's angle of attack must stay inside `[alpha_min, alpha_hi]`:
+`alpha_min = 0` is the lower end of the range the lift fit was made on (0 to 10 deg), and `alpha_hi`
+is the angle where `C_L = cl_frac x C_L,max` on the rising side (proposal rule 8.6; `cl_frac = 0.8`,
+about 9.1 deg for the current wing; 1.0 is the lift peak). Both are settings (`alpha_min_deg`,
+`cl_frac` under `A:` in `study.yaml`). `C_L,max` is provisional (`alpha_s` in `vehicle.yaml`), so
+`alpha_hi` is too. A profile that needs negative angle of attack, where the lift model is an
+extrapolation, or one past the band, is infeasible.
 
-* **whole segment, including the entry step** (`feasible_whole`) — almost always infeasible, by
-  design: it is the argument for treating the rotor start speed `V_on` as a decision variable;
-* **with the rotors pre-spun** to the schedule's first value (`feasible_pre_spun`) — the
-  meaningful hardware-limit verdict, and the one `max_feasible_decel` uses.
+**Root choice.** `R(theta)` has several roots (at 17 m/s and `a = 1.04` there are roots at 4.2, 8.1
+and 14.9 deg). Roots are found on the coarse 61-point grid over the whole range and, with a band, on
+a dense 121-point grid inside it, because near a fold the two low roots are less than 1 deg apart.
+The choice is: in-band roots with `T_r >= 0` (nearest the previous pitch), else in-band roots with
+`T_r < 0` (these fail `thrust_sign`), else the out-of-band root nearest the band (these fail an angle
+margin). With no band the pre-band selection is reproduced exactly (this is what B2's start uses).
 
-**Checks** (each a normalised margin, feasible when `>= 0` everywhere): rotor throttle ceiling
-(`ActuatorLimits.delta_r_max` 0.95), motor current limit, bus voltage floor, torque floor (the ESC
-cannot brake the rotor), thrust sign (`T_r >= 0`), pitch limit (0.6 rad), pitch rate against
-`q_max`, wing angle of attack against stall, and "pitch solution exists". The first binding
-constraint and its time are reported.
+**Checks** (each a normalised margin, feasible when `>= 0` everywhere): "pitch solution exists",
+thrust sign (`T_r >= 0`), rotor throttle ceiling (`ActuatorLimits.delta_r_max` 0.95), motor current,
+bus voltage floor, torque floor (the ESC cannot brake the rotor), pitch limit (0.6 rad, never binds),
+pitch rate against `q_max`, the two angle margins `alpha_low` and `alpha_high` (the legacy
+symmetric `stall` margin when `cl_frac` is `None`), and, **only when `ActuatorLimits.vrs_limit` is
+set**, the vortex-ring margin `vrs`. **Every** violated margin is reported with the
+first time it goes negative, earliest first, as a `violations` dict (`first_binding(result)` gives the
+old single name).
+
+**Vortex-ring ratio (report only by default).** At the rotors `V_c = -V sin(theta)` (gamma = 0, so a
+nose-up pitch gives a **negative** ratio: the flow comes up through the discs) and
+`v_h = sqrt(T_r / (2 rho A_tot))`, as in `rotor.vrs_ratio`. The ratio `V_c / v_h` is always
+reported: `ZeroLossResult.vrs_min` and `vrs_min_t` (most negative value on the path and when),
+`Window.vrs_lo` / `vrs_hi` (at the feasible point on each edge), and the `vrs_min` columns of
+`A_feasibility` and `A_window`. It does not change any verdict unless enforced: with
+`vrs_limit = -kappa` (set by `stage_a` from `mission.yaml` `descent.kappa` when
+`vrs_enforce: true`) the margin is `(ratio - vrs_limit) / |vrs_limit|`, so a ratio of 0 gives +1 and
+a ratio of the limit gives 0. Enforcing trims only the **top** of each window (the ratio is about 0 at
+the lower edge and goes strongly negative toward the upper edge, where `T_r -> 0`): about 0.04 to
+0.18 m/s² on the real-data draft. It is report only by default because `kappa = 0.23` is from
+near-zero-forward-speed data whereas A runs at 12 to 22 m/s, where the rotors are at several times
+their hover induced velocity and onset is a low-advance-ratio phenomenon, so an axial-only criterion
+is probably over-conservative here; the ratio also diverges as `T_r -> 0`, so near the upper edge it
+flags a barely loaded rotor. Confirm `kappa` against NASA/TP-2005-213477 before relying on it.
+
+**The window.** At each speed the feasible deceleration forms a window `[a_lo(V), a_hi(V)]`
+(`feasible_window`). The lower edge is the wing's drag floor at `alpha_min` (below it the wing
+would have to be at negative angle of attack to give so little drag). The upper edge is where the
+low-theta root pair of the force balance disappears (a fold): beyond it only the stalled root near
+15 deg exists and `thrust_sign` fails. `bind_lo` and `bind_hi` list every margin violated just
+outside each edge. The window scan is pointwise with a **steady** rotor (`omega_dot = 0`, battery RC
+state 0); the constant-`a` verdict from `analyse` also includes the rotor acceleration, battery
+state and pitch rate and is the authoritative one for a whole path.
 
 **API.**
 
 | Name | Purpose |
 | --- | --- |
+| `DecelProfile(a, v_end=1.0).sample(v0, n)` | constant deceleration; returns `t, V, a(t)` |
+| `ActuatorLimits(..., alpha_min, cl_frac, vrs_limit)` | the limits; `LEGACY_LIMITS` (all `None`) = the pre-band behaviour; `vrs_limit=None` = report the vortex-ring ratio only |
+| `solve_point(vp, rho, V, a, t_p, prev_theta, bal, band)` | one pointwise solution: `theta`, `T_r`, `H_r`, `omega`, `L`, `D`, `ok` |
+| `analyse(vp, scen, v0, profile, limits, t_p, n=120, v1_0=0)` | the full result (`ZeroLossResult`: `margins`, `feasible`, `violations`, `vrs_min`, `vrs_min_t`, ...) |
+| `feasible_window(vp, scen, V, limits, ...)` | windows `[a_lo, a_hi]` at one speed, with `Window.bind_lo/bind_hi` |
+| `closest_to_feasible(...)` | when there is no window: the deceleration that fails least, and what fails |
+| `feasible_decel_range(vp, scen, v0, limits, ...)` | `(a_min, a_max, islands)` for the whole path from `v0` to rest, or `None` |
+| `max_feasible_decel(...)` | `a_max` of the above (0 if none) |
+| `feasibility_map(...)` | `{"feasible": bool[nV, na], "violations": [[dict]], "vrs_min", "vrs_min_t"}` over a grid of `(V0, a)` |
+
+`feasible_decel_range` scans 48 values of `a` (spacing about 0.08 m/s²), takes the first and last
+feasible ones and bisects each edge. A feasible range narrower than the spacing can be missed;
+`islands = True` flags a feasible set with gaps (the full span is still returned).
+
+**What it found (real-data draft, 1500 m, pusher off).** The window narrows with speed: about
+0.34 to 1.28 m/s² at 12 m/s, 0.60 to 1.09 at 16 m/s, 0.76 to 1.09 at 18 m/s, 0.93 to 1.17 at
+20 m/s, and 1.18 to 1.32 at 22.5 m/s. For a whole constant-`a` path from `V0` to rest the upper edge
+is set by the 16 to 18 m/s part, so about 0.9 to 1.1 m/s² is feasible from 20 m/s and **nothing** is
+feasible from 22.5 m/s. This is a property of the idealised pusher-off, rotors-never-push-down case,
+not a hardware limit. The aerodynamic limits depend only on dynamic pressure, so they are the same at
+sea level and 5,000 m at equal equivalent airspeed (tested); the throttle demand rises in thin air.
+
+**Tests** (`test_analyses.py`): closed forms (`theta = atan(a/g)`, `T_r = m sqrt(a^2+g^2)`), coast
+bound, eq. (10.3) self-consistency with the wing on, the profile, the angle band, root preference
+and the unbanded selection, the violation list, the window against the path check, an empty window,
+the legacy non-monotone verdict that B2's start relies on, and the equivalent-airspeed scaling.
+
+--- | --- |
 | `DecelProfile(a, jerk=None, v_end=1.0).sample(v0, n)` | constant or jerk-limited deceleration; returns `t, V, a(t)` |
 | `EntryState(omega_r=0, theta=None, v1=0)` | the state before the first sample (`theta=None` = level trim) |
 | `solve_point(vp, rho, V, a, ...)` | one pointwise solution: `theta`, `T_r`, `H_r`, `omega`, `L`, `D`, `ok` |
@@ -328,7 +392,7 @@ seeds agreed to a spread of 0.10 %** (T-12 satisfied for C; 2e-5 with the earlie
 Tunes the 13 parameters of the free-form law (6 rotor-throttle knots, 6 pitch knots, `s_on`) over an
 ensemble with the same cost and search as C, **back-transition only**. There are two starts:
 
-* `init_from_zero_loss` (the default): analysis A's pre-spun schedule re-plotted against `V/V_s`;
+* `init_from_zero_loss` (the default): analysis A's pre-spun schedule re-plotted against `V/V_s`, computed with `LEGACY_LIMITS` (no angle band) so B2's start does not depend on A's band;
   where A is infeasible the knots fall back to fixed defaults.
 * `init_from_collocation(prob, sol)`: a B1 solution re-plotted against `V/V_s` (the proposal's
   step 2), with the rotor throttle converted from B1's effective throttle to the ESC command and

@@ -29,6 +29,15 @@ A:                         # zero-altitude-loss feasibility
   decel_ms2: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0]
   max_decel_v0_eas_ms: [10, 12, 14, 16, 18, 20.9]
   samples: 120
+  # Wing angle-of-attack band the scan must stay inside. Lower end: where the lift fit starts
+  # (0 to 10 deg). Upper end: the angle where C_L = cl_frac x C_L,max (proposal rule 8.6).
+  # C_L,max is provisional (alpha_s in vehicle.yaml), so cl_frac is a setting. 1.0 = the lift peak.
+  alpha_min_deg: 0.0
+  cl_frac: 0.8
+  # Vortex-ring check. false = report the rotor V_c / v_h ratio only (the vrs_* columns);
+  # true = also infeasible when the ratio is below -descent.kappa (mission.yaml). Report only by
+  # default: kappa is from near-zero-forward-speed data and A runs at 12 to 22 m/s.
+  vrs_enforce: false
 
 D:                         # braking and Q_TRANS_DECEL
   scenarios: [S-01, S-02, S-03, S-05, S-06, S-07]   # S-01 first: it sets the trade curve

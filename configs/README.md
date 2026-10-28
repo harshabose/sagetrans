@@ -231,7 +231,7 @@ recommendation. Add scenarios by adding lines; refer to them by name in `study.y
 | `parallel` | `enabled`, and `max_workers` (0 = one per CPU core) |
 | `analyses` | which of `A D F E Q2 C B2 B1 sensitivity` to run; `--only` overrides it |
 | `switch_test` | `ground` or `air`: the speed used in the switch-point test (O-02) |
-| `A`, `D`, `F`, `E`, `Q2` | grids and scenario lists for the quick analyses |
+| `A`, `D`, `F`, `E`, `Q2` | grids and scenario lists for the quick analyses. `A` also takes `alpha_min_deg` and `cl_frac`: the wing angle-of-attack band the feasibility scan must stay inside (lower end of the lift fit; the angle where C_L = `cl_frac` x C_L,max, provisional because C_L,max is), and `vrs_enforce` (default `false`: the rotor V_c / v_h ratio is only reported; `true`: also infeasible when it is below `-descent.kappa`) |
 | `C`, `B2` | ensemble size and seed, search seeds, population, iterations (`C` also `a_plan_source`) |
 | `B1` | scenarios, the altitude bands to sweep, the distance cap, the collocation mesh |
 | `sensitivity` | the scenario, the two Morris sizes, and whether to include the energy budget |

@@ -76,6 +76,13 @@ class ACfg(_Strict):
     decel_ms2: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0]
     max_decel_v0_eas_ms: list[float] = [10.0, 12.0, 14.0, 16.0]
     samples: int = Field(60, ge=10)
+    # wing angle-of-attack band of the feasibility scan: from alpha_min_deg (None = no lower
+    # limit) to the angle where C_L = cl_frac x C_L,max (None = the old symmetric stall check)
+    alpha_min_deg: float | None = 0.0
+    cl_frac: float | None = Field(0.8, gt=0.0, le=1.0)
+    # False: report the rotor V_c / v_h ratio only. True: a path or point is also infeasible when
+    # the ratio is below -descent.kappa (mission.yaml)
+    vrs_enforce: bool = False
 
 
 class DRecCfg(_Strict):

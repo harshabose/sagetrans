@@ -62,24 +62,30 @@ def _section_a(q: dict[str, Any], figs: dict[str, Any]) -> str | None:
     tables = q.get("tables", {})
     if "A_feasibility" not in tables:
         return None
-    parts = ["Zero-altitude-loss feasibility (entry speeds are equivalent airspeed). `pre_spun` "
-             "assumes the rotors already spin at the schedule's first value; `whole` includes the "
-             "entry step from rest.", ""]  # fmt: skip
+    parts = ["An idealised quasi-steady scan, not a flight simulation: a constant deceleration "
+             "from the entry speed (equivalent airspeed) to rest, level flight, no wind, pusher "
+             "off, rotors already spinning. The wing's angle of attack must stay inside a band "
+             "(see `study.yaml`, `A:`), so a profile that needs negative angle of attack or one "
+             "past the lift limit is infeasible. The band's upper edge rests on a provisional "
+             "C_L,max. `vrs_min` / `vrs_lo` / `vrs_hi` give the rotor V_c / v_h ratio (negative = "
+             "flow up through the discs); it is reported only, unless `vrs_enforce` is set in "
+             "`study.yaml`.", ""]  # fmt: skip
     for name, m in q.get("maps", {}).items():
-        f = m["pre_spun"]
+        f = m["feasible"]
         grid = [{"V0_eas": v, **{f"a={a:g}": ("feasible" if f[i, j] else "no")
                                  for j, a in enumerate(m["a_grid"])}}
                 for i, v in enumerate(m["v_grid_eas"])]  # fmt: skip
-        parts += [f"**{name}, pre-spun rotors**", "", md_table(grid), ""]
+        parts += [f"**{name}**", "", md_table(grid), ""]
         figs[f"A_feasibility_{name}"] = figures.feasibility_figure(
             list(m["v_grid_eas"]), list(m["a_grid"]), f)  # fmt: skip
-    parts += ["Largest feasible constant deceleration (pre-spun):", "",
+    parts += ["Feasible constant deceleration for a whole path from the entry speed to rest "
+              "(`islands` = the feasible set has gaps; the span is still reported):", "",
               md_table(tables.get("A_max_feasible_decel", [])), "",
-              "**Feasibility is not monotone in the deceleration.** A higher braking pitch adds "
-              "drag, which can remove the need for negative rotor thrust, until the wing stalls; "
-              "so the feasible set can have gaps. The map above is the authoritative picture; the "
-              "table reports the top of the highest feasible region found on a "
-              "coarse scan."]  # fmt: skip
+              "Feasible window at each speed (a steady-rotor check, pointwise in speed; `bind_lo` "
+              "and `bind_hi` list every limit violated just outside each edge; a row without "
+              "`a_lo` means no deceleration is feasible at that speed and `bind_lo` names what "
+              "fails closest to feasible):", "",
+              md_table(tables.get("A_window", [])), ""]  # fmt: skip
     return "\n".join(parts)
 
 
