@@ -16,6 +16,13 @@
 >   `braking.entry_airspeed(AIRSPEED_MIN, rho, D.entry_convention)`, the same speed D, C and B1 use, and the register
 >   entry `mission.speeds.entry_eas_ms` (22 / 20.9, a cruise speed) is gone. The kinetic energy between the glide speed
 >   and the exit speed is therefore not charged to any segment of E (it was charged, in part, to the back transition).
+>   **Checked 2026-10-28 (review fix B4): neither its energy nor its distance is counted anywhere.** The descent segment
+>   ends at the glide speed (the cruise speed), the back transition starts at the exit speed, and `fixed_distance_m` is the
+>   sum of the segments' distances, so the deceleration between them is in no segment. Size of the kinetic energy between
+>   the two speeds at the register settings: 0.82 Wh at 0 m, 0.94 Wh at 1500 m, 1.05 Wh at 2500 m, 1.36 Wh at 5000 m
+>   (21.1 -> 15.0, 22.7 -> 16.2, 23.9 -> 17.0, 27.3 -> 19.4 m/s TAS), about 0.05 to 0.08 km of range; the distance
+>   covered while slowing is not estimated. Not fixed: how to count it (a glide that slows, or a level deceleration) is a
+>   modelling choice for the owner.
 > - **The stopping run is D's (2026-10-28, review fix B3).** E's back transition used `inp.controller` (the register
 >   alone) and a level, rotors-at-hover start. It now runs `stages.d_exit_params` (the register plus the D block: exit pitch
 >   `theta_fw0`, `rotor_lag_s`, the lift feed-forward, the alpha gate and cap) from `braking.airbrake_entry_state`, the run D,

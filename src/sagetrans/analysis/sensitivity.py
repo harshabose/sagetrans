@@ -148,8 +148,14 @@ def _set_path(obj: Any, parts: Sequence[str], value: float) -> Any:
 def apply_inputs(
     vp: VehicleParams, scen: Scenario, inputs: Sequence[UncertainInput], values: Mapping[str, float]
 ) -> tuple[VehicleParams, Scenario, dict[str, float]]:
-    """Return the perturbed vehicle, scenario and controller overrides."""
+    """Return the perturbed vehicle, scenario and controller overrides.
+
+    A scenario that sets its own mass (`mass_kg`: the named scenarios fly at a fraction of the
+    vehicle's) would override the perturbed vehicle mass, so the `mass` input would not act on
+    the back-transition outputs. The scenario's mass is scaled by the same ratio instead.
+    """
     ctl: dict[str, float] = {}
+    m_nominal = vp.m
     for inp in inputs:
         x = values.get(inp.name, inp.nominal)
         if inp.kind == "vehicle":
@@ -160,6 +166,8 @@ def apply_inputs(
             scen = replace(scen, **{inp.path: x})
         else:
             ctl[inp.path] = x
+    if scen.mass_kg is not None and vp.m != m_nominal:
+        scen = replace(scen, mass_kg=scen.mass_kg * vp.m / m_nominal)
     return vp, scen, ctl
 
 
