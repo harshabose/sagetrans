@@ -377,8 +377,12 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
             return braking.entry_airspeed(inp.airspeed_min, sc.rho, c.entry_convention)
 
         Run = tuple[braking.BrakingResult, dict[str, Any], float]
+        d_part = ["headline table"]  # progress: the part of D that is running and its run count
+        d_runs = [0]
 
         def run(sc: Scenario, bp: Any, v_air: float) -> Run:
+            d_runs[0] += 1
+            progress.phase(f"D: {d_part[0]} (run {d_runs[0]})")
             x0, v_ground = braking.airbrake_entry_state(vp, sc, bp, v_air)
             r = braking.measure_a_eq(vp, sc, v_ground, bp, x0=x0)
             fl = braking.braking_flags(
@@ -412,6 +416,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         out["tables"]["D_a_eq"] = rows
 
         # -- diagnostic: the old speed grid, air speed = TAS of the grid EAS, ground = air - wind
+        d_part[0] = "speed grid"
         grid: Table = []
         for name in c.scenarios:
             for mf in c.mass_factors:
@@ -431,6 +436,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         out["tables"]["D_a_eq_speed"] = grid
 
         # -- recommendation: Sobol ensemble + corners, entry fixed in air speed per scenario
+        d_part[0] = "recommendation ensemble"
+
         def ensemble(bp: Any) -> tuple[Table, list[float], list[float]]:
             core, corners = braking_ensemble(rec.ensemble_n, vp, rec.ensemble_seed,
                                              inp.ensemble_axes, rec.corners)  # fmt: skip
@@ -508,6 +515,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         # entry rule's, so the headwind is the air speed minus the ground speed (a negative value
         # is a tailwind); every named scenario x mass factor runs at each speed
         curve: Table = []
+        d_part[0] = "a_rec curve"
         for vg in c.curve.ground_speeds_ms:
             done: list[tuple[str, float, float, braking.BrakingResult, dict[str, Any]]] = []
             n_runs = 0
@@ -548,9 +556,11 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         sc0 = inp.scenarios[c.scenarios[0]]
         v_air0 = entry(sc0)
         trade: Table = []
+        d_part[0] = "trade curve"
         for a_plan in c.trade.a_plan_ms2:
             for wind in c.trade.headwinds_ms:
                 for test in ("ground", "air") if wind > 0 else ("ground",):
+                    progress.phase(f"D: trade curve (a_plan {a_plan:g}, headwind {wind:g}, {test})")
                     for a_lim in sorted({base_bp.a_lim, a_plan}):
                         scw = dataclasses.replace(sc0, headwind_ms=wind)
                         bpw = dataclasses.replace(base_bp, a_lim=a_lim)
@@ -589,6 +599,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         sens_rows: Table = []
         # the vehicle model's own rotor lag at this density and SoC; rotor_lag_s adds in series
         tau_model = braking.rotor_speed_tau(scn.vehicle_for(vp), scn.rho, scn.soc)
+        d_part[0] = "sensitivities"
         for case, over in cases:
             bps = dataclasses.replace(base_bp, **over)
             r, fl, _ = run(scn, bps, v_air_n)
@@ -903,7 +914,11 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     def run_all(
         prm: dict[str, float], ev: restricted.CEval = cev, bp: BackTransitionParams = base
     ) -> list[restricted.CRun]:
-        return [restricted.run_c(vp, s, prm, ev, bp) for s in scens]
+        out: list[restricted.CRun] = []
+        for i, s in enumerate(scens, start=1):
+            out.append(restricted.run_c(vp, s, prm, ev, bp))
+            progress.step(f"C runs: member {i}", i, len(scens))
+        return out
 
     def deg(prm: dict[str, float]) -> dict[str, Any]:
         return {"T_bt_s": prm["T_bt"], "theta_A_deg": math.degrees(prm["theta_A"]),
@@ -949,6 +964,7 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                 kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
             )  # fmt: skip
             a_cap = restricted.capability_ceiling(vp, s, prm, cev, base)
+            progress.step(f"C tables, {case}: member {i}", i + 1, len(scens))
             run_rows.append({
                 "case": case, "member": i, "altitude_m": s.altitude_amsl_m,
                 "isa_offset_k": s.isa_offset_k, "mass_kg": s.mass_kg, "soc": s.soc,

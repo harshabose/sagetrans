@@ -22,7 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def git_state(root: Path = REPO_ROOT) -> tuple[str, bool]:
-    """(short commit hash or 'no-commit', working tree dirty?)."""
+    """(short commit hash or 'no-commit', tracked files differ from it?).
+
+    Untracked files do not count: a stray notes file is not a change to the code that ran (a new
+    package `.py` file changes the source hash, which is recorded as well).
+    """
     try:
         head = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True,
@@ -30,8 +34,8 @@ def git_state(root: Path = REPO_ROOT) -> tuple[str, bool]:
         ).stdout.strip()  # fmt: skip
         dirty = bool(
             subprocess.run(
-                ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True,
-                check=True, timeout=10,
+                ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root,
+                capture_output=True, text=True, check=True, timeout=10,
             ).stdout.strip()  # fmt: skip
         )
         return head, dirty
