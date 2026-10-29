@@ -597,3 +597,29 @@ def test_the_b1_chapter_has_the_fold_and_the_new_figure(tmp_path):
     assert "Why points are not quoted" in b1 and "Verified solutions by scenario" in b1
     assert "Pareto front</h3>" not in b1  # the old title and the shared ensemble point are gone
     assert "C optimum (ensemble mean, p95 distance)" not in b1
+
+
+# ---- B1c ----------------------------------------------------------------------------------
+def test_the_gap_paragraph_names_the_three_differences_with_the_numbers_from_the_files():
+    from sagetrans.io.view.chapters import gap_contents
+
+    front = [{"variant": "attached", "theta_cmd_max_deg": 34.4},
+             {"variant": "c_envelope", "theta_cmd_max_deg": 20.0}]
+    html = gap_contents(front, {"ptch_lim_deg": 20.0, "rotor_lag_s": 0.25})
+    assert "B1 `attached` may command a pitch up to 34.4 deg while C is capped at " in html
+    assert "PTCH_LIM_MAX_DEG (20 deg)" in html and "C.rotor_lag_s (0.25 s)" in html
+    assert "B1 knows the scenario in advance" in html
+    assert "sum of the optimal-control saving, the extra pitch freedom and the missing lag" in html
+    assert "not a measure of what a better ArduPilot parameter set could save" in html
+    bare = gap_contents([], None)  # an older folder: the words stay, no number is invented
+    assert "theta_cmd_max_deg" in bare and "PTCH_LIM_MAX_DEG." in bare and " deg)" not in bare
+
+
+def test_the_b1_chapter_carries_the_gap_paragraph(tmp_path):
+    synthetic_run(tmp_path)
+    write_table(tmp_path, "B1_gap", gap_rows())
+    params = list(csv.DictReader((tmp_path / "C_params.csv").open(encoding="utf-8")))
+    params[0].update({"ptch_lim_deg": "20", "rotor_lag_s": "0.25"})
+    write_table(tmp_path, "C_params", params)
+    b1 = section(build_html(load(tmp_path)), "b1")
+    assert "What the gap between B1 and C contains" in b1 and "C.rotor_lag_s (0.25 s)" in b1

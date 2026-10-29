@@ -1420,6 +1420,32 @@ def verified_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
         ch.multiples(panels), _legend(*leg.values()))
 
 
+def gap_contents(front: Sequence[Row], c_row: Row | None) -> str:
+    """A plain paragraph on what "B1 below C" contains, with the numbers from the files.
+
+    B1 attached may command a pitch up to its `theta_cmd_max_deg` where C is capped at
+    PTCH_LIM_MAX_DEG; B1 has no rotor lag where C has `C.rotor_lag_s`; B1 knows the scenario in
+    advance. The gap is the sum of the optimal-control saving, the extra pitch freedom and the
+    missing lag, not what a better ArduPilot parameter set could save.
+    """
+    cmd = next((num(r.get("theta_cmd_max_deg")) for r in front if r.get("variant") == "attached"
+                and ok(num(r.get("theta_cmd_max_deg")))), NAN)  # fmt: skip
+    ptch = num(c_row.get("ptch_lim_deg")) if c_row else NAN
+    lag = num(c_row.get("rotor_lag_s")) if c_row else NAN
+    pitch = ("B1 `attached` may command a pitch up to "
+             + (f"{cmd:g} deg" if ok(cmd) else "its theta_cmd_max_deg")
+             + " while C is capped at PTCH_LIM_MAX_DEG"
+             + (f" ({ptch:g} deg)" if ok(ptch) else "") + ". ")
+    lagt = ("B1 has no rotor lag where C has C.rotor_lag_s"
+            + (f" ({lag:g} s)" if ok(lag) else "") + ". ")
+    know = ("B1 knows the scenario in advance and is open loop, where C's four settings must "
+            "serve every member of the ensemble. ")
+    sums = ("So \"B1 below C\" is the sum of the optimal-control saving, the extra pitch freedom "
+            "and the missing lag. It is not a measure of what a better ArduPilot parameter set "
+            "could save.")
+    return panelbox("What the gap between B1 and C contains", pitch + lagt + know + sums, "")
+
+
 def gap_items(gap: Sequence[Row]) -> list[Item]:
     """The tiles of the B1-C gap: the `attached` figures first (every verified scenario), then
     `c_envelope` beside them with its warning when its schedule fails a late command.
@@ -1451,6 +1477,8 @@ def build_b1(c: Ctx) -> Out:
     front, gap = c.rows("B1_front"), c.rows("B1_gap")
     if gap:
         o.items += gap_items(gap)
+        c_row = next((r for r in c.rows("C_params") if r.get("case") == "optimum"), None)
+        o.figures.append(gap_contents(front, c_row))
         # the quoted gap can come from a schedule that does not survive a late command: say so
         late = [r for r in gap if r.get("b1_replay_verified") is True
                 and r.get("b1_late_command_ok") is False]  # fmt: skip

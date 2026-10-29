@@ -1052,7 +1052,8 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                        "spin_min": pt["spin_min"], "Q_TRANS_DECEL_ms2": pt["q"]})  # fmt: skip
     # what the "at a search bound" chip needs to say where the upper bound of theta_A comes from
     params[0].update({"theta_A_hi_deg": theta_hi, "theta_A_cfg_hi_deg": c.bounds.theta_A_deg[1],
-                      "ptch_lim_deg": math.degrees(inp.theta_p)})  # fmt: skip
+                      "ptch_lim_deg": math.degrees(inp.theta_p),
+                      "rotor_lag_s": c.rotor_lag_s})  # fmt: skip
 
     # per member and case: the run, the capability ceiling, D's alpha and VRS checks (report only)
     progress.phase("C: per-member tables")
