@@ -147,6 +147,7 @@ class StudyInputs:
     defaults: dict[str, float] = field(default_factory=dict)  # ArduPilot defaults, SI, by name
     notes: tuple[str, ...] = field(default=())
     tkoff_thr_max_raw: float | None = None  # TKOFF_THR_MAX as the register states it (display)
+    scenario_notes: dict[str, str] = field(default_factory=dict)  # scenarios.yaml `note` by name
 
     @property
     def is_draft(self) -> bool:
@@ -517,6 +518,7 @@ def load_inputs(
         draft_reasons=tuple(draft_reasons),
         settings_hash=hashlib.sha256(settings_blob.encode()).hexdigest(),
         forward=forward, defaults=_defaults(cfg), tkoff_thr_max_raw=tkoff_raw,
+        scenario_notes={s.name: s.note for s in scen_file.core},
     )  # fmt: skip
 
 

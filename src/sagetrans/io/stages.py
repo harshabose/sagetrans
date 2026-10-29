@@ -844,8 +844,71 @@ def c_bounds(inp: StudyInputs) -> Bounds:
     )  # fmt: skip
 
 
+def worst_end_sink(results: list[restricted.CRun]) -> float:
+    """The largest sink rate at the stop over the members that stopped (NaN if none did)."""
+    sinks = [-r.vh_end for r in results if r.stopped and math.isfinite(r.vh_end)]
+    return max(sinks) if sinks else math.nan
+
+
+def failure_counts(results: list[restricted.CRun]) -> dict[str, float]:
+    """Members with a failure and failures by type, every key always present (zeros filled).
+
+    `n_overshoot` and `n_sinking` count the C-specific failures, `n_not_stopped` the runs that did
+    not stop; `n_other_flags` (from `summarise_c`) is everything that is neither overshoot nor
+    sinking and so includes `n_not_stopped`.
+    """
+    fails = [r.metrics.failures for r in results]
+    return {
+        "n_failing_members": float(sum(1 for f in fails if f)),
+        "n_not_stopped": float(sum("not_stopped" in f for f in fails)),
+        "n_fail_total": float(sum(len(f) for f in fails)),
+    }
+
+
+def smooth_cost(j: float, n_fail_total: float, w: CostWeights) -> float:
+    """J without the failure penalty: the part of (10.1) that moves smoothly with the setting."""
+    return j - w.penalty * n_fail_total
+
+
 def _c_row(label: str, results: list[restricted.CRun], w: CostWeights) -> dict[str, Any]:
-    return {"case": label, **{k: _num(v) for k, v in restricted.summarise_c(results, w).items()}}
+    s = restricted.summarise_c(results, w)
+    cnt = failure_counts(results)
+    return {"case": label, **{k: _num(v) for k, v in s.items()}, **cnt,
+            "J_smooth": _num(smooth_cost(s["J"], cnt["n_fail_total"], w)),
+            "max_end_sink_ms": _num(worst_end_sink(results))}  # fmt: skip
+
+
+def _is_num(x: Any) -> bool:
+    return isinstance(x, int | float) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def margin_cols(c: Any, max_overshoot: Any, max_end_sink: Any) -> dict[str, Any]:
+    """The tolerances, the margins to them and `at_edge` for one case (reporting only).
+
+    A margin is the tolerance minus the worst value over the members; `at_edge` is set when the
+    overshoot margin is below `C.margin_flag_m` or the end-sink margin below `C.margin_flag_ms`.
+    An empty cell (no member stopped) has no margin.
+    """
+    os_m = c.os_tol_m - max_overshoot if _is_num(max_overshoot) else ""
+    sk_m = c.sink_tol_ms - max_end_sink if _is_num(max_end_sink) else ""
+    edge = (_is_num(os_m) and os_m < c.margin_flag_m) or (_is_num(sk_m) and sk_m < c.margin_flag_ms)
+    return {"os_tol_m": c.os_tol_m, "sink_tol_ms": c.sink_tol_ms,
+            "max_end_sink_ms": max_end_sink if _is_num(max_end_sink) else "",
+            "os_margin_m": os_m, "sink_margin_ms": sk_m, "at_edge": bool(edge)}  # fmt: skip
+
+
+def pick_margin_row(fine: Table, c: Any) -> dict[str, Any] | None:
+    """The `optimum_margin` q: the largest q on the fine grid whose worst overshoot is at most
+    `margin_frac` x `os_tol_m` AND whose worst end sink is at most `margin_frac` x `sink_tol_ms`.
+    None if no q on the grid does (a row with no number would only look like a result)."""
+    ok_rows = [
+        r for r in fine
+        if _is_num(r.get("q")) and _is_num(r.get("max_overshoot_m"))
+        and r["max_overshoot_m"] <= c.margin_frac * c.os_tol_m
+        and (not _is_num(r.get("max_end_sink_ms"))
+             or r["max_end_sink_ms"] <= c.margin_frac * c.sink_tol_ms)
+    ]  # fmt: skip
+    return max(ok_rows, key=lambda r: r["q"]) if ok_rows else None
 
 
 def default_case(
@@ -871,14 +934,41 @@ def default_case(
     return out, ""
 
 
-def _c_trace(sim: Any, i_w: float, case: str, member: int, every: int = 5) -> Table:
-    """`C_history` rows of one run: every `every`-th sample, angles in degrees (as B1's series)."""
+def _sample_indices(n: int, every: int = 5) -> list[int]:
+    """Every `every`-th sample and always the last one, so a curve ends where the run stopped."""
+    idx = list(range(0, n, every))
+    if idx and idx[-1] != n - 1:
+        idx.append(n - 1)
+    return idx
+
+
+def _hist_meta(
+    view: str, name: str, scen: Scenario, vp: VehicleParams, run: restricted.CRun, band: float,
+    **extra: Any,
+) -> dict[str, Any]:  # fmt: skip
+    """What the caption of a history figure states: the scenario and the entry speed."""
+    return {
+        "view": view, "scenario": name, "altitude_m": scen.altitude_amsl_m,
+        "isa_offset_k": scen.isa_offset_k, "soc": scen.soc, "headwind_ms": scen.headwind_ms,
+        "mass_kg": vp.m if scen.mass_kg is None else scen.mass_kg, "V0_tas_ms": run.v_air0,
+        "V0_eas_ms": run.v_air0 * math.sqrt(scen.rho / RHO0), "band_eps_h_m": band,
+        "run_overshoot_m": _num(run.overshoot), **extra,
+    }  # fmt: skip
+
+
+def _c_trace(
+    sim: Any, i_w: float, case: str, member: int, every: int = 5,
+    meta: dict[str, Any] | None = None,
+) -> Table:  # fmt: skip
+    """`C_history` rows of one run: every `every`-th sample (and the last), angles in degrees (as
+    B1's series). `meta` is the scenario description every row of the run carries."""
     cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
             "theta": np.degrees(sim["theta"]), "alpha_w_deg": np.degrees(sim["alpha"] + i_w),
             "delta_r": sim["delta_r"], "theta_cmd": np.degrees(sim["theta_cmd"]),
             "omega_r": sim["omega_r"]}  # fmt: skip
-    return [{"case": case, "member": member, **{k: float(v[i]) for k, v in cols.items()}}
-            for i in range(0, len(sim.t), every)]  # fmt: skip
+    return [{"case": case, "member": member, **(meta or {}),
+             **{k: float(v[i]) for k, v in cols.items()}}
+            for i in _sample_indices(len(sim.t), every)]  # fmt: skip
 
 
 def task_c(inp: StudyInputs) -> dict[str, Any]:
@@ -952,8 +1042,18 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
             "seed_spread": "", "at_bound": "",
             **{k: _num(v) for k, v in s_dflt.items() if k != "J"},
         })  # fmt: skip
-    search = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
-              for sr in r.search.seeds]  # fmt: skip
+    # each seed's best point in physical units (the stored unit-cube point mapped through the
+    # bounds; no search is run), so seeds that agree on J can be told apart by their parameters
+    search = []
+    for sr in r.search.seeds:
+        pt = bounds.to_physical(sr.x)
+        search.append({"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals,
+                       "T_bt_s": pt["T_bt"], "theta_A_deg": math.degrees(pt["theta_A"]),
+                       "spin_min": pt["spin_min"], "Q_TRANS_DECEL_ms2": pt["q"]})  # fmt: skip
+    # what the "at a search bound" chip needs to say where the upper bound of theta_A comes from
+    params[0].update({"theta_A_hi_deg": theta_hi, "theta_A_cfg_hi_deg": c.bounds.theta_A_deg[1],
+                      "ptch_lim_deg": math.degrees(inp.theta_p),
+                      "rotor_lag_s": c.rotor_lag_s})  # fmt: skip
 
     # per member and case: the run, the capability ceiling, D's alpha and VRS checks (report only)
     progress.phase("C: per-member tables")
@@ -988,13 +1088,67 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         member_rows("ardupilot_default", dflt, dflt_runs)
 
     progress.phase("C: histories and the q curve")
-    history: Table = _c_trace(opt[0].sim, vp.wing.i_w, "C optimum", 0)
-    history += _c_trace(reg_runs[0].sim, vp.wing.i_w, "C register", 0)
+    # Two views (member = -1 is "not an ensemble member"): the B1 headline scenario with C's
+    # optimum and the ArduPilot default on it, and the ensemble member on which the default
+    # overshoots most with both cases. Every row of a run says which scenario it is.
+    history: Table = []
+    band = float(inp.study.B1.eps_h_m[0])
+    core_name = inp.study.B1.scenarios[0] if inp.study.B1.scenarios else ""
+    hist_notes: list[str] = []
+    if core_name in inp.scenarios:
+        core = inp.scenarios[core_name]
+        try:
+            for case, prm in (("C optimum", best), ("C ardupilot_default", dflt)):
+                if prm is None:
+                    continue
+                cr = restricted.run_c(vp, core, prm, cev, base)
+                history += _c_trace(cr.sim, vp.wing.i_w, case, -1,
+                                    meta=_hist_meta("core", core_name, core, vp, cr, band))
+        except (ValueError, RuntimeError) as exc:
+            hist_notes.append(f"C on the B1 scenario {core_name} could not be run: {exc}")
     if dflt_runs is not None:
-        history += _c_trace(dflt_runs[0].sim, vp.wing.i_w, "C ardupilot_default", 0)
+        over = [r.overshoot if math.isfinite(r.overshoot) else -math.inf for r in dflt_runs]
+        worst = max(range(len(over)), key=over.__getitem__)
+        fails = over[worst] > c.os_tol_m
+        for case, runs_i in (("C optimum", opt), ("C ardupilot_default", dflt_runs)):
+            history += _c_trace(
+                runs_i[worst].sim, vp.wing.i_w, case, worst,
+                meta=_hist_meta("default_fails", "ensemble member", scens[worst], vp,
+                                runs_i[worst], band, default_fails=bool(fails)))
 
-    q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q}
+    q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q, "grid": "coarse"}
                for q in c.q_curve]  # fmt: skip
+    # a fine grid around the optimum, the other three variables fixed. q is not clipped to the
+    # search bound (it is a report, not a search); only a q that is not positive is dropped.
+    q_fine: Table = []
+    for off in c.q_fine_offsets_ms2:
+        q_f = best["q"] + off
+        if q_f <= 0.0:
+            continue
+        runs_q = opt if off == 0.0 else run_all({**best, "q": q_f})
+        q_fine.append(_c_row(f"q = {q_f:.3f}", runs_q, w) | {"q": q_f, "grid": "fine"})
+    q_curve += q_fine
+    # the tolerances and margins of every case, and the reported margin row (never the
+    # recommendation)
+    by_case = {"optimum": opt, str(params[1]["case"]): reg_runs}
+    if dflt_runs is not None:
+        by_case["ardupilot_default"] = dflt_runs
+    for prow in params:
+        sink_w = worst_end_sink(by_case[prow["case"]])
+        prow.update(margin_cols(c, prow.get("max_overshoot_m"), sink_w))
+        cnt = failure_counts(by_case[prow["case"]])
+        prow.update(cnt)
+        prow["J_smooth"] = _num(smooth_cost(float(prow["J"]), cnt["n_fail_total"], w))
+    mrow = pick_margin_row(q_fine, c)
+    if mrow is not None:
+        prm_m = {**best, "q": mrow["q"]}
+        params.append({
+            "case": "optimum_margin", **deg(prm_m), "J": mrow["J"], "J_start": "",
+            "seed_spread": "", "at_bound": "",
+            **{k: v for k, v in mrow.items()
+               if k not in ("case", "J", "q", "grid", "max_end_sink_ms")},
+            **margin_cols(c, mrow["max_overshoot_m"], mrow["max_end_sink_ms"]),
+        })  # fmt: skip
 
     sens_rows: Table = []
     progress.phase("C: one-at-a-time sensitivities")
@@ -1019,7 +1173,8 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         row.pop("case", None)
     progress.note(f"C reports: {time.time() - t0:.0f} s")
     return {
-        "result": r, "scens": scens, "notes": [theta_note, *([dflt_note] if dflt_note else [])],
+        "result": r, "scens": scens,
+        "notes": [theta_note, *([dflt_note] if dflt_note else []), *hist_notes],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
                    "C_q_curve": q_curve, "C_sens": sens_rows, "C_history": history},
     }  # fmt: skip
@@ -1106,6 +1261,60 @@ def _ft_sens_eval(fev: forward.FTEval, key: str, value: Any) -> forward.FTEval:
     own = {"TECS_TIME_CONST": "tecs_time_const", "TECS_INTEG_GAIN": "tecs_integ_gain",
            "TRIM_THROTTLE": "trim_throttle", "tecs_start": "tecs_start"}  # fmt: skip
     return dataclasses.replace(fev, template=dataclasses.replace(tp, **{own[key]: value}))
+
+
+def flag_names(summary: dict[str, Any]) -> str:
+    """The failure kinds a `summarise_ft` row counts (those with a member), in the fixed order."""
+    return ",".join(f for f in forward.FT_FLAGS if summary.get(f"n_{f}"))
+
+
+def robust_rows(best: dict[str, float], steps: list[float], scales: list[float],
+                evaluate: Callable[[dict[str, float], float], dict[str, Any]],
+                ) -> Table:  # fmt: skip
+    """`FT_robust`: the optimum's other three settings with AIRSPEED_MIN = optimum + each step,
+    each evaluated at each C_L,max scale. `evaluate(prm, scale)` is the `summarise_ft` row."""
+    rows: Table = []
+    for step in steps:
+        prm = {**best, "airspeed_min": best["airspeed_min"] + step}
+        for scale in scales:
+            sm = evaluate(prm, scale)
+            rows.append({"airspeed_min_eas_ms": prm["airspeed_min"], "step_ms": step,
+                         "cl_max_scale": scale, **{k: _num(x) for k, x in sm.items()},
+                         "flags": flag_names(sm)})  # fmt: skip
+    return rows
+
+
+def optimum_robust_row(rows: Table, best: dict[str, float]) -> dict[str, Any]:
+    """The `optimum_robust` row of `FT_params`: the smallest AIRSPEED_MIN of `FT_robust` that is
+    flag-free at every C_L,max scale (a reported alternative, never the recommendation).
+
+    Its cost is read at the scale 1.0 (or the scale nearest to it) and compared with the optimum's
+    cost in the SAME table, so both are on the same ensemble. With no such AIRSPEED_MIN the
+    settings are empty and `robust_found` is False."""
+    by_v: dict[float, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_v.setdefault(float(r["airspeed_min_eas_ms"]), []).append(r)
+
+    def at_nominal(rs: list[dict[str, Any]]) -> dict[str, Any]:
+        return min(rs, key=lambda r: abs(float(r["cl_max_scale"]) - 1.0))
+
+    j_opt = next((float(at_nominal(rs)["J"]) for v, rs in by_v.items()
+                  if abs(v - best["airspeed_min"]) < 1e-9), math.nan)  # fmt: skip
+    clean = sorted(v for v, rs in by_v.items() if all(not r["n_flags"] for r in rs))
+    row: dict[str, Any] = {"case": "optimum_robust", "robust_found": bool(clean),
+                           "cl_max_scales": ",".join(f"{s:g}" for s in sorted(
+                               {float(r["cl_max_scale"]) for r in rows})),
+                           "J_optimum_same_ensemble": j_opt}  # fmt: skip
+    if not clean:
+        return row
+    v = clean[0]
+    nom = at_nominal(by_v[v])
+    row.update({"airspeed_min_eas_ms": v, "q_transition_s": best["q_transition"],
+                "tkoff_thr_max": best["tkoff_thr_max"], "tran_pit_max_deg": best["tran_pit_max"],
+                "J": float(nom["J"]), "delta_J": float(nom["J"]) - j_opt,
+                "worst_stall_margin": min(float(r["worst_stall_margin"]) for r in by_v[v]),
+                "n_flags": 0.0})  # fmt: skip
+    return row
 
 
 def vehicle_with_cl_max(vp: VehicleParams, scale: float) -> VehicleParams:
@@ -1197,6 +1406,7 @@ def task_ft_grid(inp: StudyInputs, q_ms_arg: str) -> dict[str, Any]:
         "J_snapped_minus_continuous": lat.cost - r.cost,
         "descent_moves": lat.rounds, "descent_evaluations": lat.evaluations,
         "ensemble_n": len(core), **{k: _num(x) for k, x in sm.items() if k != "J"},
+        "flags": flag_names(sm),
     }  # fmt: skip
     return {"result": r, "row": row, "q_transition_s": q, "snapped": snapped}
 
@@ -1305,6 +1515,7 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
         params.append({
             "case": c, **{FT_PARAM_COLUMNS[k]: prm[k] for k in forward.FT_NAMES},
             "ensemble_n": len(final), "J_start": j_start if opt else "",
+            "thr_max": inp.forward.thr_max, "tkoff_thr_max_hi": f.bounds.tkoff_thr_max[1],
             **{k: _num(v) for k, v in forward.summarise_ft(core_runs[c], w).items()},
         })  # fmt: skip
     run_rows: Table = []
@@ -1341,19 +1552,36 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
                               "cl_max": runs.cl_max(vp_s.wing), "alpha_s_rad": vp_s.wing.alpha_s,
                               **{k: _num(x) for k, x in sm.items()}})  # fmt: skip
             progress.step(f"sensitivity {key}={v}", len(sens_rows) - 1, n_sens)
+    progress.phase("FT report: AIRSPEED_MIN against the C_L,max scale")
+    rb = f.robust
+
+    def robust_eval(prm: dict[str, float], scale: float) -> dict[str, Any]:
+        vp_r = vp if abs(scale - 1.0) < 1e-12 else vehicle_with_cl_max(vp, scale)
+        return forward.summarise_ft(forward_runs(vp_r, core, prm, fev), w)
+
+    robust = robust_rows(best, rb.airspeed_min_steps, rb.cl_max_scale, robust_eval)
+    for r in robust:
+        r.update({"ensemble_n": len(core)})
+    params.append({**optimum_robust_row(robust, best), "ensemble_n": len(core)})
+    notes.append("FT_robust and the optimum_robust row of FT_params are evaluated on the first "
+                 f"{len(core)} members, the ensemble of the sensitivities, and are reported only: "
+                 "no search, never the recommendation.")
     progress.phase("FT report: histories")
     hist: Table = []
     for name in f.history_scenarios:
         sc = forward.ft_scenario(inp.scenarios[name], inp.mission.clearance_agl_m)
         for c, prm in cases.items():
             rr = forward.run_ft(vp, sc, prm, fev)
-            hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
+            # the case's own parameters (as run_ft flew them), not the template's: the template
+            # has the register's Q_TRAN_PIT_MAX, which gave every case the register's pitch cap
+            hist += forward.history_rows(sc.vehicle_for(vp), rr,
+                                         forward.case_params(fev, sc, prm), name, c)
     progress.note(f"FT reports: {time.time() - t1:.0f} s")
     return {
         "optimum": best, "J_start": j_start, "scens": core, "E_ref": w.E_ref,
         "notes": [*notes, *([dflt_note] if dflt_note else [])],
         "tables": {"FT_params": params, "FT_runs": run_rows, "FT_sens": sens_rows,
-                   "FT_history": hist},
+                   "FT_robust": robust, "FT_history": hist},
     }  # fmt: skip
 
 
@@ -1432,8 +1660,31 @@ def task_ft_scan(inp: StudyInputs, v_arg: str) -> dict[str, Any]:
         "J_search": r.cost, "seed_spread": r.search.spread,
         "at_bound": ";".join(f"{k}:{x}" for k, x in r.at_bound.items()),
         "entry_eas_back_ms": v - 2.0, **{k: _num(x) for k, x in sm.items()},
+        "flags": flag_names(sm),
     }  # fmt: skip
     return {"result": r, "row": row, "airspeed_min": v}
+
+
+def wing_lift_peak(wing: Any) -> tuple[float, float]:
+    """(alpha_w at the peak of the model's C_L [rad], that C_L), in the angle convention of the B1
+    wing limits (alpha_w = body angle of attack + wing incidence). A 0.01 deg scan to 40 deg."""
+    grid = np.radians(np.arange(0.0, 40.0001, 0.01))
+    cl = np.array([float(aero.coefficients(float(a), wing)[0]) for a in grid])
+    k = int(np.argmax(cl))
+    return float(grid[k]), float(cl[k])
+
+
+def wing_limit_cols(wing: Any, variant: Any) -> dict[str, float]:
+    """Where a B1 wing limit sits against the lift peak (columns of every B1_front row)."""
+    a_pk, cl_pk = wing_lift_peak(wing)
+    lim = (math.radians(variant.alpha_max_deg) if variant.alpha_max_deg is not None
+           else variant.alpha_margin * wing.alpha_s)  # fmt: skip
+    cl_lim = float(aero.coefficients(lim, wing)[0])
+    return {
+        "alpha_limit_deg": math.degrees(lim), "alpha_s_deg": math.degrees(wing.alpha_s),
+        "wing_incidence_deg": math.degrees(wing.i_w), "alpha_w_clmax_deg": math.degrees(a_pk),
+        "cl_max": cl_pk, "cl_at_limit_over_max": cl_lim / cl_pk,
+    }
 
 
 def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
@@ -1489,7 +1740,8 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
                 "theta": np.degrees(sim["theta"]), "alpha_w_deg": aw, "delta_r": sim["delta_r"],
                 "theta_cmd": np.degrees(sim["theta_cmd"]), "omega_r": sim["omega_r"]}  # fmt: skip
-        return [{k: float(v[i]) for k, v in cols.items()} for i in range(0, len(sim.t), 5)]
+        return [{k: float(v[i]) for k, v in cols.items()}
+                for i in _sample_indices(len(sim.t), 5)]
 
     def row(
         prob: coll.Problem, ver: coll.Verified, variant: str, eh: float, ex: float, rs: str,
@@ -1498,6 +1750,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         s = ver.sol
         r: dict[str, Any] = {
             "scenario": scen_name, "variant": variant, "eps_h_m": eh, "eps_x_m": ex,
+            **wing_limit_cols(vp.wing, variants[variant]),
             "end_vh_band_ms": band, "rotor_start": rs, "theta_cmd_max_deg": theta_deg,
             "converged": s.ok, "replay_verified": ver.verified,
             "converged_attempts": sum(a.ok for a in ver.attempts), "status": s.status,

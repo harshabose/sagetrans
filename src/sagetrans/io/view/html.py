@@ -103,6 +103,7 @@ section.chap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width
 .sw.ink.dot,.sw.ink.sq,.sw.ink.dia{background:var(--ink2)}
 .sw.ref.dot,.sw.ref.sq,.sw.ref.dia{background:var(--refc)}
 .sw.hollow{background:var(--panel);border:2px solid var(--s1)}
+.sw.ref.hollow{border-color:var(--refc)}
 .sw.cellno{width:12px;height:12px;border:1px solid var(--axis);border-radius:2px;background:var(--panel)}
 .sw.cellok{width:12px;height:12px;border-radius:2px;background:var(--accent-soft);
  border:1px solid var(--accent)}
@@ -133,6 +134,7 @@ svg.viz{width:100%;height:auto;display:block;overflow:visible}
 .xh{stroke:var(--ink2);stroke-width:1}
 .pans{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 18px}
 .pan{min-width:0}
+.pan.wide{grid-column:1/-1}
 .mult{display:grid;gap:14px 18px}.mult.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .mult.c3{grid-template-columns:repeat(3,minmax(0,1fr))}.sm{min-width:0}
 details{margin-top:6px;font-size:13.5px}
@@ -140,7 +142,7 @@ summary{cursor:pointer;color:var(--accent);padding:4px 0}
 summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .tbl.full{max-height:none}
 .tbl{overflow:auto;max-height:520px;border:1px solid var(--rule);border-radius:8px;
- background:var(--panel);margin-top:6px}
+ background:var(--panel);margin-top:6px;scrollbar-width:auto;scrollbar-color:var(--axis) var(--panel)}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;min-width:520px}
 th,td{text-align:left;padding:7px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
 th{position:sticky;top:0;z-index:1;font-weight:600;font-size:12px;color:var(--ink2);

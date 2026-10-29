@@ -692,6 +692,17 @@ placeholders (`theta_fw0_deg` = 0; `AIRSPEED_MIN` read as a true airspeed, DEC-1
 30° bound is a stalled-wing brake as in D: read D's alpha and VRS flags next to it, and do not read the
 result as a recommendation to fly at 30°.
 
+**Reading C's result.** (Report only; the search and the model are unchanged.) The optimum sits at
+the edge of a cliff in q: the worst overshoot is the PROPOSED `C.os_tol_m` and the worst end sink the
+PROPOSED `C.sink_tol_ms`, and both are reported as margins (`os_margin_m`, `sink_margin_ms`,
+`at_edge` in `C_params`). The overshoot is positive because the stop target is
+`x_tgt = V_ground^2 / (2 q)`, the distance of a constant deceleration q from t = 0, while the pitch
+ramp over `T_bt` delays the braking (`restricted._simulate_c`). `C_q_curve` has a fine grid around
+the optimum; the `optimum_margin` row is the largest q on it that keeps both margins at
+`C.margin_frac` of their tolerances. It is reported beside the optimum and never becomes the
+recommendation. `C_sens` separates the failing members (`n_failing_members`, by type) from the smooth
+change of J (`J_smooth`), because the failure penalty otherwise dominates every percentage.
+
 ---
 
 ## FT — forward transition (`forward.py`)
@@ -716,6 +727,14 @@ with the source facts in `docs/ardupilot_open_questions.md` (O-14 to O-22).
   times C's, over the spec's 2 times). `FT_params` (the optimum, the register start and, with a defaults
   file, the `ardupilot_default` case), `FT_search`, `FT_runs`, `FT_scan` (cost with `AIRSPEED_MIN` fixed on
   a grid), `FT_sens`, `FT_history`.
+* **Reading FT's result.** `forward.case_params` builds the `ForwardParams` of one run (the template with
+  the run's four values); `run_ft` flies with it and `FT_history.theta_cap` is written from it (the
+  template alone carries the register's `Q_TRAN_PIT_MAX`). The stall rule in the figures is 1.2 times the
+  stall speed of the heaviest member. `FT_robust` re-evaluates the optimum's other three settings with
+  `AIRSPEED_MIN` moved by `FT.robust.airspeed_min_steps` at each `FT.robust.cl_max_scale` (the model's
+  C_L,max is not validated), on the sensitivity's ensemble and without a search; the `optimum_robust`
+  row of `FT_params` is the smallest `AIRSPEED_MIN` that is flag-free at every scale, reported beside the
+  optimum and never written into `settings_recommended`.
 * **A reference, not a recommendation.** The `ardupilot_default` case sets the four searched values to what
   ArduPilot ships with (`configs/ardupilot_defaults.yaml`, docs/DEFAULTS_spec.md) and keeps the rest of the
   register; C has the same third case. It is simulated to show how far the default is from the optimum.
@@ -809,6 +828,21 @@ every attempt is kept, and non-convergence is recorded, never raised or hidden. 
 the epsilon-constraint front this way; `min_excursion` is the least reliable mode (a converged
 excursion-objective solution once reported 0.0 m at the nodes while the replay showed several metres)
 and its result must be checked via `Verified.verified`.
+
+### Reading B1's result
+
+* **Which points are quoted.** Only converged, replay-verified points; `B1_front.reason` says why any
+  other point is not (not converged, replay mismatch, fails 10 ms late). The headline gap quotes the
+  `attached` rows first and the `c_envelope` rows beside them with their timing warning.
+* **Is `attached` attached?** The `attached` limit is `alpha_margin x alpha_s` in the convention
+  `alpha_w = alpha + i_w`. The columns `alpha_w_clmax_deg`, `cl_max` and `cl_at_limit_over_max` (a 0.01
+  deg scan of `aero.coefficients`) show where the model's C_L peaks: with the shipped wing the peak is
+  at 13.43 deg and the limit at 13.34 deg, 0.09 deg below it, where C_L is 99.98 % of C_L,max. So the
+  limit leaves no stall margin in lift: "attached" means below `alpha_s`, which is 2.3 deg past the
+  peak. The variant is unchanged.
+* **What the gap to C contains.** The pitch freedom (`theta_cmd_max_deg` against `PTCH_LIM_MAX_DEG`),
+  the missing rotor lag and the foreknowledge of the scenario, not what a better parameter set could
+  save.
 
 ### Comparing with C
 

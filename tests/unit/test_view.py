@@ -320,7 +320,8 @@ def test_the_ft_chapter_shows_the_grid_with_the_winner_and_the_failed_spreads(tm
         {"point": "coarse", "winner": False, "q_transition_s": 4.0, "J_continuous": 1.2,
          "seed_spread": 0.002, "t12_ok": True, "J_snapped": 1.1, "within_2pct": False},
         {"point": "coarse", "winner": False, "q_transition_s": 8.0, "J_continuous": 0.9,
-         "seed_spread": 0.034, "t12_ok": False, "J_snapped": 0.85, "within_2pct": False},
+         "seed_spread": 0.034, "t12_ok": False, "J_snapped": 0.85, "within_2pct": False,
+         "n_flags": 2.0, "flags": "stall_margin"},
         {"point": "coarse", "winner": False, "q_transition_s": 10.0, "J_continuous": 0.83,
          "seed_spread": 0.004, "t12_ok": True, "J_snapped": 0.81, "within_2pct": True},
         {"point": "fine", "winner": True, "q_transition_s": 9.0, "J_continuous": 0.82,
@@ -331,7 +332,8 @@ def test_the_ft_chapter_shows_the_grid_with_the_winner_and_the_failed_spreads(tm
     assert "Cost against Q_TRANSITION_MS" in ft
     assert "8 s (3.4%)" in ft  # the point above the T-12 limit is named
     assert 'class="mk s2' in ft  # the winner has its own mark
-    assert "mk s1 hollow" in ft  # and the failed point is hollow
+    assert "mk s1 hollow" in ft  # a point whose snapped optimum still has flags is hollow
+    assert 'rect class="mk s1' in ft  # and the T-12 failure is a square
     assert "Within 2 % of the best cost: Q_TRANSITION_MS 9, 10 s." in ft  # the flat curve
 
 

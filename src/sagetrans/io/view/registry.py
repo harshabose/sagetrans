@@ -112,7 +112,7 @@ CHAPTERS: tuple[Chapter, ...] = (
         "FT · forward transition",
         "Which four ArduPilot settings take the aircraft from hover to wing-borne flight "
         "without losing altitude or stalling?",
-        ("FT_params", "FT_runs", "FT_search", "FT_scan", "FT_sens", "FT_history"),
+        ("FT_params", "FT_runs", "FT_search", "FT_scan", "FT_sens", "FT_robust", "FT_history"),
         chp.build_ft,
         "FT",
     ),

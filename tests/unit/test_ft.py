@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from sagetrans import atmosphere
+from sagetrans.analysis import forward
 from sagetrans.analysis.common import Scenario
 from sagetrans.control.ardupilot_like import BackTransitionParams, LiftFF, Position1Controller
 from sagetrans.io import stages
@@ -122,9 +123,12 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
     assert out["optimum"] == {"airspeed_min": 18.0, "q_transition": 5.0, "tkoff_thr_max": 1.0,
                               "tran_pit_max": 3.0}
     tables = out["tables"]
-    assert set(tables) == {"FT_params", "FT_runs", "FT_sens", "FT_history"}
+    assert set(tables) == {"FT_params", "FT_runs", "FT_sens", "FT_robust", "FT_history"}
     params = tables["FT_params"]
-    assert [r["case"] for r in params] == ["optimum", "register"]
+    assert [r["case"] for r in params] == ["optimum", "register", "optimum_robust"]
+    n_rob = len(inp.study.FT.robust.airspeed_min_steps) * len(inp.study.FT.robust.cl_max_scale)
+    assert len(tables["FT_robust"]) == n_rob and "flags" in tables["FT_robust"][0]
+    assert params[2]["robust_found"] in (True, False)
     for col in ("J", "J_exc", "J_E", "J_pen", "J_start"):
         assert col in params[0]
     assert abs(params[0]["J"] - (params[0]["J_exc"] + params[0]["J_E"] + params[0]["J_x"]
@@ -134,7 +138,8 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
         (c, k) for c in ("optimum", "register") for k in ("core", "corner")
     }
     # the search ensemble is 2; the three cases are reported on the first 4 members (a prefix)
-    assert all(r["ensemble_n"] == 4 for r in params)
+    assert all(r["ensemble_n"] == 4 for r in params[:2])
+    assert params[2]["ensemble_n"] == 2  # optimum_robust: the search ensemble, like FT_sens
     members = {r["member"] for r in runs if r["set"] == "core" and r["case"] == "optimum"}
     assert members == {0, 1, 2, 3}
     assert any("first 4 members" in n and "first 2 members" in n for n in out["notes"])
@@ -147,6 +152,7 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
     # a lower C_L,max is a higher stall speed, so a smaller margin (the flag reads the changed wing)
     assert lo["worst_stall_margin"] < base["worst_stall_margin"] < hi["worst_stall_margin"]
     scan = stages.run_task(inp, "FT_scan:16")["row"]
+    assert "flags" in scan and bool(scan["flags"]) == bool(scan["n_flags"])
     assert scan["airspeed_min_eas_ms"] == 16.0 and scan["entry_eas_back_ms"] == 14.0
 
 
@@ -233,6 +239,7 @@ def test_grid_task_snaps_and_its_optimum_is_not_worse_than_its_lattice_neighbour
     assert row["J_snapped"] == pytest.approx(
         row["J_continuous"] + row["J_snapped_minus_continuous"])
     assert row["J_snapped"] <= row["J_snap"] + 1e-12  # the descent never makes it worse
+    assert "flags" in row and bool(row["flags"]) == bool(row["n_flags"])  # the kinds, for the chart
     assert {"airspeed_min_eas_ms_continuous", "seed_spread", "t12_ok", "at_bound"} <= set(row)
     # re-evaluate the in-bound subset of the 26 neighbours on the same ensemble and weights
     fev, start = stages.ft_settings(inp)
@@ -311,3 +318,48 @@ def test_the_range_within_two_percent_of_the_best_cost():
                          (20.0, 0.80))]
     assert grid_near_best(rows) == [12.0, 14.0, 16.0]  # <= 0.770 * 1.02 = 0.7854
     assert grid_near_best(rows, 0.0) == [14.0]
+
+
+# ---- F1: the pitch cap written to FT_history is the case's own -------------------------------
+def test_each_case_has_its_own_pitch_cap_by_mode(tmp_path):
+    from sagetrans.control.forward import pitch_cap_deg
+
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY)
+    inp = load_inputs(cfg, only={"FT"})
+    fev, start = stages.ft_settings(inp)
+    sc = inp.scenarios["S-01"]
+    opt = {**start, "tran_pit_max": 6.0}
+    fp_opt, fp_reg = forward.case_params(fev, sc, opt), forward.case_params(fev, sc, start)
+    assert fp_opt.tran_pit_max_deg == 6.0 and fp_reg.tran_pit_max_deg == start["tran_pit_max"]
+    assert fev.template.tran_pit_max_deg == start["tran_pit_max"]  # the template is the register's
+    # WAIT cap = Q_TRAN_PIT_MAX, FADE cap = (Q_TRAN_PIT_MAX + 1) x 2, DONE has none
+    assert pitch_cap_deg(fp_opt, "fwd_wait", 5.0) == 6.0
+    assert pitch_cap_deg(fp_opt, "fwd_fade", 5.0) == 14.0
+    assert pitch_cap_deg(fp_reg, "fwd_wait", 5.0) == start["tran_pit_max"]
+    assert pitch_cap_deg(fp_reg, "fwd_fade", 5.0) == (start["tran_pit_max"] + 1.0) * 2.0
+
+
+def test_the_ft_report_writes_each_cases_own_cap_and_the_run_flew_with_it(tmp_path):
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY)
+    inp = load_inputs(cfg, only={"FT"})
+    out = stages.run_task(inp, "FT:18:5000:100:6")  # an optimum with Q_TRAN_PIT_MAX 6, register 3
+    reg_pit = round(float(stages.ft_settings(inp)[1]["tran_pit_max"]), 6)
+    hist = out["tables"]["FT_history"]
+    caps = {}
+    for r in hist:
+        caps.setdefault((r["case"], r["mode"]), set()).add(round(r["theta_cap"], 6))
+    wait_o, wait_r = caps[("optimum", "fwd_wait")], caps[("register", "fwd_wait")]
+    assert 6.0 in wait_o and 6.0 not in wait_r  # a wait-mode cap of 6 is the optimum's alone
+    assert reg_pit in wait_r and reg_pit not in wait_o - {0.0}
+    fade_o, fade_r = caps[("optimum", "fwd_fade")], caps[("register", "fwd_fade")]
+    assert fade_o == {14.0} and fade_r == {round((reg_pit + 1.0) * 2.0, 6)}  # 14 against 8
+    assert fade_o != fade_r
+    # t_pitch_cap_s in FT_runs is computed in _evaluate from the run's own `fp`, so it already used
+    # each run's parameters; the defect was the history rows only
+    assert all("t_pitch_cap_s" in r for r in out["tables"]["FT_runs"])

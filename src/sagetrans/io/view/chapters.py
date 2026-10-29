@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from sagetrans.io.view import charts as ch
-from sagetrans.io.view.html import Item, Out, absent, panelbox, table_html
+from sagetrans.io.view.html import Item, Out, absent, details, panelbox, table_html
 from sagetrans.io.view.load import Results
 from sagetrans.io.view.units import fmt_value, header_label, unit_of
 
@@ -805,6 +805,318 @@ def _c_cases(c: Ctx) -> list[str]:
     return uniq([r.get("case") for r in c.rows("C_params")])
 
 
+def history_panels(band: float | None) -> list[ch.Panel]:
+    """The four panels of C's history figures: the airspeed axis starts at 0 and the altitude panel
+    draws the B1 altitude band as two thin lines."""
+    lines = [(band, f"+{band:g} m"), (-band, f"-{band:g} m")] if band else []
+    return [
+        ch.Panel("V", "airspeed [m/s]", "m/s", ymin=0.0),
+        ch.Panel("h", "altitude change [m]", "m", 2, True, hlines=lines),
+        ch.Panel("theta", "pitch [deg]", "deg", 1),
+        ch.Panel("delta_r", "rotor throttle [-]", "", 2),
+    ]
+
+
+def select_history(
+    c_rows: Sequence[Row], b1_rows: Sequence[Row], view: str, headline: str | None = None
+) -> tuple[dict[str, list[Row]], tuple[str, Any]]:
+    """The rows of one history figure, by series, all from ONE scenario or ONE ensemble member.
+
+    `view` is "core" (C's runs on the B1 headline scenario, with B1's replays of the same scenario)
+    or "default_fails" (both C cases on the ensemble member where the default overshoots most; no B1).
+    Returns `({case: rows}, ("scenario", name) | ("member", index))`. A figure never mixes
+    scenarios: C rows of another scenario or member, and B1 rows of another scenario, are dropped.
+    """
+    cr = [r for r in c_rows if r.get("view") == view]
+    if view == "core":
+        name = headline or (cr[0].get("scenario") if cr else None)
+        cr = [r for r in cr if r.get("scenario") == name]
+        br = [r for r in b1_rows if name is not None and r.get("scenario") == name]
+        ident: tuple[str, Any] = ("scenario", name)
+    else:
+        mem = cr[0].get("member") if cr else None
+        cr = [r for r in cr if r.get("member") == mem]
+        br = []
+        ident = ("member", mem)
+    out: dict[str, list[Row]] = {}
+    for r in [*cr, *br]:
+        out.setdefault(str(r.get("case")), []).append(r)
+    return out, ident
+
+
+def scenario_caption(r: Row) -> str:
+    """Altitude, ISA offset, mass, SoC, headwind and the entry airspeed (true and equivalent)."""
+    bits = [
+        ("altitude", "altitude_m", "{:g} m"), ("ISA", "isa_offset_k", "{:+.1f} K"),
+        ("mass", "mass_kg", "{:.1f} kg"), ("SoC", "soc", "{:.2f}"),
+        ("headwind", "headwind_ms", "{:+.2f} m/s"),
+    ]
+    parts = [f"{lab} {fmt.format(num(r.get(col)))}" for lab, col, fmt in bits
+             if ok(num(r.get(col)))]  # fmt: skip
+    if ok(num(r.get("V0_tas_ms"))) and ok(num(r.get("V0_eas_ms"))):
+        parts.append(f"entry airspeed {num(r['V0_tas_ms']):.1f} m/s true, "
+                     f"{num(r['V0_eas_ms']):.1f} m/s equivalent")  # fmt: skip
+    return ", ".join(parts)
+
+
+C_HIST_STYLE = {  # case -> (class, dashed, thick)
+    "C optimum": ("s1", False, True),
+    "C ardupilot_default": ("ref", True, False),
+    "B1 attached": ("s2", False, False),
+    "B1 c_envelope": ("s3", False, False),
+}
+
+
+def history_figure(
+    title: str, caption: str, fig_id: str, series: dict[str, list[Row]], band: float | None,
+    entry: dict[str, float],
+) -> str:  # fmt: skip
+    """One history figure from `select_history` output; legend entries carry the entry speed."""
+    ts = []
+    for case, rows in series.items():
+        rs = [r for r in rows if ok(num(r.get("t")))]
+        if not rs:
+            continue
+        cls, dash, thick = C_HIST_STYLE.get(case, ("ink", False, False))
+        v0 = entry.get(case)
+        short = f"{case.replace('ardupilot_default', 'ArduPilot default')}" + (
+            f" ({v0:.1f} m/s)" if v0 is not None and ok(v0) else "")
+        ts.append(ch.TSeries(
+            case, cls, short, [r["t"] for r in rs],
+            {k: relative(k, [num(r.get(k)) for r in rs]) for k in ("V", "h", "theta", "delta_r")},
+            dash, False, thick, "", True))  # fmt: skip
+    leg = [(s.cls, "dash" if s.dash else "line", s.short) for s in ts]
+    return panelbox(title, caption, ch.panel_figure(fig_id, history_panels(band), ts), _legend(*leg))
+
+
+def build_c_histories(c: Ctx, o: Out) -> None:
+    """C's two time-history figures: the B1 scenario, and where the default fails."""
+    hist = c.rows("C_history")
+    if not hist:
+        o.absent.append("not in this run: C_history")
+        return
+    if not any("view" in r for r in hist):  # a results folder from before the two figures
+        plan = {
+            "C optimum": ("s1", "C optimum", False, True),
+            "C ardupilot_default": ("ref", "ArduPilot default", True, False),
+        }
+        ts = hist_series(hist, plan, ["V", "h", "theta", "delta_r"])
+        o.figures.append(panelbox(
+            "Time histories",
+            "Member 0 of the ensemble under C's optimum (and the ArduPilot default); "
+            "an older results folder: the scenario is not recorded.",
+            ch.panel_figure("c_hist", HIST_PANELS, ts),
+            _legend(*[(s.cls, "dash" if s.dash else "line", s.short) for s in ts])))
+        return
+    b1h = [{**r, "case": r.get("case") or f"B1 {r.get('variant')}"} for r in c.rows("B1_history")]
+    b1h = b1h or [{**r, "case": f"B1 {r.get('variant')}"} for r in c.rows("B1_schedule")]
+    headline = b1h[0].get("scenario") if b1h else None
+    front = c.rows("B1_front")
+    band_vals = [num(r.get("band_eps_h_m")) for r in hist if ok(num(r.get("band_eps_h_m")))]
+    band = band_vals[0] if band_vals else None
+
+    series, (_, name) = select_history(hist, b1h, "core", headline)
+    if series and name is not None:
+        first = next(rows[0] for case, rows in series.items() if case.startswith("C"))
+        entry = {case: num(first.get("V0_tas_ms")) for case in series}
+        for case in series:  # B1's own entry speed, when its table has it
+            if case.startswith("B1 "):
+                fr = next((r for r in front if r.get("scenario") == name
+                           and f"B1 {r.get('variant')}" == case and ok(num(r.get("V0_air_ms")))), None)
+                if fr is not None:
+                    entry[case] = num(fr["V0_air_ms"])
+        note = ""
+        if any(k.startswith("B1 ") for k in series):
+            env_rows = [r for r in front if r.get("scenario") == name
+                        and r.get("variant") == "c_envelope" and r.get("replay_verified") is True]
+            late = [r.get("replay_late_command_ok") for r in env_rows]
+            tail = ""
+            if "B1 c_envelope" in series and late:
+                tail = ("; c_envelope is verified for exact timing only" if False in late
+                        else "; c_envelope also replays with commands 10 ms late")
+            note = (" The B1 curves are open-loop bounds that use the altitude band, not "
+                    "controllers" + tail + ".")
+        o.figures.append(history_figure(
+            f"Same scenario as B1 ({name})",
+            f"Scenario {name}: {scenario_caption(first)}. C's optimum and the ArduPilot default "
+            "run on the scenario that B1's headline replay uses; each curve ends with a marker "
+            f"where the run stopped.{note}",
+            "c_hist_core", series, band, entry))
+    series, (_, mem) = select_history(hist, [], "default_fails")
+    if series and mem is not None:
+        first = next(iter(series.values()))[0]
+        entry = {case: num(first.get("V0_tas_ms")) for case in series}
+        dfl = next((rows[0] for case, rows in series.items() if "default" in case), None)
+        opt_row = next((rows[0] for case, rows in series.items() if case == "C optimum"), None)
+        fails = bool(first.get("default_fails"))
+        d_os = num(dfl.get("run_overshoot_m")) if dfl else NAN
+        o_os = num(opt_row.get("run_overshoot_m")) if opt_row else NAN
+        said = (f"The default overshoots this member by {d_os:.2f} m and the optimum by {o_os:.2f} m."
+                if ok(d_os) and ok(o_os) else "")
+        if not fails:
+            said += (" No member fails under the default; this is the one with the largest "
+                     "overshoot anyway.")
+        o.figures.append(history_figure(
+            f"Where the default fails (ensemble member {mem:g})",
+            f"Ensemble member {mem:g}: {scenario_caption(first)}. {said}",
+            "c_hist_default", series, band, entry))
+
+
+T12_LIMIT = 0.01  # the repeatability limit of the seeds (io.gate.T12_SPREAD_MAX)
+SEED_PARAMS = (("T_bt_s", "T_bt"), ("theta_A_deg", "theta_A"), ("spin_min", "spin_min"),
+               ("Q_TRANS_DECEL_ms2", "q"))  # fmt: skip
+
+
+def seed_statement(srch: Sequence[Row]) -> str:
+    """One sentence on the seeds, from the data: do they agree on J, and on the parameters?
+
+    Seeds that agree on J but differ in parameters mean a flat ridge (many settings, one cost);
+    agreeing on both means a single well-defined optimum; disagreeing on J means the search has
+    not converged (the T-12 limit is 1 %).
+    """
+    js = [num(r.get("best_cost")) for r in srch if ok(num(r.get("best_cost")))]
+    if len(js) < 2:
+        return ""
+    spread = (max(js) - min(js)) / max(abs(min(js)), 1e-12)
+    if spread > T12_LIMIT:
+        return (f"The seeds disagree on J (spread {spread:.2%}, the limit is {T12_LIMIT:.0%}): "
+                "the search has not converged.")
+    differ = []
+    for col, name in SEED_PARAMS:
+        v = [num(r.get(col)) for r in srch if ok(num(r.get(col)))]
+        if len(v) == len(srch) and v:
+            mean = sum(v) / len(v)
+            if max(v) - min(v) > 0.05 * max(abs(mean), 1e-12):
+                differ.append(f"{name} {min(v):.3g} to {max(v):.3g}")
+    if differ:
+        return (f"The seeds agree on J (spread {spread:.2%}) but differ in the parameters "
+                f"({'; '.join(differ)}): a flat ridge, not a single optimum.")
+    if any(ok(num(r.get(c))) for r in srch for c, _ in SEED_PARAMS):
+        return (f"The seeds agree on J (spread {spread:.2%}) and on the parameters: a single "
+                "well-defined optimum.")
+    return ""
+
+
+def bound_reason(row: Row, bound: str) -> str:
+    """Where the upper bound of theta_A comes from, computed: min(30, PTCH_LIM_MAX_DEG)."""
+    cfg, ptch, hi = (num(row.get(k)) for k in ("theta_A_cfg_hi_deg", "ptch_lim_deg",
+                                              "theta_A_hi_deg"))
+    if "theta_A:hi" not in bound or not (ok(cfg) and ok(ptch) and ok(hi)):
+        return ""
+    which = "the pitch limit" if ptch < cfg else "the configured bound"
+    return (f" (the upper bound of theta_A is {which}: min({cfg:g}, PTCH_LIM_MAX_DEG {ptch:g}) "
+            f"= {hi:g} deg)")
+
+
+def sensitivity_figure(sens: Sequence[Row], js0: float) -> str:
+    """C's one-at-a-time sensitivity as two dots per row: how many members fail (by type), and the
+    change of J without the failure penalty. The percent change of the full J is dominated by the
+    penalty (rotor lag 0.5 gives +7500 %), so it hides the smooth part. A row where members fail
+    is marked with an x."""
+    fails, smooth = [], []
+    for r in sens:
+        js = num(r.get("J_smooth"))
+        if not ok(js):
+            continue
+        n_os, n_sink = num(r.get("n_overshoot")), num(r.get("n_sinking"))
+        n_other = num(r.get("n_other_flags"))
+        n_mem = num(r.get("n_failing_members"))
+        n_mem = n_mem if ok(n_mem) else 0.0
+        label = f"{'x ' if n_mem else ''}{r['parameter']} = {r['value']}"
+        parts = ", ".join(f"{k} {v:g}" for k, v in (("overshoot", n_os), ("sinking", n_sink),
+                                                   ("other", n_other)) if ok(v) and v)
+        fails.append((label, n_mem, f"{n_mem:g} failing member(s)" + (f": {parts}" if parts else ""),
+                      "s1" if n_mem else "ref"))
+        smooth.append((label, (js / js0 - 1) * 100,
+                       f"J without the penalty = {js:.3f}; change = ({js:.3f} / {js0:.3f} - 1) x 100",
+                       "s1"))
+    body = ch.multiples(
+        [("Members that fail (by type in the tooltip)",
+          ch.dot_chart(fails, "failing members of the ensemble", "C sensitivity: failing members")),
+         ("Change of J without the failure penalty",
+          ch.dot_chart(smooth, "change of J without the penalty [%]", "C sensitivity: smooth J"))],
+        1)
+    return panelbox(
+        "One-at-a-time sensitivity",
+        "One setting changes at a time. The change of the full J is dominated by the failure "
+        "penalty, so the figure shows the failures and the smooth part of J apart; x marks a row "
+        "where members fail (the tooltip has the expressions).",
+        body, _legend(("s1", "dot", "a member fails"), ("ref", "dot", "no member fails")))
+
+
+def spread_statement(mine: Sequence[Row], opt_row: Row) -> str:
+    """What the overshoot strip shows, computed: the range, and whether any member stops short.
+
+    The cause is read from the code (restricted._simulate_c): the stop target is
+    x_tgt = V_ground^2 / (2 q), the distance of a constant deceleration q from t = 0, while the
+    pitch ramp over T_bt delays the braking, so a member stops past the target.
+    """
+    os_v = [num(r.get("overshoot_m")) for r in mine if ok(num(r.get("overshoot_m")))]
+    if not os_v:
+        return ""
+    short = [v for v in os_v if v <= 0.0]
+    lo, hi = min(os_v), max(os_v)
+    if short:
+        head = (f"{len(short)} of {len(os_v)} members stop short of the target; the overshoot "
+                f"ranges from {lo:.2f} to {hi:.2f} m.")
+    else:
+        head = (f"No member of the optimum stops short of the target: the overshoot is positive "
+                f"in all {len(os_v)} and ranges from {lo:.2f} to {hi:.2f} m.")
+    sink = [num(r.get("end_sink_ms")) for r in mine if ok(num(r.get("end_sink_ms")))]
+    if sink:
+        head += f" The end sink is at most {max(sink):.2f} m/s."
+    cause = (" The stop target assumes the planned deceleration q from t = 0, while the pitch "
+             "ramp over T_bt delays the braking, so the aircraft stops past it.")
+    return head + cause
+
+
+def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str | None:
+    """Worst overshoot and worst end sink against q: the coarse curve, the fine grid, the optimum,
+    the margin row and each tolerance as a line (two small charts, the sink one as important as
+    the overshoot one). None if the curve has neither column."""
+    panels = []
+    mrow = next((r for r in params if r.get("case") == "optimum_margin"), None)
+    for col, tcol, lab, ylab in (
+        ("max_overshoot_m", "os_tol_m", "worst overshoot", "worst overshoot [m]"),
+        ("max_end_sink_ms", "sink_tol_ms", "worst end sink", "worst end sink [m/s]"),
+    ):
+        series: list[ch.Series] = []
+        for grid, name, cls in (("coarse", "coarse curve", "s1"), ("fine", "fine grid", "s1")):
+            rs = sorted((r for r in curve if (r.get("grid") or "coarse") == grid
+                         and ok(num(r.get("q"))) and ok(num(r.get(col)))),
+                        key=lambda r: num(r["q"]))  # fmt: skip
+            if rs:
+                series.append(ch.Series(
+                    name, cls, [(num(r["q"]), num(r[col])) for r in rs],
+                    [tip(r, ["q", col, "J", "n_overshoot", "n_sinking"], name) for r in rs],
+                    hollow=[bool(num(r.get("n_overshoot")) or num(r.get("n_sinking"))) for r in rs],
+                    line=grid == "coarse", marker="dot" if grid == "coarse" else "sq"))
+        for r, name, cls, kind in ((params[opt], "optimum", "s1", "dia"),
+                                   (mrow, "margin row", "s3", "dia")):
+            if r is not None and ok(num(r.get("Q_TRANS_DECEL_ms2"))) and ok(num(r.get(col))):
+                series.append(ch.Series(
+                    name, cls, [(num(r["Q_TRANS_DECEL_ms2"]), num(r[col]))],
+                    [tip(r, ["Q_TRANS_DECEL_ms2", col], name)], line=False, marker=kind))
+        tol = num(params[opt].get(tcol))
+        if series and ok(tol):
+            panels.append((lab, ch.xy_chart(
+                series, "Q_TRANS_DECEL q [m/s^2]", ylab, f"{lab} against q", w=340, h=280,
+                hlines=[(tol, f"tolerance {tol:g} (PROPOSED)")])))
+    if not panels:
+        return None
+    os_m, sk_m = num(params[opt].get("os_margin_m")), num(params[opt].get("sink_margin_ms"))
+    margins = (f" At the optimum the margins are {os_m:.2f} m and {sk_m:.2f} m/s."
+               if ok(os_m) and ok(sk_m) else "")
+    sentence = ("The optimum relies on the overshoot and end-sink tolerances, which are PROPOSED, "
+                "not on a measured limit." + margins)
+    leg = _legend(("s1", "line", "coarse curve (hollow: a member fails)"), ("s1", "sq", "fine grid"),
+                  ("s1", "dia", "optimum"), ("s3", "dia", "margin row (reported, not recommended)"))
+    return panelbox(
+        "Worst overshoot and worst end sink against q",
+        "The optimum's other three values fixed; q varied. A hollow mark has a failing member.",
+        ch.multiples(panels, 2) + f'<p class="cap">{ch.esc(sentence)}</p>', leg)
+
+
 def build_c(c: Ctx) -> Out:
     o = Out()
     params, runs, curve = c.rows("C_params"), c.rows("C_runs"), c.rows("C_q_curve")
@@ -849,61 +1161,65 @@ def build_c(c: Ctx) -> Out:
         )
         if nfl:
             o.flags.append(f"{nfl} member(s) flagged")
+    for lab, vcol, tcol, unit in (
+        ("Worst overshoot / tolerance", "max_overshoot_m", "os_tol_m", "m"),
+        ("Worst end sink / tolerance", "max_end_sink_ms", "sink_tol_ms", "m/s"),
+    ):
+        v, t = num(params[opt].get(vcol)), num(params[opt].get(tcol))
+        if ok(v) and ok(t):
+            o.items.append(Item(lab, f"{v:.2f} / {t:g}", unit,
+                                f"C_params.{vcol}[{opt}]; C_params.{tcol}[{opt}]",
+                                f"{v:.2f} / {t:g}"))  # fmt: skip
+    if params[opt].get("at_edge") is True:
+        o.flags.append(
+            "the optimum is at the edge of a tolerance: overshoot margin "
+            f"{num(params[opt].get('os_margin_m')):.2f} m, end-sink margin "
+            f"{num(params[opt].get('sink_margin_ms')):.2f} m/s")
     bound = str(params[opt].get("at_bound") or "")
     if bound:
-        o.flags.append("at a search bound: " + bound)
+        o.flags.append("at a search bound: " + bound + bound_reason(params[opt], bound))
 
-    # 1. energy against distance
+    # 1. energy against distance: C only (B1's points are single scenarios; its chapter has them)
     series, labels = [], []
-    pts = [
-        (r["p95_distance_m"], r["mean_energy_kJ"])
-        for r in curve
-        if ok(num(r.get("p95_distance_m")))
-    ]
-    if pts:
-        cr = [r for r in curve if ok(num(r.get("p95_distance_m")))]
-        series.append(ch.Series("searched ramp, q varied", "s1", pts,
-                                [tip(r, ["q", "mean_energy_kJ", "p95_distance_m", "p95_excursion_m", "J"],
-                                     str(r.get("case", ""))) for r in cr],
-                                hollow=[bool(num(r.get("n_overshoot")) or num(r.get("n_sinking"))
-                                             or num(r.get("n_other_flags"))) for r in cr],
-                                labels={len(pts) - 1: f"q = {cr[-1].get('q'):g}"}))  # fmt: skip
+    cr = sorted((r for r in curve if (r.get("grid") or "coarse") == "coarse"
+                 and ok(num(r.get("p95_distance_m"))) and ok(num(r.get("mean_energy_kJ")))
+                 and ok(num(r.get("q")))), key=lambda r: num(r["q"]))  # fmt: skip
+    if cr:
+        series.append(ch.Series(
+            "searched ramp, q varied", "s1",
+            [(r["p95_distance_m"], r["mean_energy_kJ"]) for r in cr],
+            [tip(r, ["q", "mean_energy_kJ", "p95_distance_m", "p95_excursion_m", "J"],
+                 str(r.get("case", ""))) for r in cr],
+            hollow=[bool(num(r.get("n_overshoot")) or num(r.get("n_sinking"))
+                         or num(r.get("n_other_flags"))) for r in cr],
+            labels={i: f"q = {r['q']:g}" for i, r in enumerate(cr)},
+            label_pos={i: (-9.0, 17.0) for i in range(len(cr))}))  # fmt: skip
         labels.append(
             ("s1", "line", "C: the optimum's ramp, q varied (hollow = a member is flagged)")
         )
-    for idx, name, cls, kind in (
-        (opt, "C optimum", "s1", "dia"),
-        (reg, "C register (q = 2)", "s1", "sq"),
-    ):
+    cols = ["T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2", "mean_energy_kJ",
+            "p95_distance_m", "J"]
+    # drawn in this order, so the optimum (last) is never hidden under the default
+    marks: list[tuple[int | None, str, str, str, bool, str, tuple[float, float]]] = [
+        (reg, "C register (q = 2)", "s1", "sq", True, "", (0.0, 0.0)),
+        (dfl, "ArduPilot default", "ref", "sq", False, "ArduPilot default", (12.0, 20.0)),
+        (opt, "C optimum", "s1", "dia", False, "C optimum", (12.0, -10.0)),
+    ]
+    for idx, name, cls, kind, hol, lab, pos in marks:
         if idx is not None and ok(num(params[idx].get("p95_distance_m"))):
             r = params[idx]
-            series.append(ch.Series(name, cls, [(r["p95_distance_m"], r["mean_energy_kJ"])],
-                                    [tip(r, ["T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2",
-                                             "mean_energy_kJ", "p95_distance_m", "J"], name)],
-                                    line=False, marker=kind, hollow=[idx == reg]))  # fmt: skip
-            labels.append((cls, kind if idx != reg else "hollow", name))
-    if dfl is not None and ok(num(params[dfl].get("p95_distance_m"))):
-        r = params[dfl]
-        series.append(ch.Series("ArduPilot default", "ref", [(r["p95_distance_m"], r["mean_energy_kJ"])],
-                                [tip(r, ["T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2",
-                                         "mean_energy_kJ", "p95_distance_m", "J"], "ArduPilot default")],
-                                line=False, marker="sq", labels={0: "ArduPilot default"}))  # fmt: skip
-        labels.append(("ref", "sq", "ArduPilot default"))
-    b1 = c.rows("B1_front")
-    for v in uniq([r.get("variant") for r in b1 if r.get("replay_verified") is True]):
-        rs = [r for r in b1 if r.get("variant") == v and r.get("replay_verified") is True
-              and ok(num(r.get("energy_kJ")))]  # fmt: skip
-        series.append(ch.Series(f"B1 {v}", {"attached": "s2", "c_envelope": "s3"}.get(v, "ink"),
-                                [(r["distance_m"], r["energy_kJ"]) for r in rs],
-                                [tip(r, ["scenario", "eps_x_m", "energy_kJ", "distance_m"], f"B1 {v}")
-                                 for r in rs], line=False, marker="dia"))  # fmt: skip
-        labels.append((series[-1].cls, "dia", f"B1 {v} (verified points)"))
+            series.append(ch.Series(
+                name, cls, [(r["p95_distance_m"], r["mean_energy_kJ"])], [tip(r, cols, name)],
+                line=False, marker=kind, hollow=[hol],
+                labels={0: lab} if lab else {}, label_pos={0: pos} if pos else {}))  # fmt: skip
+            labels.append((cls, "hollow" if hol else kind, name))
     if series:
         o.figures.append(
             panelbox(
                 "Energy against stopping distance",
-                "C: ensemble mean energy against the 95th-percentile distance. B1 points are single "
-                "scenarios, shown for scale only.",
+                "C: ensemble mean energy against the 95th-percentile distance, the optimum's "
+                "ramp with q varied (each point is labelled with its q). B1's scenario points "
+                "are in the B1 chapter.",
                 ch.xy_chart(
                     series, "stopping distance [m]", "bus energy [kJ]", "Energy against distance"
                 ),
@@ -914,45 +1230,11 @@ def build_c(c: Ctx) -> Out:
         o.absent.append("not in this run: C_q_curve")
 
     # 2. time histories
-    hist = c.rows("C_history")
-    if hist:
-        plan = {
-            "C optimum": ("s1", "C optimum", False, True),
-            "C ardupilot_default": ("ref", "ArduPilot default", True, False),
-        }
-        ts = hist_series(hist, plan, ["V", "h", "theta", "delta_r"])
-        for case, v in (("B1 attached", "s2"), ("B1 c_envelope", "s3")):
-            bh = [r for r in c.rows("B1_history") if r.get("case") == case]
-            if bh:
-                ts.append(
-                    ch.TSeries(
-                        case,
-                        v,
-                        case,
-                        [r["t"] for r in bh],
-                        {k2: relative(k2, [num(r.get(k2)) for r in bh]) for k2 in ("V", "h", "theta", "delta_r")},
-                    )
-                )
-        leg = [
-            (
-                s.cls,
-                "dash" if s.dash else "line",
-                "ArduPilot default" if s.cls == "ref" else s.short,
-            )
-            for s in ts
-        ]
-        o.figures.append(
-            panelbox(
-                "Time histories",
-                "Member 0 of the ensemble under C's optimum (and the ArduPilot default); "
-                "B1's replayed solution for its headline scenario. Hover for the values at one instant.",
-                ch.panel_figure("c_hist", HIST_PANELS, ts),
-                _legend(*leg),
-            )
-        )
-    else:
-        o.absent.append("not in this run: C_history")
+    build_c_histories(c, o)
 
+    mf = margin_figure(curve, params, opt)
+    if mf:
+        o.figures.append(mf)
     # 3. convergence
     srch = c.rows("C_search")
     if srch:
@@ -965,7 +1247,8 @@ def build_c(c: Ctx) -> Out:
                         (
                             f"seed {r['seed']:g}",
                             r["best_cost"],
-                            tip(r, ["seed", "best_cost", "evaluations"]),
+                            tip(r, ["seed", "best_cost", "evaluations", "T_bt_s", "theta_A_deg",
+                                    "spin_min", "Q_TRANS_DECEL_ms2"]),
                             "s1",
                         )
                         for r in srch
@@ -973,7 +1256,9 @@ def build_c(c: Ctx) -> Out:
                     "best cost J",
                     "Search convergence",
                     zero=False,
-                ),
+                )
+                + (f'<p class="cap">{ch.esc(seed_statement(srch))}</p>'
+                   if seed_statement(srch) else ""),
             )
         )
     # 4. spread strips
@@ -986,28 +1271,43 @@ def build_c(c: Ctx) -> Out:
         ]
         dmem = [r for r in runs if r.get("case") == "ardupilot_default"]
         rows: list[ch.Strip] = []
+        extras: list[ch.StripExtra] = []
+        tols = {"overshoot_m": (num(params[opt].get("os_tol_m")), "tolerance"),
+                "end_sink_ms": (num(params[opt].get("sink_tol_ms")), "tolerance")}
         for col, lab in metrics:
             if not any(col in r for r in mine):
                 continue
             dots = [(num(r.get(col)), tip(r, ["member", col, "flags"]), bool(r.get("flags")), "s1")
                    for r in mine if ok(num(r.get(col)))]  # fmt: skip
-            dv = sorted(num(r.get(col)) for r in dmem if ok(num(r.get(col))))
-            rows.append((lab, dots, dv[len(dv) // 2] if dv else None))
+            rows.append((lab, dots, None))
+            tv, tl = tols.get(col, (NAN, ""))
+            extras.append((
+                [(num(r.get(col)), tip(r, ["member", col, "flags"], "ArduPilot default"))
+                 for r in dmem if ok(num(r.get(col)))],
+                (tv, f"{tl} {tv:g}") if ok(tv) else None))  # fmt: skip
         leg = [("s1", "dot", "member of the optimum"), ("hollow", "hollow", "flagged member")]
         if dmem:
-            leg.append(("ref", "line", "ArduPilot default: median of its members"))
+            leg.append(("ref", "hollow", "member of the ArduPilot default"))
+        if any(x[1] for x in extras):
+            leg.append(("ref", "dash", "tolerance (PROPOSED)"))
+        stat = spread_statement(mine, params[opt])
         o.figures.append(
             panelbox(
                 "Ensemble spread",
-                "One strip per metric, one dot per member.",
-                ch.strip_chart(rows, "Ensemble spread"),
+                "One strip per metric, one dot per member; the ArduPilot default's members are "
+                "the hollow grey dots below each strip.",
+                ch.strip_chart(rows, "Ensemble spread", extras=extras)
+                + (f'<p class="cap">{ch.esc(stat)}</p>' if stat else ""),
                 _legend(*leg),
             )
         )
     # 5. sensitivity
     sens = c.rows("C_sens")
     j0 = num(params[opt].get("J"))
-    if sens and ok(j0) and j0 != 0:
+    js0 = num(params[opt].get("J_smooth"))
+    if sens and ok(js0) and js0 != 0 and any("J_smooth" in r for r in sens):
+        o.figures.append(sensitivity_figure(sens, js0))
+    elif sens and ok(j0) and j0 != 0:  # results from before the failure counts were written
         items = [(f"{r['parameter']} = {r['value']}", (r["J"] / j0 - 1) * 100,
                   f"J = {r['J']:.3f}; change = ({r['J']:.3f} / {j0:.3f} - 1) x 100", "s1")
                  for r in sens if ok(num(r.get("J")))]  # fmt: skip
@@ -1031,35 +1331,239 @@ def build_c(c: Ctx) -> Out:
 
 
 # ------------------------------------------------------------------------------------------ B1
+LATE_WARNING = "verified for exact timing only: fails with commands 10 ms late"
+VARIANT_ORDER = ("attached", "c_envelope")
+
+
+REASONS = ("verified", "not converged", "replay mismatch", "fails 10 ms late")
+
+
+def b1_reason(r: Row) -> str:
+    """Why a B1 point is or is not quoted: the `reason` column, or derived from the flags."""
+    if r.get("reason"):
+        return str(r["reason"])
+    if r.get("converged") is not True:
+        return "not converged"
+    if r.get("replay_verified") is not True:
+        return "replay mismatch"
+    if r.get("replay_late_command_ok") is False:
+        return "fails 10 ms late"
+    return "verified"
+
+
+def reasons_fold(front: Sequence[Row]) -> str:
+    """A collapsible table: points by scenario, variant and reason (all of B1_front)."""
+    cnt: dict[tuple[str, str], dict[str, int]] = {}
+    for r in front:
+        key = (str(r.get("scenario")), str(r.get("variant")))
+        cnt.setdefault(key, dict.fromkeys(REASONS, 0))[b1_reason(r)] += 1
+    rows = [{"scenario": s, "variant": v, **c, "points": sum(c.values())}
+            for (s, v), c in sorted(cnt.items())]  # fmt: skip
+    return details(
+        "Why points are not quoted: count by scenario, variant and reason",
+        table_html("B1_front_reasons", ["scenario", "variant", *REASONS, "points"], rows))
+
+
+def verified_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
+    """One panel per scenario: the verified B1 points per variant and, where B1_gap has one, C's
+    run of THAT scenario (at the register parameters with q = 2). A panel with three or more
+    verified points of a variant draws them as a front; a panel with none says so."""
+    matched: dict[str, Row] = {}
+    for g in gap:
+        if (g.get("b1_replay_verified") is True and ok(num(g.get("c_energy_kJ")))
+                and ok(num(g.get("c_distance_m")))):  # fmt: skip
+            matched.setdefault(g["scenario"], g)
+    panels, leg, fronts, with_points = [], {}, 0, 0
+    for s in uniq([r["scenario"] for r in front]):
+        series, most = [], 0
+        for v in uniq([r.get("variant") for r in front]):
+            rs = sorted([r for r in front if r["scenario"] == s and r.get("variant") == v
+                         and r.get("replay_verified") is True and ok(num(r.get("energy_kJ")))],
+                        key=lambda r: num(r.get("distance_m")))  # fmt: skip
+            most = max(most, len(rs))
+            if rs:
+                cls = {"attached": "s2", "c_envelope": "s3"}.get(v, "ink")
+                series.append(ch.Series(
+                    f"B1 {v}", cls, [(r["distance_m"], r["energy_kJ"]) for r in rs],
+                    [tip(r, ["eps_x_m", "energy_kJ", "distance_m", "excursion_m", "t_f_s"],
+                         f"B1 {v}") for r in rs],
+                    line=len(rs) >= 3))  # fmt: skip
+                leg[v] = (cls, "line", f"B1 {v}")
+        mc = matched.get(s)
+        notes = ""
+        if mc is not None:
+            series.append(ch.Series(
+                "C, this scenario", "s1", [(num(mc["c_distance_m"]), num(mc["c_energy_kJ"]))],
+                [tip(mc, ["c_energy_kJ", "c_distance_m", "c_source"], f"C, {s}")],
+                line=False, marker="dia"))
+            leg["C"] = ("s1", "dia", "C, the same scenario (register parameters, q = 2)")
+        else:
+            notes = absent("no scenario-matched C run")
+        if most:
+            with_points += 1
+            fronts += most >= 3
+            panels.append((f"{s} (front)" if most >= 3 else s,
+                           ch.xy_chart(series, "distance [m]", "bus energy [kJ]", f"Verified {s}",
+                                       w=340, h=280) + notes))  # fmt: skip
+        else:
+            panels.append((s, absent("no verified solution") + notes))
+    if not panels:
+        return None
+    title = ("Pareto front by scenario" if with_points and fronts == with_points
+             else "Verified solutions by scenario")
+    return panelbox(
+        title,
+        "Least energy against the distance cap per wing-limit variant, verified points only; "
+        "a panel with three or more verified points of a variant draws them as a front. The C "
+        "point is C's run of the same scenario at the register parameters with q = 2, drawn "
+        "where B1_gap has one.",
+        ch.multiples(panels), _legend(*leg.values()))
+
+
+def gap_contents(front: Sequence[Row], c_row: Row | None) -> str:
+    """A plain paragraph on what "B1 below C" contains, with the numbers from the files.
+
+    B1 attached may command a pitch up to its `theta_cmd_max_deg` where C is capped at
+    PTCH_LIM_MAX_DEG; B1 has no rotor lag where C has `C.rotor_lag_s`; B1 knows the scenario in
+    advance. The gap is the sum of the optimal-control saving, the extra pitch freedom and the
+    missing lag, not what a better ArduPilot parameter set could save.
+    """
+    cmd = next((num(r.get("theta_cmd_max_deg")) for r in front if r.get("variant") == "attached"
+                and ok(num(r.get("theta_cmd_max_deg")))), NAN)  # fmt: skip
+    ptch = num(c_row.get("ptch_lim_deg")) if c_row else NAN
+    lag = num(c_row.get("rotor_lag_s")) if c_row else NAN
+    pitch = ("B1 `attached` may command a pitch up to "
+             + (f"{cmd:g} deg" if ok(cmd) else "its theta_cmd_max_deg")
+             + " while C is capped at PTCH_LIM_MAX_DEG"
+             + (f" ({ptch:g} deg)" if ok(ptch) else "") + ". ")
+    lagt = ("B1 has no rotor lag where C has C.rotor_lag_s"
+            + (f" ({lag:g} s)" if ok(lag) else "") + ". ")
+    know = ("B1 knows the scenario in advance and is open loop, where C's four settings must "
+            "serve every member of the ensemble. ")
+    sums = ("So \"B1 below C\" is the sum of the optimal-control saving, the extra pitch freedom "
+            "and the missing lag. It is not a measure of what a better ArduPilot parameter set "
+            "could save.")
+    return panelbox("What the gap between B1 and C contains", pitch + lagt + know + sums, "")
+
+
+def attached_statement(front: Sequence[Row]) -> str:
+    """Is `attached` attached? Where the wing limit sits against the peak of the model's C_L, in the
+    same angle convention (alpha_w, with the wing incidence), from the B1_front columns."""
+    rows = [r for r in front if r.get("variant") == "attached" and ok(num(r.get("alpha_limit_deg")))
+            and ok(num(r.get("alpha_w_clmax_deg")))]  # fmt: skip
+    if not rows:
+        return ""
+    r = rows[0]
+    lim, pk, a_s = num(r["alpha_limit_deg"]), num(r["alpha_w_clmax_deg"]), num(r.get("alpha_s_deg"))
+    clmax, frac = num(r.get("cl_max")), num(r.get("cl_at_limit_over_max"))
+    below = pk - lim
+    text = (f"The attached limit is |alpha_w| <= {lim:.2f} deg"
+            + (f" ({lim / a_s:.2f} x alpha_s, alpha_s = {a_s:.2f} deg)" if ok(a_s) and a_s else "")
+            + f". The model's C_L peaks at alpha_w = {pk:.2f} deg"
+            + (f" (C_L,max {clmax:.3f})" if ok(clmax) else "") + ", in the same convention. ")
+    if below >= 0.0:
+        text += f"The limit sits {below:.2f} deg below that peak"
+        text += f", where C_L is {frac:.2%} of C_L,max" if ok(frac) else ""
+        text += (". It leaves no stall margin in lift: the wing is flown at the top of the lift "
+                 "curve, not below it" if below < 1.0 else
+                 ". That is a margin in angle before the lift peak")
+    else:
+        text += f"The limit sits {-below:.2f} deg ABOVE that peak, in the stalled region"
+    peaks = [num(x.get("alpha_w_peak_above_vs_deg")) for x in front
+             if x.get("variant") == "attached" and x.get("replay_verified") is True
+             and ok(num(x.get("alpha_w_peak_above_vs_deg")))]  # fmt: skip
+    if peaks:
+        span = (f"{min(peaks):.2f} deg" if f"{min(peaks):.2f}" == f"{max(peaks):.2f}"
+                else f"{min(peaks):.2f} to {max(peaks):.2f} deg")
+        text += f". The replayed peak wing angle of the verified points is {span}"
+    return text + "."
+
+
+def nominal_of(r: Row, front: Sequence[Row], head_eps: float) -> tuple[Row | None, str]:
+    """The nominal point of a sensitivity row: the same scenario, variant and distance cap with
+    the setting unchanged (the headline altitude band, the default rotor start and end band).
+    Returns (the verified B1_front row or None, why there is none: "" | "unverified" | "none")."""
+    cands = [f for f in front if f.get("scenario") == r.get("scenario")
+             and f.get("variant") == r.get("variant") and f.get("eps_x_m") == r.get("eps_x_m")
+             and f.get("eps_h_m") == head_eps]  # fmt: skip
+    for f in cands:
+        if f.get("replay_verified") is True and ok(num(f.get("energy_kJ"))):
+            return f, ""
+    return None, ("unverified" if cands else "none")
+
+
+def b1_sensitivity_figure(sens: Sequence[Row], front: Sequence[Row]) -> str | None:
+    """B1's energy when one setting changes, with the nominal energy as a hollow marker on each
+    row. The row label names the scenario and the variant (the band sweep uses `c_envelope`); a row
+    whose nominal point is not verified says so."""
+    head = next((num(f["eps_h_m"]) for f in front if ok(num(f.get("eps_h_m")))), NAN)
+    items, refs = [], []
+    for r in sens:
+        if not ok(num(r.get("energy_kJ"))):
+            continue
+        nom, why = nominal_of(r, front, head)
+        label = f"{r.get('sensitivity')} = {r.get('value')} ({r.get('scenario')}, {r.get('variant')})"
+        if why:
+            label += " [nominal unverified]" if why == "unverified" else " [no nominal point]"
+        items.append((label, num(r["energy_kJ"]), tip(r, ["energy_kJ", "distance_m", "replay_verified"]),
+                      "s2"))  # fmt: skip
+        refs.append((num(nom["energy_kJ"]), f"nominal: {num(nom['energy_kJ']):.2f} kJ (the setting "
+                     f"unchanged; {nom.get('scenario')}, {nom.get('variant')}, cap "
+                     f"{nom.get('eps_x_m'):g} m)") if nom is not None else None)  # fmt: skip
+    if not items:
+        return None
+    leg = _legend(("s2", "dot", "B1 with the setting changed"),
+                  ("ref", "hollow", "nominal: the same scenario and cap, setting unchanged"))
+    return panelbox(
+        "Sensitivity",
+        "Energy of B1 when one setting changes; the hollow marker on each row is the nominal "
+        "energy of that row's scenario, variant and distance cap. A row marked [nominal "
+        "unverified] has no verified nominal point to compare with.",
+        ch.dot_chart(items, "bus energy [kJ]", "B1 sensitivity", zero=False, refs=refs), leg)
+
+
+def gap_items(gap: Sequence[Row]) -> list[Item]:
+    """The tiles of the B1-C gap: the `attached` figures first (every verified scenario), then
+    `c_envelope` beside them with its warning when its schedule fails a late command.
+
+    Read from the existing `B1_gap` rows; the energy tiles are those of the first verified row.
+    """
+    order = {v: n for n, v in enumerate(VARIANT_ORDER)}
+    rows = [(i, r) for i, r in enumerate(gap) if r.get("b1_replay_verified") is True
+            and ok(num(r.get("b1_energy_kJ"))) and ok(num(r.get("c_energy_kJ")))]  # fmt: skip
+    rows.sort(key=lambda ir: (order.get(str(ir[1].get("variant")), 9), ir[0]))
+    items: list[Item] = []
+    for n, (gi, r) in enumerate(rows):
+        c_e, b_e = num(r["c_energy_kJ"]), num(r["b1_energy_kJ"])
+        warn = LATE_WARNING if r.get("b1_late_command_ok") is False else ""
+        if n == 0:
+            for lab, col in (("C energy", "c_energy_kJ"), ("B1 energy", "b1_energy_kJ")):
+                items.append(Item(f"{lab} ({r['scenario']}, {r['variant']})",
+                                  f"{num(r[col]):.2f}", "kJ", f"B1_gap.{col}[{gi}]"))
+        if c_e:
+            items.append(Item(
+                f"B1 below C ({r['scenario']}, {r['variant']})", f"{(1 - b_e / c_e) * 100:.0f} %",
+                "", f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
+                f"1 - {b_e:.2f}/{c_e:.2f}", warn))  # fmt: skip
+    return items
+
+
 def build_b1(c: Ctx) -> Out:
     o = Out()
     front, gap = c.rows("B1_front"), c.rows("B1_gap")
     if gap:
-        gi = next(
-            (
-                i
-                for i, r in enumerate(gap)
-                if r.get("variant") == "c_envelope" and r.get("b1_replay_verified") is True
-            ),
-            None,
-        )
-        if gi is None:
-            gi = next((i for i, r in enumerate(gap) if r.get("b1_replay_verified") is True), None)
-        if gi is not None:
-            r = gap[gi]
-            cE, bE = num(r.get("c_energy_kJ")), num(r.get("b1_energy_kJ"))
-            for lab, col in (("C energy", "c_energy_kJ"), ("B1 energy", "b1_energy_kJ")):
-                it = c.item(f"{lab} ({r['scenario']}, {r['variant']})", "B1_gap", col, gi)
-                if it:
-                    o.items.append(it)
-            if ok(cE) and ok(bE) and cE:
-                o.items.append(Item("B1 below C", f"{(1 - bE / cE) * 100:.0f} %", "",
-                                    f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
-                                    f"1 - {bE:.2f}/{cE:.2f}"))  # fmt: skip
-            if r.get("b1_late_command_ok") is False:
-                o.flags.append(
-                    f"the B1-C gap quoted ({r['scenario']}, {r['variant']}) comes from a schedule "
-                    "that fails when its commands are 10 ms late")
+        o.items += gap_items(gap)
+        c_row = next((r for r in c.rows("C_params") if r.get("case") == "optimum"), None)
+        o.figures.append(gap_contents(front, c_row))
+        att = attached_statement(front)
+        if att:
+            o.figures.append(panelbox('Is "attached" attached?', att, ""))
+        # the quoted gap can come from a schedule that does not survive a late command: say so
+        late = [r for r in gap if r.get("b1_replay_verified") is True
+                and r.get("b1_late_command_ok") is False]  # fmt: skip
+        for r in late:
+            o.flags.append(f"the B1-C gap quoted ({r['scenario']}, {r['variant']}) comes from a "
+                           "schedule that fails when its commands are 10 ms late")
     if front:
         bi = c.extreme("B1_front", "energy_kJ", min, lambda r: r.get("replay_verified") is True)
         if bi is not None:
@@ -1095,45 +1599,10 @@ def build_b1(c: Ctx) -> Out:
                 f"{n_fragile} verified point(s) fail when the commands are 10 ms late "
                 "(replay_late_command_ok = no): the optimum sits on the lift peak, a fraction of a "
                 "degree below the stall cliff")
-        panels, leg = [], {}
-        for s in uniq([r["scenario"] for r in front]):
-            series = []
-            for v in uniq([r.get("variant") for r in front]):
-                rs = sorted([r for r in front if r["scenario"] == s and r.get("variant") == v
-                             and r.get("replay_verified") is True and ok(num(r.get("energy_kJ")))],
-                            key=lambda r: r["distance_m"])  # fmt: skip
-                if rs:
-                    cls = {"attached": "s2", "c_envelope": "s3"}.get(v, "ink")
-                    series.append(ch.Series(f"B1 {v}", cls, [(r["distance_m"], r["energy_kJ"]) for r in rs],
-                                            [tip(r, ["eps_x_m", "energy_kJ", "distance_m", "excursion_m", "t_f_s"],
-                                                 f"B1 {v}") for r in rs]))  # fmt: skip
-                    leg[v] = (cls, "line", f"B1 {v}")
-            cp = c.rows("C_params")
-            ci = next((i for i, r in enumerate(cp) if r.get("case") == "optimum"), None)
-            if ci is not None and ok(num(cp[ci].get("p95_distance_m"))):
-                series.append(ch.Series("C optimum", "s1", [(cp[ci]["p95_distance_m"], cp[ci]["mean_energy_kJ"])],
-                                        [tip(cp[ci], ["mean_energy_kJ", "p95_distance_m"], "C optimum (ensemble)")],
-                                        line=False, marker="dia"))  # fmt: skip
-                leg["C"] = ("s1", "dia", "C optimum (ensemble mean, p95 distance)")
-            if series:
-                panels.append(
-                    (
-                        s,
-                        ch.xy_chart(
-                            series, "distance [m]", "bus energy [kJ]", f"Front {s}", w=340, h=280
-                        ),
-                    )
-                )
-        if panels:
-            o.figures.append(
-                panelbox(
-                    "Pareto front",
-                    "Least energy against the distance cap, per wing-limit "
-                    "variant; the C optimum is overlaid for scale.",
-                    ch.multiples(panels),
-                    _legend(*leg.values()),
-                )
-            )
+        o.figures.append(reasons_fold(front))
+        fig = verified_figure(front, gap)
+        if fig:
+            o.figures.append(fig)
     if gap:
         items = []
         for r in gap:
@@ -1232,17 +1701,9 @@ def build_b1(c: Ctx) -> Out:
             )
     sens = c.rows("B1_sens")
     if sens:
-        items = [(f"{r.get('sensitivity')} = {r.get('value')} ({r.get('scenario')})", r["energy_kJ"],
-                  tip(r, ["energy_kJ", "distance_m", "replay_verified"]), "s2")
-                 for r in sens if ok(num(r.get("energy_kJ")))]  # fmt: skip
-        if items:
-            o.figures.append(
-                panelbox(
-                    "Sensitivity",
-                    "Energy of B1 when one setting changes.",
-                    ch.dot_chart(items, "bus energy [kJ]", "B1 sensitivity", zero=False),
-                )
-            )
+        sf = b1_sensitivity_figure(sens, front)
+        if sf:
+            o.figures.append(sf)
     o.tables = [
         ("B1_front", None),
         ("B1_gap", None),
@@ -1259,6 +1720,192 @@ FT_CASES = {
     "register": ("s2", "register", False, False),
     "ardupilot_default": ("ref", "ArduPilot default", True, False),
 }
+
+
+FT_AXES = (("altitude_m", "altitude", "m", ".0f"), ("isa_offset_k", "ISA offset", "K", "+.0f"),
+           ("mass_factor", "mass factor", "", ".2f"), ("soc", "SoC", "", ".2f"),
+           ("headwind_ms", "headwind", "m/s", "+.0f"))  # fmt: skip
+FT_CASE_NAMES = {"optimum": "optimum", "register": "register", "ardupilot_default": "ArduPilot default"}
+
+
+def heaviest_stall(runs: Sequence[Row], margin: float) -> tuple[float, str] | None:
+    """The stall rule: `margin` x the stall speed of the HEAVIEST member (the largest V_s_eas_ms),
+    the member that binds, not the mean of the members."""
+    vs = [num(r.get("V_s_eas_ms")) for r in runs if ok(num(r.get("V_s_eas_ms")))]
+    if not vs:
+        return None
+    return margin * max(vs), f"{margin:g} x stall speed (heaviest member)"
+
+
+def ft_scenario_caption(name: str, info: dict[str, Any] | None, axes: dict[str, Any],
+                     hist: Sequence[Row], runs: Sequence[Row]) -> str:  # fmt: skip
+    """Which scenario a time-history figure is, why, and where it lies against the ensemble's
+    range on each axis (all computed from the run record), then what the default loses there."""
+    if not info:
+        return f"Scenario {name}."
+    parts = [f"{lab} {format(info[k], f)}{' ' + u if u else ''}" for k, lab, u, f in FT_AXES
+             if isinstance(info.get(k), int | float)]  # fmt: skip
+    text = f"Scenario {name}: " + ", ".join(parts)
+    text += f" ({info['note']})." if info.get("note") else "."
+    out, edge = [], []
+    for k, lab, _, _ in FT_AXES:
+        rng, v = axes.get(k), info.get(k)
+        if not (isinstance(v, int | float) and isinstance(rng, list) and len(rng) == 2):
+            continue
+        lo, hi = float(rng[0]), float(rng[1])
+        span = (hi - lo) or 1.0
+        if v < lo - 1e-9 or v > hi + 1e-9:
+            out.append(f"{lab} ({v:g} against {lo:g} to {hi:g})")
+        elif min(v - lo, hi - v) <= 0.02 * span:
+            edge.append(lab)
+    if out:
+        text += " It lies OUTSIDE the ensemble's range on " + ", ".join(out) + "."
+    else:
+        text += " It lies inside the ensemble's range on every axis"
+        text += (", at the edge of the range on " + ", ".join(edge)) if edge else ""
+        text += "."
+    dh = [num(r.get("h_rel")) for r in hist if r.get("case") == "ardupilot_default"
+          and r.get("scenario") == name and ok(num(r.get("h_rel")))]  # fmt: skip
+    dl = [num(r.get("loss_m")) for r in runs if r.get("case") == "ardupilot_default"
+          and ok(num(r.get("loss_m")))]  # fmt: skip
+    if dh and dl:
+        text += (f" The ArduPilot default loses {max(0.0, -min(dh)):.1f} m of altitude here; "
+                 f"its ensemble members lose at most {max(dl):.1f} m.")
+    return text
+
+
+def robust_statement(robust: Sequence[Row], opt: Row | None, rob: Row | None) -> str:
+    """One computed sentence on FT_robust: where the smallest AIRSPEED_MIN that is flag-free at
+    every C_L,max scale sits against the optimum's, and at which scales the optimum is clean."""
+    if not robust or opt is None or not ok(num(opt.get("airspeed_min_eas_ms"))):
+        return ""
+    scales = sorted({num(r.get("cl_max_scale")) for r in robust if ok(num(r.get("cl_max_scale")))})
+    v_opt = num(opt["airspeed_min_eas_ms"])
+    lab = ", ".join(f"{s:g}" for s in scales)
+    clean_opt = [s for s in scales if all(
+        not num(r.get("n_flags")) for r in robust if abs(num(r.get("airspeed_min_eas_ms")) - v_opt)
+        < 1e-9 and abs(num(r.get("cl_max_scale")) - s) < 1e-9)]  # fmt: skip
+    if rob is None or rob.get("robust_found") is not True:
+        return (f"No AIRSPEED_MIN in the table is flag-free at every C_L,max scale ({lab}); the "
+                f"optimum's {v_opt:g} m/s is flag-free at "
+                + (", ".join(f"{s:g}" for s in clean_opt) if clean_opt else "none of them") + ".")
+    v_rob = num(rob["airspeed_min_eas_ms"])
+    if abs(v_rob - v_opt) < 1e-9:
+        return (f"AIRSPEED_MIN {v_rob:g} m/s, the optimum, is flag-free at all {len(scales)} "
+                f"C_L,max scales ({lab}); it is also the smallest value in the table that is.")
+    text = (f"AIRSPEED_MIN {v_rob:g} m/s is flag-free at all {len(scales)} C_L,max scales ({lab}); "
+            f"the optimum's {v_opt:g} m/s is flag-free only at "
+            + (", ".join(f"{s:g}" for s in clean_opt) if clean_opt else "none of them") + ".")
+    dj, sp = num(rob.get("delta_J")), num(rob.get("delta_J_in_seed_spreads"))
+    if ok(dj):
+        text += (f" Its cost J is {num(rob.get('J')):.3f}, {dj:+.3f} against the optimum on the same "
+                 "ensemble" + (f" ({sp:+.1f} seed spreads)" if ok(sp) else "") + ".")
+    return text + " It is reported, not recommended: the owner decides."
+
+
+def robust_figure(robust: Sequence[Row], opt: Row | None, rob: Row | None) -> str | None:
+    if not robust:
+        return None
+    cols = ["airspeed_min_eas_ms", "cl_max_scale", "J", "worst_stall_margin", "n_flags", "flags"]
+    shown = list(robust)
+    return panelbox(
+        "Stall margin robustness",
+        robust_statement(robust, opt, rob)
+        + " The table moves AIRSPEED_MIN around the optimum with the other three settings held, "
+        "each at a scaled C_L,max (the model's value is not validated); the same ensemble as the "
+        "sensitivity, no search.",
+        table_html("FT_robust", [c for c in cols if any(c in r for r in shown)], shown))
+
+
+def median(vals: Sequence[float]) -> float:
+    v = sorted(x for x in vals if ok(x))
+    return NAN if not v else (v[len(v) // 2] if len(v) % 2 else 0.5 * (v[len(v) // 2 - 1] + v[len(v) // 2]))
+
+
+def ft_bound_reason(row: Row, bound: str) -> str:
+    """Why TKOFF_THR_MAX sits on its upper bound: 100 % is the physical limit; THR_MAX from the
+    register, both computed from the FT_params columns."""
+    hi, thr = num(row.get("tkoff_thr_max_hi")), num(row.get("thr_max"))
+    if "tkoff_thr_max:hi" not in bound or not ok(hi):
+        return ""
+    text = f" (the upper bound of TKOFF_THR_MAX is {hi:.0%}, the most throttle the pusher has"
+    text += f"; THR_MAX in the register is {thr:.0%}" if ok(thr) else ""
+    return text + ", so the search asks for all of it)"
+
+
+def grid_statement(grid: Sequence[Row], params: Sequence[Row], spread: float) -> str:
+    """Cost against Q_TRANSITION_MS in words, from FT_grid: the range of J over the grid, J at the
+    register's Q_TRANSITION_MS against the winner's, the plateau within the seed spread of the
+    best, and whether the fade length is a second-order choice against re-tuning from the start."""
+    pts = [r for r in grid if ok(num(r.get("J_snapped")))]
+    if len(pts) < 2:
+        return ""
+    best = min(pts, key=lambda r: r["J_snapped"])
+    worst = max(pts, key=lambda r: r["J_snapped"])
+    jb, jw = float(best["J_snapped"]), float(worst["J_snapped"])
+    text = (f"Over the {len(pts)} grid points J runs from {jb:.3f} (Q_TRANSITION_MS "
+            f"{best['q_transition_s']:g} s) to {jw:.3f} ({worst['q_transition_s']:g} s), "
+            f"{jw / jb - 1:.1%} above the lowest.")
+    reg = next((p for p in params if p.get("case") == "register"), None)
+    qr = num(reg.get("q_transition_s")) if reg else NAN
+    at_reg = next((r for r in pts if ok(qr) and abs(r["q_transition_s"] - qr) < 1e-9), None)
+    if at_reg is not None:
+        text += (f" At the register's Q_TRANSITION_MS ({qr:g} s) J is {at_reg['J_snapped']:.3f}, "
+                 f"{at_reg['J_snapped'] / jb - 1:+.1%} against the winner's.")
+    elif ok(qr):
+        text += f" The register's Q_TRANSITION_MS ({qr:g} s) is not on the grid."
+    if ok(spread) and spread > 0:
+        near = [r["q_transition_s"] for r in pts if r["J_snapped"] <= jb * (1 + spread)]
+        text += (f" {len(near)} of {len(pts)} points lie within the seed spread ({spread:.2%}) of "
+                 "the best: Q_TRANSITION_MS " + ", ".join(f"{q:g}" for q in near) + " s.")
+    opt = next((p for p in params if p.get("case") == "optimum"), None)
+    j0, j1 = (num(opt.get("J_start")), num(opt.get("J"))) if opt else (NAN, NAN)
+    if ok(j0) and ok(j1) and j0 > j1:
+        ratio = (jw - jb) / (j0 - j1)
+        text += (f" The whole range is {ratio:.1%} of what re-tuning all four settings gains from the "
+                 f"register start (J {j0:.2f} to {j1:.3f}), so with the other three re-tuned the "
+                 "fade length is "
+                 + ("a second-order choice." if ratio < 0.1 else "not a second-order choice."))
+    return text
+
+
+def sensitivity_statement(rows: Sequence[Row], j0: float, spread: float) -> str:
+    """Does any input apart from C_L,max move J by more than the seed spread? Computed."""
+    if not (ok(j0) and j0 and ok(spread) and spread > 0):
+        return ""
+    lim = spread * j0
+    moves = [(r, float(r["J"]) - j0) for r in rows if ok(num(r.get("J")))]
+    other = [(r, d) for r, d in moves if r.get("parameter") != "CL_max_scale"]
+    if not other:
+        return ""
+    over = [(r, d) for r, d in other if abs(d) > lim]
+    head = f"The seed spread is {spread:.2%} of J, {lim:.4f} in J. "
+    big = max(other, key=lambda m: abs(m[1]))
+    if not over:
+        return (head + "Apart from C_L,max, no input moves J by more than that; the largest is "
+                f"{big[0]['parameter']} = {big[0]['value']} at {big[1]:+.4f}.")
+    names = ", ".join(f"{r['parameter']} = {r['value']} ({d:+.3f}, {int(num(r.get('n_flags')) or 0)}"
+                      " failing)" for r, d in over)
+    return head + f"Apart from C_L,max, these inputs DO move J by more than that: {names}."
+
+
+def share_statement(dmem: Sequence[Row], opt: Sequence[Row], reg: Sequence[Row]) -> str:
+    """Computed: the share of default members below stall margin 1.0 and 1.2, and the optimum's
+    energy against the default's and the register's medians (the energy cost of the optimum)."""
+    parts = []
+    marg = [num(r.get("stall_margin_min")) for r in dmem if ok(num(r.get("stall_margin_min")))]
+    if marg:
+        n1, n12 = sum(m < 1.0 for m in marg), sum(m < 1.2 for m in marg)
+        parts.append(f"{n1} of {len(marg)} ArduPilot-default members ({n1 / len(marg):.0%}) fly "
+                     f"below a stall margin of 1.0 and {n12} ({n12 / len(marg):.0%}) below 1.2.")
+    e = {k: median([num(r.get("energy_kJ")) for r in rs])
+         for k, rs in (("optimum", opt), ("default", dmem), ("register", reg))}
+    cmp = [f"{(e['optimum'] / e[k] - 1):+.1%} against the {k}'s {e[k]:.2f} kJ"
+           for k in ("default", "register") if ok(e[k]) and e[k] and ok(e["optimum"])]
+    if cmp:
+        parts.append(f"The optimum's median energy is {e['optimum']:.2f} kJ: " + " and ".join(cmp)
+                     + " (the median over members; the energy cost of the recommendation).")
+    return " ".join(parts)
 
 
 def build_ft(c: Ctx) -> Out:
@@ -1306,9 +1953,13 @@ def build_ft(c: Ctx) -> Out:
             o.items.append(it)
     bound = str(params[opt].get("at_bound") or "")
     if bound:
-        o.flags.append("at a search bound: " + bound)
+        o.flags.append("at a search bound: " + bound + ft_bound_reason(params[opt], bound))
 
     stall = c.study("FT", "stall_margin", 1.2)
+    wsm = num(params[opt].get("worst_stall_margin"))
+    if ok(wsm) and stall:
+        o.items.append(Item("Stall margin spare", f"{wsm:.3f} vs {stall:g} ({wsm / stall - 1:.1%})",
+                            "", f"FT_params.worst_stall_margin[{opt}] / FT.stall_margin"))
     loss = c.context.get("mission", {}).get("fwd_alt_loss_max_m")
     gain = c.context.get("mission", {}).get("fwd_alt_gain_max_m")
     case_leg = [
@@ -1317,6 +1968,7 @@ def build_ft(c: Ctx) -> Out:
         if k in row
     ]
     # 1. time histories, one figure per scenario
+    ftx = c.context.get("ft_scenarios", {})
     for s in uniq([r.get("scenario") for r in hist])[:2]:
         hs = [r for r in hist if r.get("scenario") == s]
         ts = hist_series(
@@ -1324,38 +1976,43 @@ def build_ft(c: Ctx) -> Out:
             {k: v for k, v in FT_CASES.items()},
             ["V_eas", "h_rel", "theta", "delta_r", "delta_p"],
         )
-        capped = [r for r in hs if r.get("case") == "optimum" and ok(num(r.get("theta_cap")))]
-        if capped:
-            ts.append(
-                ch.TSeries(
-                    "pitch cap (optimum)",
-                    "ink",
-                    "pitch cap",
-                    [r["t"] for r in capped],
-                    {"theta": [r["theta_cap"] for r in capped]},
-                    False,
-                    True,
-                )
-            )
+        cap_leg = []
+        for cs, (cls, short, _, _) in FT_CASES.items():  # each case's own cap, in its own colour
+            capped = [r for r in hs if r.get("case") == cs and ok(num(r.get("theta_cap")))]
+            if capped:
+                ts.append(ch.TSeries(
+                    f"pitch cap ({short})", cls, f"pitch cap ({short})", [r["t"] for r in capped],
+                    {"theta": [r["theta_cap"] for r in capped]}, True, True, False))
+                cap_leg.append((cls, "dash", f"pitch cap ({short})"))
+        for sr in ts:  # each case's own fade start and done, on its airspeed curve
+            rs = [r for r in hs if r.get("case") == sr.name]
+            for mode, shape, what in (("fwd_fade", "sq", "fade starts"), ("fwd_done", "dia", "done")):
+                first = next((r for r in rs if r.get("mode") == mode), None)
+                if first is not None:
+                    sr.marks.append((first["t"], shape, f"{sr.short}: {what} at {first['t']:.1f} s"))
         modes: list[tuple[float, str]] = []
         last = None
         for r in hs:
             if r.get("case") == "optimum" and r.get("mode") and r["mode"] != last:
                 last = r["mode"]
-                modes.append((r["t"], str(last).replace("fwd_", "")))
-        vs = [num(r.get("V_s_eas_ms")) for r in runs if ok(num(r.get("V_s_eas_ms")))]
+                modes.append((r["t"], str(last).replace("fwd_", "") + " (optimum)"))
         eas_rules = []
-        if ok(num(params[opt].get("airspeed_min_eas_ms"))):
-            eas_rules.append((params[opt]["airspeed_min_eas_ms"], "AIRSPEED_MIN (optimum)"))
-        if vs:
-            eas_rules.append((stall * sum(vs) / len(vs), f"{stall:g} x stall speed"))
+        for cs, lab in FT_CASE_NAMES.items():
+            pr = next((p for p in params if p.get("case") == cs), None)
+            if pr and ok(num(pr.get("airspeed_min_eas_ms"))):
+                eas_rules.append((pr["airspeed_min_eas_ms"],
+                                  f"AIRSPEED_MIN {lab} ({pr['airspeed_min_eas_ms']:g})"))
+        sr_stall = heaviest_stall(runs, stall)
+        if sr_stall:
+            eas_rules.append(sr_stall)
         band = (
             (-float(loss), float(gain))
             if isinstance(loss, int | float) and isinstance(gain, int | float)
             else None
         )
         panels = [
-            ch.Panel("V_eas", "airspeed [m/s, EAS]", "m/s", 2, hlines=eas_rules, vticks=modes[1:]),
+            ch.Panel("V_eas", "airspeed [m/s, EAS]", "m/s", 2, hlines=eas_rules, vticks=modes[1:],
+                     ymin=0.0, marks=True, wide=True),
             ch.Panel("h_rel", "altitude change [m]", "m", 2, True, band=band),
             ch.Panel("theta", "pitch [deg]", "deg", 1),
             ch.Panel("delta_r", "rotor throttle [-]", "", 2),
@@ -1365,10 +2022,15 @@ def build_ft(c: Ctx) -> Out:
             o.figures.append(
                 panelbox(
                     f"Time histories, {s}",
-                    "Optimum, register start and ArduPilot default through the wait, "
-                    "fade and done modes. The shaded band is the accepted altitude change.",
+                    ft_scenario_caption(s, ftx.get("scenarios", {}).get(s), ftx.get("axes", {}),
+                                     hs, runs)
+                    + " Optimum, register start and ArduPilot default through the wait, fade and "
+                    "done modes; the square on each airspeed curve is where that case's fade "
+                    "starts and the diamond where it is done (the vertical lines are the "
+                    "optimum's). The shaded band is the accepted altitude change.",
                     ch.panel_figure(f"ft_hist_{s}", panels, ts),
-                    _legend(*case_leg, ("ink", "line", "pitch cap (optimum)")),
+                    _legend(*case_leg, *cap_leg, ("ink", "sq", "fade starts (own, on the curve)"),
+                            ("ink", "dia", "done (own, on the curve)")),
                 )
             )
     if not hist:
@@ -1386,68 +2048,80 @@ def build_ft(c: Ctx) -> Out:
                                              short) for r in rs], line=False,
                                         marker="sq" if cls == "ref" else "dot",
                                         hollow=[bool(r.get("flags")) for r in rs]))  # fmt: skip
-        vl = [(-float(loss), "loss limit")] if isinstance(loss, int | float) else []
+        xs = [p[0] for s in series for p in s.pts]
+        xl = ch.limits(xs, 0.08)
+        lim = -float(loss) if isinstance(loss, int | float) else None
+        inside = lim is not None and xl[0] <= lim <= xl[1]
+        vl = [(lim, "loss limit")] if lim is not None and inside else []
+        outside = (f" The loss limit ({lim:g} m) is outside the range shown, which runs from "
+                   f"{min(xs):.1f} to {max(xs):.1f} m." if lim is not None and not inside else "")
         o.figures.append(
             panelbox(
                 "End of the fade",
                 "Sink rate at the end of the fade against the projected minimum "
-                "altitude change, one mark per member. A hollow mark is a flagged member.",
+                "altitude change, one mark per member. A hollow mark is a flagged member."
+                + outside,
                 ch.xy_chart(
                     series,
                     "projected minimum altitude change [m]",
-                    "sink rate [m/s]",
+                    "sink rate [m/s] (negative = climbing)",
                     "End of the fade",
+                    xlim=xl,
                     vlines=vl,
                 ),
                 _legend(*case_leg, ("s1", "hollow", "flagged member")),
             )
         )
-    # 3. wing share across the hand-over
+    # 3. wing share across the hand-over: one strip per case
     hand = [
         r
         for r in runs
         if ok(num(r.get("wing_share_handover"))) and ok(num(r.get("V_handover_eas_ms")))
     ]
     if hand:
-        series = []
+        wrows: list[ch.Strip] = []
         for cs, (cls, short, _, _) in FT_CASES.items():
             rs = [r for r in hand if r.get("case") == cs]
-            if rs:
-                series.append(ch.Series(short, cls, [(r["V_handover_eas_ms"], r["wing_share_handover"]) for r in rs],
-                                        [tip(r, ["set", "member", "V_handover_eas_ms", "margin_handover",
-                                                 "wing_share_handover"], short) for r in rs], line=False,
-                                        marker="sq" if cls == "ref" else "dot"))  # fmt: skip
+            if not rs:
+                continue
+            pr = next((p for p in params if p.get("case") == cs), None)
+            av = f" (AIRSPEED_MIN {pr['airspeed_min_eas_ms']:g})" if pr and ok(
+                num(pr.get("airspeed_min_eas_ms"))) else ""
+            wrows.append((short + av, [(r["wing_share_handover"],
+                                        tip(r, ["set", "member", "V_handover_eas_ms",
+                                                "margin_handover", "wing_share_handover"], short),
+                                        bool(r.get("flags")), cls) for r in rs], None))  # fmt: skip
         o.figures.append(
             panelbox(
                 "Wing share at the hand-over",
-                "Share of the weight carried by the wing when the pusher "
-                "takes over, against the equivalent airspeed at that instant.",
-                ch.xy_chart(
-                    series,
-                    "airspeed at the hand-over [m/s, EAS]",
-                    "wing share of weight [-]",
-                    "Wing share",
-                    hlines=[(1.0, "wing carries the weight")],
-                ),
-                _legend(*case_leg),
+                "Share of the weight the wing carries when the pusher takes over (1 would be the "
+                "whole weight), one strip per case and one dot per member. Within a case the "
+                "hand-over speed is the setting, so the dots differ by the wing share only.",
+                ch.strip_chart(wrows, "FT wing share at the hand-over"),
+                _legend(*case_leg, ("s1", "hollow", "flagged member")),
             )
         )
     # 3b. the grid over Q_TRANSITION_MS: the cost of the snapped point at each value
     grid = sorted((r for r in c.rows("FT_grid") if ok(num(r.get("J_snapped")))),
                   key=lambda r: r["q_transition_s"])
+    sp = c.res.record.get("search_spreads", {}).get("FT")
+    spread = float(sp) if isinstance(sp, int | float) else NAN
     if grid:
         gtip = ["q_transition_s", "J_snapped", "J_continuous", "J_snapped_minus_continuous",
-                "airspeed_min_eas_ms", "tkoff_thr_max", "tran_pit_max_deg", "seed_spread", "n_flags"]
+                "airspeed_min_eas_ms", "tkoff_thr_max", "tran_pit_max_deg", "seed_spread", "n_flags",
+                "flags"]
         gseries = [ch.Series("best snapped J at each Q_TRANSITION_MS", "s1",
                              [(r["q_transition_s"], r["J_snapped"]) for r in grid],
                              [tip(r, gtip) for r in grid],
-                             hollow=[r.get("t12_ok") is False for r in grid])]
+                             hollow=[bool(num(r.get("n_flags"))) for r in grid],
+                             kinds=["sq" if r.get("t12_ok") is False else "dot" for r in grid])]
         wins = [r for r in grid if r.get("winner") is True]
         if wins:
             gseries.append(ch.Series("winner", "s2", [(r["q_transition_s"], r["J_snapped"])
                                                      for r in wins], [tip(r, gtip) for r in wins]))
         failed = [f"{r['q_transition_s']:g} s ({num(r.get('seed_spread')):.1%})" for r in grid
                   if r.get("t12_ok") is False]
+        flagged = [f"{r['q_transition_s']:g} s" for r in grid if num(r.get("n_flags"))]
         near = [r["q_transition_s"] for r in grid if r.get("within_2pct") is True]
         near_text = (" Within 2 % of the best cost: Q_TRANSITION_MS "
                      + ", ".join(f"{q:g}" for q in near) + " s." if near else "")
@@ -1456,61 +2130,79 @@ def build_ft(c: Ctx) -> Out:
                 "Cost against Q_TRANSITION_MS",
                 "The best snapped cost found with Q_TRANSITION_MS fixed at each value (the other "
                 "three searched, then snapped to ArduPilot's integers). The winner is marked; a "
-                "hollow mark is a point whose three-seed spread is above the T-12 limit"
-                + (": " + ", ".join(failed) if failed else ", none here") + "." + near_text,
+                "hollow mark is a point whose snapped optimum still has flagged members"
+                + (": " + ", ".join(flagged) if flagged else ", none here")
+                + "; a square is a point whose three-seed spread is above the T-12 limit"
+                + (": " + ", ".join(failed) if failed else ", none here") + ". "
+                + grid_statement(grid, params, spread) + near_text,
                 ch.xy_chart(gseries, "Q_TRANSITION_MS [s]", "cost J",
                             "Cost against Q_TRANSITION_MS"),
-                _legend(("s1", "line", "grid point"),
-                        ("s1", "hollow", "T-12 spread above limit"), ("s2", "line", "winner")),
+                _legend(("s1", "line", "grid point"), ("s1", "hollow", "flags remain"),
+                        ("s1", "sq", "T-12 spread above limit"), ("s2", "line", "winner")),
             )
         )
+    # 3c. the stall margin against the C_L,max scale
+    rob = next((r for r in params if r.get("case") == "optimum_robust"), None)
+    rfig = robust_figure(c.rows("FT_robust"), params[opt], rob)
+    if rfig:
+        o.figures.append(rfig)
     # 4. scan
     scan = c.rows("FT_scan")
     if scan:
-        vs = [num(r.get("V_s_eas_ms")) for r in runs if ok(num(r.get("V_s_eas_ms")))]
-        pts = sorted((r["airspeed_min_eas_ms"], r["J"]) for r in scan if ok(num(r.get("J"))))
         rs = sorted(
-            (r for r in scan if ok(num(r.get("J")))), key=lambda r: r["airspeed_min_eas_ms"]
+            (r for r in scan if ok(num(r.get("J"))) and num(r["J"]) > 0),
+            key=lambda r: r["airspeed_min_eas_ms"],
         )
+        pts = [(r["airspeed_min_eas_ms"], r["J"]) for r in rs]
         series = [ch.Series("best J at each AIRSPEED_MIN", "s1", pts,
                             [tip(r, ["airspeed_min_eas_ms", "J", "q_transition_s", "tkoff_thr_max",
-                                     "tran_pit_max_deg", "n_flags", "seed_spread", "at_bound"]) for r in rs],
+                                     "tran_pit_max_deg", "n_flags", "flags", "seed_spread",
+                                     "at_bound"]) for r in rs],
                             hollow=[bool(num(r.get("n_flags"))) for r in rs])]  # fmt: skip
-        vl = [(stall * sum(vs) / len(vs), f"{stall:g} x stall speed")] if vs else []
+        hv = heaviest_stall(runs, stall)
+        vl = [hv] if hv else []
+        clean = [f"{r['airspeed_min_eas_ms']:g}" for r in rs if not num(r.get("n_flags"))]
         o.figures.append(
             panelbox(
                 "Cost against AIRSPEED_MIN",
                 "The best cost found when AIRSPEED_MIN is fixed and the other "
-                "three are searched. A hollow mark has flagged members.",
+                "three are searched, on a logarithmic axis (zero is not on it; it starts at the "
+                "decade below the smallest cost) so neighbouring values can be told apart. A hollow "
+                "mark has flagged members, named in its tooltip. Flag-free: "
+                + (", ".join(clean) + " m/s." if clean else "none."),
                 ch.xy_chart(
                     series,
                     "AIRSPEED_MIN [m/s, EAS]",
-                    "cost J",
+                    "cost J (log scale)",
                     "Cost against AIRSPEED_MIN",
                     vlines=vl,
+                    ylog=True,
                 ),
                 _legend(("s1", "line", "scan point"), ("s1", "hollow", "flags remain")),
             )
         )
-    # 5. convergence and sensitivity
+    # 5. the final cost of each seed and the sensitivity
     srch = c.rows("FT_search")
     if srch:
+        ptips = ["airspeed_min_eas_ms", "q_transition_s", "tkoff_thr_max", "tran_pit_max_deg"]
         o.figures.append(
             panelbox(
-                "Search convergence",
-                "Best cost found by each seed.",
+                "Final cost by seed",
+                "The cost each search seed ended at, with that seed's four settings in the "
+                "tooltip. It is the end point of the seed, not its path: iteration data is not "
+                "stored, so convergence itself is not shown.",
                 ch.dot_chart(
                     [
                         (
                             f"seed {r['seed']:g}",
                             r["best_cost"],
-                            tip(r, ["seed", "best_cost", "evaluations"]),
+                            tip(r, ["seed", "best_cost", "evaluations", *ptips]),
                             "s1",
                         )
                         for r in srch
                     ],
-                    "best cost J",
-                    "FT search convergence",
+                    "final cost J",
+                    "FT final cost by seed",
                     zero=False,
                 ),
             )
@@ -1521,14 +2213,26 @@ def build_ft(c: Ctx) -> Out:
     base = next((r for r in sens if r.get("parameter") == "base"), None)
     j0 = num(base.get("J")) if base else num(params[opt].get("J"))
     if sens and ok(j0) and j0:
-        items = [(f"{r['parameter']} = {r['value']}", (r["J"] / j0 - 1) * 100,
-                  f"J = {r['J']:.3f}; change = ({r['J']:.3f} / {j0:.3f} - 1) x 100", "s1")
-                 for r in sens if ok(num(r.get("J"))) and r is not base]  # fmt: skip
+        lin = spread * j0 if ok(spread) and spread > 0 else 0.01 * j0
+        items = []
+        for r in sens:
+            if r is base or not ok(num(r.get("J"))):
+                continue
+            nf = int(num(r.get("n_flags")) or 0) if ok(num(r.get("n_flags"))) else 0
+            items.append((f"{r['parameter']} = {r['value']}" + (f"  [{nf} failing]" if nf else ""),
+                          r["J"] - j0, f"J = {r['J']:.4f}; change = {r['J']:.4f} - {j0:.4f}; "
+                          f"{nf} failing member(s)", "s1" if nf else "ref"))  # fmt: skip
         o.figures.append(
             panelbox(
                 "One-at-a-time sensitivity",
-                "Change of the cost J against the optimum when one setting changes.",
-                ch.dot_chart(items, "change of J [%]", "FT sensitivity"),
+                "Absolute change of the cost J against the base evaluation (J = "
+                f"{j0:.4f}) when one setting changes; a row shows its failing-member count. The "
+                "axis is linear within the seed spread of zero and logarithmic beyond it, so "
+                "the one large row does not flatten the others. "
+                + sensitivity_statement(sens, j0, spread),
+                ch.dot_chart(items, "change of J (absolute; linear within the seed spread, then "
+                             "logarithmic)", "FT sensitivity", sym=lin),
+                _legend(("s1", "dot", "some members fail"), ("ref", "dot", "no member fails")),
             )
         )
     # the stall margin rests on a provisional C_L,max: the optimum re-evaluated with it +-10 %
@@ -1549,29 +2253,43 @@ def build_ft(c: Ctx) -> Out:
                 table_html("FT_sens", [c for c in cols if any(c in r for r in shown)], shown),
             )
         )
-    # 6. spread strips
+    # 6. spread strips: the optimum, the register start and the ArduPilot default, with the limits
     mine = [r for r in runs if r.get("case") == "optimum"]
+    regm = [r for r in runs if r.get("case") == "register"]
     dmem = [r for r in runs if r.get("case") == "ardupilot_default"]
     if mine:
         rows: list[ch.Strip] = []
+        extras: list[ch.StripExtra] = []
+        lims = {"loss_m": (float(loss), "limit") if isinstance(loss, int | float) else None,
+                "gain_m": (float(gain), "limit") if isinstance(gain, int | float) else None,
+                "stall_margin_min": (float(stall), f"limit {stall:g}") if stall else None}
         for col, lab in (
             ("loss_m", "altitude loss [m]"),
             ("gain_m", "altitude gain [m]"),
             ("stall_margin_min", "stall margin [-]"),
             ("energy_kJ", "energy [kJ]"),
         ):
-            dots = [(num(r.get(col)), tip(r, ["set", "member", col, "flags"]), bool(r.get("flags")), "s1")
-                   for r in mine if ok(num(r.get(col)))]  # fmt: skip
+            dots = [(num(r.get(col)), tip(r, ["set", "member", col, "flags"], "optimum"),
+                     bool(r.get("flags")), "s1") for r in mine if ok(num(r.get(col)))]  # fmt: skip
+            dots += [(num(r.get(col)), tip(r, ["set", "member", col, "flags"], "register"),
+                      bool(r.get("flags")), "s2") for r in regm if ok(num(r.get(col)))]  # fmt: skip
             dv = sorted(num(r.get(col)) for r in dmem if ok(num(r.get(col))))
             rows.append((lab, dots, dv[len(dv) // 2] if dv else None))
-        leg = [("s1", "dot", "member of the optimum"), ("hollow", "hollow", "flagged member")]
+            extras.append(([(num(r.get(col)), tip(r, ["set", "member", col, "flags"],
+                                                  "ArduPilot default"))
+                            for r in dmem if ok(num(r.get(col)))], lims.get(col)))  # fmt: skip
+        leg = [("s1", "dot", "member of the optimum"), ("s2", "dot", "member of the register start"),
+               ("hollow", "hollow", "flagged member")]
         if dmem:
-            leg.append(("ref", "line", "ArduPilot default: median of its members"))
+            leg += [("ref", "hollow", "member of the ArduPilot default"),
+                    ("ref", "line", "ArduPilot default: median of its members")]
         o.figures.append(
             panelbox(
                 "Ensemble spread",
-                "One strip per metric, one dot per member.",
-                ch.strip_chart(rows, "FT ensemble spread"),
+                "One strip per metric, one dot per member, spread vertically where they would "
+                "overlap; the vertical line is the limit. "
+                + share_statement(dmem, mine, regm),
+                ch.strip_chart(rows, "FT ensemble spread", extras=extras),
                 _legend(*leg),
             )
         )
@@ -1581,6 +2299,7 @@ def build_ft(c: Ctx) -> Out:
         ("FT_runs", None),
         ("FT_search", None),
         ("FT_sens", None),
+        ("FT_robust", None),
         ("FT_history", None),
     ]
     return o

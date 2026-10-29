@@ -191,6 +191,31 @@ today unless marked NEW.
      optimum, dot plot with the parameter values labelled.
 - Result box: optimum parameters (`T_bt_s`, `theta_A_deg`, `spin_min`, `Q_TRANS_DECEL_ms2`), J,
   seed spread, number of flagged members.
+- **Report fixes (branch `feat/c-b1-report-fixes`)**, all read from columns, never recomputed in the
+  viewer:
+  - *Time histories (C1).* `C_history` rows carry `view` (`core` | `default_fails`), `scenario`,
+    `member` (-1 = not an ensemble member), the scenario's axes, the entry airspeed and the B1 band.
+    Figure "Same scenario as B1 (<name>)" = C optimum and the ArduPilot default on `B1.scenarios[0]`
+    next to the B1 replays; figure "Where the default fails (ensemble member N)" = both C cases on the
+    member with the largest default overshoot. The last sample of every run is kept and marked
+    ("stops at"); the airspeed panel starts at 0. An older folder (no `view`) gets the old figure.
+  - *Margins (C2).* `C_params` (every case): `os_tol_m`, `sink_tol_ms`, `max_end_sink_ms`,
+    `os_margin_m`, `sink_margin_ms`, `at_edge`; row `optimum_margin` (largest fine-grid q whose worst
+    overshoot AND worst end sink are within `C.margin_frac` of their tolerances; reported, never the
+    recommendation); `C_q_curve` has `grid` (`coarse` | `fine`) and `max_end_sink_ms`. Tiles, an
+    at-the-edge chip and a margin chart (overshoot and sink against q, tolerances as lines).
+  - *Ensemble spread (C3).* The default's members as hollow grey dots, tolerance rules from
+    `C_params`, one computed statement (overshoot range, largest end sink, why the overshoot is
+    positive: `x_tgt = V^2 / 2q` from t = 0 while the ramp delays braking).
+  - *Sensitivity (C4).* `C_sens` has `n_failing_members`, `n_not_stopped`, `n_fail_total`, `J_smooth`
+    (J minus the penalty); two aligned charts: failing members (by type in the tooltip) and the
+    change of `J_smooth`.
+  - *Energy against distance (C5).* Marks drawn register, default, optimum (last); every coarse q
+    labelled; no B1 points.
+  - *Search convergence (C6).* `C_search` has `T_bt_s`, `theta_A_deg`, `spin_min`,
+    `Q_TRANS_DECEL_ms2` per seed; a computed ridge / single-optimum / not-converged sentence; the
+    `theta_A:hi` chip says the bound is `min(30, PTCH_LIM_MAX_DEG)` (`theta_A_hi_deg`,
+    `theta_A_cfg_hi_deg`, `ptch_lim_deg` in the optimum row).
 
 ### B1 · open-loop optimal control
 - Tables: `B1_front`, `B1_gap`, `B1_sens`, `B1_schedule`, `B1_history` (NEW). Legacy:
@@ -199,6 +224,19 @@ today unless marked NEW.
   overlaid; (2) the gap B1 vs C as bars at matched distance (`B1_gap`); (3) the optimal schedule
   (throttle, theta_cmd against time; `B1_schedule`); (4) time histories as in C figure 2;
   (5) sensitivity dot plot (`B1_sens`).
+- **Report fixes (branch `feat/c-b1-report-fixes`).** (a) The headline gap tiles come from every
+  verified `B1_gap` row, `attached` first, `c_envelope` beside it with "verified for exact timing
+  only" when `replay_late_command_ok` is false. (b) "Verified solutions by scenario": one panel per
+  scenario with the verified points per variant and the scenario-matched C run of `B1_gap`
+  (`c_source`) where one exists, "no verified solution" / "no scenario-matched C run" otherwise; a
+  collapsible table of all `B1_front` points by scenario, variant and `reason` (new column: verified,
+  not converged, replay mismatch, fails 10 ms late). (c) A computed paragraph on what the gap
+  contains (pitch freedom 34.4 against `PTCH_LIM_MAX_DEG`, rotor lag, foreknowledge). (d) "Is
+  `attached` attached?": `B1_front` columns `alpha_limit_deg`, `alpha_s_deg`, `wing_incidence_deg`,
+  `alpha_w_clmax_deg`, `cl_max`, `cl_at_limit_over_max` and a computed paragraph on how far the limit
+  sits below the lift peak. (e) Sensitivity chart with the nominal energy (same scenario, variant and
+  distance cap, headline band) as a hollow marker per row and the variant in the row label; a row
+  says "[nominal unverified]" or "[no nominal point]".
 - Result box: energy at the register distance for B1 and C and the gap in % (expression shown);
   `t_rotor_on_s`, `V_over_Vs_rotor_on`, `alpha_w_peak_gated_deg`; replay-verified count.
 
@@ -206,6 +244,31 @@ today unless marked NEW.
 - Tables and figures are specified in `docs/FT_spec.md` section 6.1 and section 7 (`FT_params`, `FT_search`,
   `FT_runs`, `FT_scan`, `FT_sens`, `FT_history`). The registry entry is a normal chapter with
   `requires = [FT_params, FT_runs]`; without them the chapter is listed as "not in this run".
+- **Report fixes (branch `feat/c-b1-report-fixes`).**
+  - *Pitch cap (F1, defect).* `FT_history.theta_cap` is the case's own cap by mode (WAIT =
+    `Q_TRAN_PIT_MAX`, FADE = (`Q_TRAN_PIT_MAX` + 1) x 2, DONE none): the history rows were built
+    from the template's `ForwardParams` (the register's `Q_TRAN_PIT_MAX`), now from
+    `forward.case_params`, the same construction `run_ft` flies with. `FT_runs.t_pitch_cap_s` was
+    already computed from the run's own parameters. One cap line per case, in the case's colour.
+  - *Time histories (F2).* Airspeed panel from 0; rule labels at the right edge, stacked, for the
+    AIRSPEED_MIN of the optimum, the register and the default, and the stall rule = 1.2 x the stall
+    speed of the heaviest member (also in the scan chart); each case's own fade start (square) and
+    done (diamond) on its airspeed curve, the vertical lines labelled "(optimum)"; the caption states
+    the scenario from `run_record.json` `context.ft_scenarios` (axes, note, the ensemble's ranges) and
+    says, computed, whether it lies inside the ensemble's range on every axis, at an edge, or outside.
+  - *Robustness (F3).* New table `FT_robust` (AIRSPEED_MIN = optimum + `FT.robust.airspeed_min_steps`
+    at each `FT.robust.cl_max_scale`; the other three settings at the optimum; the search ensemble;
+    `J`, `worst_stall_margin`, `n_flags`, the per-kind counts, `flags`); row `optimum_robust` in
+    `FT_params` (the smallest flag-free-at-every-scale AIRSPEED_MIN, `robust_found`, `J`, `delta_J`,
+    `delta_J_in_seed_spreads`; empty settings when none; never in `settings_recommended`); tile
+    "Stall margin spare", the table and one computed sentence.
+  - *Charts (F4).* AIRSPEED_MIN scan on a log axis, `FT_scan.flags` in the tooltip; Q_TRANSITION_MS
+    chart hollow for `FT_grid.flags`, a square for a T-12 failure, plus a computed sentence;
+    sensitivity as the absolute change of J on a symmetric log axis with failing counts and a computed
+    sentence; ensemble spread with the register's members, the default's members, a beeswarm, limit
+    lines and computed shares; end of the fade zoomed with the sign stated; wing share as one strip
+    per case; "Final cost by seed" (`FT_search` has the four settings); the `tkoff_thr_max:hi` chip
+    from `FT_params.tkoff_thr_max_hi` and `thr_max`.
 
 ### Sensitivity
 - Tables: `sens_oat`, `sens_global`.

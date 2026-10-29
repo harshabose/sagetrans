@@ -128,6 +128,9 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
     tecs_start: [warm, cold]
     rec_cl_frac: [0.7, 0.8, 0.9]       # changes only the projection
     CL_max_scale: [0.9, 1.1]           # the model's C_L,max x this, through alpha_s; lift, stall speed, stall flag and recovery follow
+  robust:                  # FT_robust: reporting only, no search (the same ensemble as sens; 12 evaluations at these values)
+    airspeed_min_steps: [-1, 0, 1, 2]   # ASSUMED: m/s added to the optimum's AIRSPEED_MIN
+    cl_max_scale: [0.9, 1.0, 1.1]       # ASSUMED: the model's C_L,max is not validated; +-10 % is a stated spread, not a measured one
 
 C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C_fix_spec.md)
   # The entry (theta_fw0_deg, pit_lim_mode, entry_convention) comes from the D block.
@@ -150,6 +153,10 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
   z:                       # ArduPilot vertical loop (O-12): master 4.8.0-dev Plane defaults, not a pinned tag (O-08)
     {pos_p: 1.0, vel_p: 5.0, acc_p: 0.03, acc_i: 0.1, acc_imax: 0.8, vmax: 2.5, vel_flt_hz: 5.0, acc_flt_hz: 10.0}
   q_curve: [1.0, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0]   # C_q_curve: the optimum's ramp with q varied
+  q_fine_offsets_ms2: [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2]   # C_q_curve, fine grid: added to the optimum's q, the other three fixed (reporting only)
+  margin_flag_m: 0.5       # ASSUMED: an overshoot margin below this (os_tol_m minus the worst overshoot) is flagged at_edge
+  margin_flag_ms: 0.3      # ASSUMED: the same for the end-sink margin (sink_tol_ms minus the worst end sink)
+  margin_frac: 0.75        # ASSUMED: the optimum_margin row is the largest q whose worst overshoot AND worst end sink stay within this fraction of their tolerances
   sens:                    # C_sens: one at a time at the optimum
     rotor_lag_s: [0, 0.25, 0.5]
     rotor_start: [idle, carry]

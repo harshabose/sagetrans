@@ -14,8 +14,8 @@ import bisect
 import html
 import json
 import math
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 
 Point = tuple[float, float]
 
@@ -135,12 +135,13 @@ def _path(pts: Sequence[Point], fr: Frame, steps: bool = False) -> str:
     return "".join(out)
 
 
-def axes(fr: Frame, xlab: str, ylab: str, xt: list[float], yt: list[float]) -> list[str]:
+def axes(fr: Frame, xlab: str, ylab: str, xt: list[float], yt: list[float],
+         yfmt: Callable[[float], str] | None = None) -> list[str]:  # fmt: skip
     out: list[str] = []
     for t in yt:
         y = fr.sy(t)
         out.append(el("line", "grid", x1=fr.pl, x2=f1(fr.right), y1=f1(y), y2=f1(y)))
-        out.append(text(fr.pl - 7, y + 4, tick_text(t), "tick", "end"))
+        out.append(text(fr.pl - 7, y + 4, (yfmt or tick_text)(t), "tick", "end"))
     for t in xt:
         out.append(text(fr.sx(t), fr.bottom + 17, tick_text(t), "tick", "middle"))
     out.append(el("line", "axis", x1=fr.pl, x2=f1(fr.right), y1=f1(fr.bottom), y2=f1(fr.bottom)))
@@ -166,6 +167,9 @@ class Series:
     dash: bool = False
     marker: str = "dot"  # dot | sq | dia | none
     labels: dict[int, str] = field(default_factory=dict)  # point index -> direct label
+    # point index -> (dx, dy) pixels of that label from its point (default 8, -8); a label placed
+    # to the left (dx < 0) ends at the offset, so crowded points can be nudged apart
+    label_pos: dict[int, tuple[float, float]] = field(default_factory=dict)
     thick: bool = False
 
 
@@ -173,14 +177,31 @@ def xy_chart(
     series: Sequence[Series], xlab: str, ylab: str, aria: str, *, w: float = 720, h: float = 360,
     xlim: Point | None = None, ylim: Point | None = None, y_from_zero: bool = False,
     hlines: Sequence[tuple[float, str]] = (), vlines: Sequence[tuple[float, str]] = (),
+    ylog: bool = False,
 ) -> str:  # fmt: skip
-    """A scatter / line chart. `hlines` and `vlines` are labelled reference rules."""
+    """A scatter / line chart. `hlines` and `vlines` are labelled reference rules.
+
+    `ylog` puts the y axis on a log scale (positive values only; zero is not on it, the axis starts
+    at the decade below the smallest value) with ticks at 1, 2 and 5 times a power of ten."""
+    yfmt: Callable[[float], str] | None = None
+    if ylog:
+        pos = [p[1] for s in series for p in s.pts if p[1] > 0] + [v for v, _ in hlines if v > 0]
+        k_lo = math.floor(math.log10(min(pos))) if pos else 0
+        k_hi = math.ceil(math.log10(max(pos))) if pos else 1
+        k_hi = max(k_hi, k_lo + 1)
+        series = [replace(s, pts=[(x, math.log10(y) if y > 0 else math.nan) for x, y in s.pts])
+                  for s in series]  # fmt: skip
+        hlines = [(math.log10(v), lab) for v, lab in hlines if v > 0]
+        ylim = (float(k_lo), float(k_hi))
+        mult = (1, 2, 5) if k_hi - k_lo <= 3 else (1,)
+        ytl = [k + math.log10(m) for k in range(k_lo, k_hi) for m in mult] + [float(k_hi)]
+        yfmt = lambda t: tick_text(10 ** t)  # noqa: E731
     xs = [p[0] for s in series for p in s.pts] + [v for v, _ in vlines]
     ys = [p[1] for s in series for p in s.pts] + [v for v, _ in hlines]
     fr = Frame(w, h, xlim or limits(xs), ylim or limits(ys, floor=0.0 if y_from_zero else None))
-    xt, yt = nice_ticks(*fr.xlim), nice_ticks(*fr.ylim)
+    xt, yt = nice_ticks(*fr.xlim), (ytl if ylog else nice_ticks(*fr.ylim))
     _fit(fr, xt, yt)
-    out = axes(fr, xlab, ylab, xt, yt)
+    out = axes(fr, xlab, ylab, xt, yt, yfmt)
     for v, lab in hlines:
         y = fr.sy(v)
         out.append(el("line", "rule", x1=fr.pl, x2=f1(fr.right), y1=f1(y), y2=f1(y)))
@@ -200,10 +221,38 @@ def xy_chart(
                 out.append(marker(kind, fr.sx(x), fr.sy(y), s.cls,
                                   s.tips[i] if i < len(s.tips) else "",
                                   bool(s.hollow[i]) if i < len(s.hollow) else False))  # fmt: skip
+    placed: list[tuple[float, float, float, float]] = []  # label boxes already drawn
     for s in series:
         for i, lab in s.labels.items():
-            out.append(text(fr.sx(s.pts[i][0]) + 8, fr.sy(s.pts[i][1]) - 8, lab, "dl"))
+            px, py = fr.sx(s.pts[i][0]), fr.sy(s.pts[i][1])
+            dx, dy = place_label(px, py, lab, s.label_pos.get(i, (8.0, -8.0)), placed)
+            out.append(text(px + dx, py + dy, lab, "dl", "end" if dx < 0 else "start"))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
+
+
+LABEL_ALTERNATES = ((-9.0, 17.0), (9.0, 17.0), (9.0, -8.0), (-9.0, -8.0), (-9.0, 31.0),
+                    (9.0, 31.0), (-9.0, -22.0), (9.0, -22.0), (-9.0, 45.0), (9.0, 45.0))
+
+
+def place_label(px: float, py: float, lab: str, pref: tuple[float, float],
+                placed: list[tuple[float, float, float, float]]) -> tuple[float, float]:  # fmt: skip
+    """The offset of a direct label from its point: the preferred one, or the first alternative
+    whose box (about 6.4 px a character, 13 px high) overlaps no label already placed; the least
+    overlapping one when none is free. The box is recorded in `placed`."""
+    w = 6.4 * len(lab)
+
+    def box(d: tuple[float, float]) -> tuple[float, float, float, float]:
+        x0 = px + d[0] - (w if d[0] < 0 else 0.0)
+        return x0, py + d[1] - 10.0, x0 + w, py + d[1] + 3.0
+
+    def clash(b: tuple[float, float, float, float]) -> float:
+        return sum(max(0.0, min(b[2], o[2]) - max(b[0], o[0]))
+                   * max(0.0, min(b[3], o[3]) - max(b[1], o[1])) for o in placed)  # fmt: skip
+
+    cands = [pref, *[a for a in LABEL_ALTERNATES if a != pref]]
+    pick = next((d for d in cands if clash(box(d)) == 0.0), min(cands, key=lambda d: clash(box(d))))
+    placed.append(box(pick))
+    return pick
 
 
 def legend(entries: Sequence[tuple[str, str, str]]) -> str:
@@ -230,6 +279,9 @@ class Panel:
     hlines: list[tuple[float, str]] = field(default_factory=list)
     band: tuple[float, float] | None = None  # a shaded band, e.g. the altitude limits
     vticks: list[tuple[float, str]] = field(default_factory=list)  # instants, e.g. mode changes
+    ymin: float | None = None  # the axis starts here (airspeed: 0), not at the data minimum
+    marks: bool = False  # draw each series' `marks` on its curve in this panel
+    wide: bool = False  # the panel spans both columns (long rule labels need the room)
 
 
 @dataclass
@@ -245,6 +297,27 @@ class TSeries:
     steps: bool = False
     thick: bool = False
     direct: str = ""  # a direct label at the end of the line (the reference series)
+    end_mark: bool = False  # a marker at the last sample: where the run stopped
+    # (time, shape, tip) markers on the curve of a panel with `marks`, e.g. where the fade starts
+    marks: list[tuple[float, str, str]] = field(default_factory=list)
+
+
+def stack_labels(ys: Sequence[float], gap: float, lo: float, hi: float) -> list[float]:
+    """Pixel rows for labels wanted at `ys`, at least `gap` apart and inside [lo, hi], in the
+    order given (a label is moved up or down from its rule, never reordered)."""
+    order = sorted(range(len(ys)), key=lambda i: ys[i])
+    out = [0.0] * len(ys)
+    prev = lo - gap
+    for i in order:  # push down from the top
+        out[i] = max(ys[i], prev + gap)
+        prev = out[i]
+    over = out[order[-1]] - hi if order else 0.0
+    if over > 0:  # push back up from the bottom
+        nxt = hi + gap
+        for i in reversed(order):
+            out[i] = min(out[i], nxt - gap)
+            nxt = out[i]
+    return out
 
 
 def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries],
@@ -255,7 +328,7 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
     sample spacing line up; a series that has ended says "run ended".
     """
     t1 = max((max(s.t) for s in series if s.t), default=0.0) or 1.0
-    w, h, pl, pr = 350.0, 200.0, 50.0, 10.0
+    h, pl, pr = 200.0, 50.0, 10.0
     data = {"t1": t1, "panels": [{"key": p.key, "dec": p.dec, "sign": p.sign, "unit": p.unit}
                                  for p in panels],
             "series": [{"name": s.name, "cls": s.cls, "short": s.short, "t": s.t, "v": s.vars}
@@ -267,7 +340,12 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
         vals += [v for v, _ in p.hlines] + (list(p.band) if p.band else [])
         if not vals:
             continue
+        if p.ymin is not None:
+            vals.append(p.ymin)
+        w = 720.0 if p.wide else 350.0
         fr = Frame(w, h, (0.0, t1), limits(vals), pl=pl, pr=pr, pt=12, pb=34)
+        if p.ymin is not None:
+            fr.ylim = (p.ymin, fr.ylim[1])
         xt, yt = nice_ticks(0.0, t1, 4), nice_ticks(*fr.ylim, 4)
         _fit(fr, xt, yt)
         o = [text(pl, 9, p.label, "ptitle")]
@@ -275,10 +353,12 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
             y0, y1 = fr.sy(p.band[1]), fr.sy(p.band[0])
             o.append(el("rect", "band", x=pl, y=f1(y0), width=f1(w - pl - pr), height=f1(y1 - y0)))
         o += axes(fr, tlabel, "", xt, yt)
-        for v, lab in p.hlines:
+        # the rule labels sit at the right edge, stacked with a minimum gap so none overprints
+        rows = stack_labels([fr.sy(v) - 4 for v, _ in p.hlines], 11.0, 22.0, fr.bottom - 4)
+        for (v, lab), ly in zip(p.hlines, rows, strict=True):
             y = fr.sy(v)
             o.append(el("line", "rule", x1=pl, x2=f1(w - pr), y1=f1(y), y2=f1(y)))
-            o.append(text(pl + 4, y - 4, lab, "dl"))
+            o.append(text(w - pr - 3, ly, lab, "dl", "end"))
         for tv, lab in p.vticks:
             x = f1(fr.sx(tv))
             o.append(el("line", "rule", x1=x, x2=x, y1=12, y2=f1(fr.bottom)))
@@ -290,13 +370,21 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
                 o.append(el("path", cls, d=_path(list(zip(s.t, ys, strict=True)), fr, s.steps)))
                 if s.direct and pi == first:
                     o.append(text(fr.sx(s.t[-1]) - 4, fr.sy(ys[-1]) + 16, s.direct, "dl", "end"))
+                if p.marks:
+                    for mt, shape, mtip in s.marks:
+                        k = nearest(s.t, mt)
+                        if k is not None and math.isfinite(ys[k]):
+                            o.append(marker(shape, fr.sx(s.t[k]), fr.sy(ys[k]), s.cls, mtip))
+                if s.end_mark and math.isfinite(ys[-1]):
+                    o.append(marker("dot", fr.sx(s.t[-1]), fr.sy(ys[-1]), s.cls,
+                                    f"{s.short}: stops at {s.t[-1]:.2f} s ({p.label} {ys[-1]:.2f})"))
         o.append(el("line", "xh", x1=0, x2=0, y1=12, y2=f1(fr.bottom), visibility="hidden"))
         o.append(el("rect", "hit", x=pl, y=12, width=f1(w - pl - pr), height=f1(fr.bottom - 12),
                     fill="transparent"))  # fmt: skip
         svg = el("svg", "viz panel", "".join(o), viewbox=f"0 0 {w:g} {h:g}", role="img",
                  aria_label=f"{p.label} against time", data_fig=fig_id, data_pi=pi, data_pl=pl,
                  data_pr=pr, data_w=w)  # fmt: skip
-        cells.append(f'<div class="pan">{svg}</div>')
+        cells.append(f'<div class="pan{" wide" if p.wide else ""}">{svg}</div>')
     if not cells:
         return ""
     blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
@@ -317,50 +405,122 @@ def nearest(ts: Sequence[float], t: float) -> int | None:
 
 
 Strip = tuple[str, Sequence[tuple[float, str, bool, str]], float | None]
+# optional second layer of a strip: hollow grey dots (value, tip) just below the main line, e.g. the
+# members of the ArduPilot default, and a labelled vertical rule (value, label), e.g. a tolerance
+StripExtra = tuple[Sequence[tuple[float, str]], tuple[float, str] | None]
 
 
-def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720) -> str:
+def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720,
+                extras: Sequence[StripExtra] | None = None) -> str:  # fmt: skip
     """One strip per metric on its own scale: a dot per member, a grey tick for a reference.
 
-    Each row is (label, [(value, tip, hollow, cls)], reference value or None).
+    Each row is (label, [(value, tip, hollow, cls)], reference value or None). `extras[i]` adds, to
+    strip i, a hollow grey dot per member of a second case and a vertical rule; the axis includes
+    both.
     """
-    rh, pl, pr = 46.0, 150.0, 20.0
+    pl = max(150.0, 6.6 * max((len(r[0]) for r in rows), default=0) + 24.0)
+    pr = 20.0
     out: list[str] = []
+    ytop = 0.0
     for i, (label, pts, ref) in enumerate(rows):
-        vals = [p[0] for p in pts if math.isfinite(p[0])] + ([ref] if ref is not None else [])
+        x_dots, x_rule = extras[i] if extras and i < len(extras) else ((), None)
+        vals = ([p[0] for p in pts if math.isfinite(p[0])] + ([ref] if ref is not None else [])
+                + [v for v, _ in x_dots if math.isfinite(v)]
+                + ([x_rule[0]] if x_rule is not None else []))  # fmt: skip
         if not vals:
             continue
         lo, hi = limits(vals, 0.04)
-        fr = Frame(w, rh, (lo, hi), (0, 1), pl=pl, pr=pr, pt=0, pb=0)
-        y0 = i * rh + rh / 2
+        fr = Frame(w, 64.0, (lo, hi), (0, 1), pl=pl, pr=pr, pt=0, pb=0)
+        marks = ([(v, tip, hol, cls) for v, tip, hol, cls in pts if math.isfinite(v)]
+                 + [(v, tip, True, "ref") for v, tip in x_dots if math.isfinite(v)])  # fmt: skip
+        offs = swarm([fr.sx(m[0]) for m in marks], reach=6)
+        reach_px = max((abs(d) for d in offs), default=0.0)
+        rh = max(46.0, 2 * reach_px + 36.0)  # the row is as tall as its swarm
+        y0 = ytop + rh / 2
+        ytop += rh
         out.append(text(pl - 12, y0 + 4, label, "axlab", "end"))
         out.append(el("line", "grid", x1=pl, x2=f1(w - pr), y1=f1(y0), y2=f1(y0)))
-        out.append(text(pl, y0 + 22, f"{lo:.3g}", "tick"))
-        out.append(text(w - pr, y0 + 22, f"{hi:.3g}", "tick", "end"))
+        out.append(text(pl, y0 + reach_px + 20, f"{lo:.3g}", "tick"))
+        out.append(text(w - pr, y0 + reach_px + 20, f"{hi:.3g}", "tick", "end"))
         if ref is not None and math.isfinite(ref):
             x = f1(fr.sx(ref))
             out.append(el("line", "refmk", x1=x, x2=x, y1=f1(y0 - 10), y2=f1(y0 + 10)))
-        for v, tip, hol, cls in pts:
-            if math.isfinite(v):
-                out.append(marker("dot", fr.sx(v), y0, cls, tip, hol))
-    return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {rh * len(rows) + 28:g}", role="img",
+        if x_rule is not None and math.isfinite(x_rule[0]):
+            x = f1(fr.sx(x_rule[0]))
+            out.append(el("line", "rule", x1=x, x2=x, y1=f1(y0 - 15), y2=f1(y0 + 15)))
+            right = fr.sx(x_rule[0]) > pl + 0.65 * (w - pl - pr)  # a label that would leave the page
+            out.append(text(fr.sx(x_rule[0]) + (-3 if right else 3), y0 - 8, x_rule[1], "dl",
+                            "end" if right else "start"))
+        for (v, tip, hol, cls), dy in zip(marks, offs, strict=True):
+            out.append(marker("dot", fr.sx(v), y0 + dy, cls, tip, hol))
+    return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {ytop + 28:g}", role="img",
               aria_label=aria)  # fmt: skip
 
 
+def swarm(xs: Sequence[float], gap: float = 10.0, step: float = 10.0, reach: int = 3) -> list[float]:
+    """Vertical offsets [px] that keep marks at the pixel columns `xs` from overlapping: each mark,
+    in the order given, takes the first of 0, +step, -step, +2 step, ... that is at least `gap`
+    from every mark already placed; when none is free, the offset farthest from its neighbours."""
+    placed: list[tuple[float, float]] = []
+    out: list[float] = []
+    for x in xs:
+        cands = [0.0] + [s * k * step for k in range(1, reach + 1) for s in (1.0, -1.0)]
+
+        def room(d: float, x: float = x) -> float:
+            return min((math.hypot(x - px, d - py) for px, py in placed), default=math.inf)
+
+        pick = next((d for d in cands if room(d) >= gap), max(cands, key=room))
+        placed.append((x, pick))
+        out.append(pick)
+    return out
+
+
+def symlog(v: float, lin: float) -> float:
+    """A symmetric log: linear within `lin` of zero, logarithmic beyond (so one large value does not
+    flatten the small ones)."""
+    return math.copysign(math.log10(1.0 + abs(v) / lin), v)
+
+
 def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str, w: float = 720,
-              zero: bool = True) -> str:  # fmt: skip
-    """A dot per row against one axis, with a zero rule: (label, value, tip, cls)."""
-    rh, pl, pr, pt, pb = 26.0, 210.0, 24.0, 12.0, 44.0
+              zero: bool = True, refs: Sequence[tuple[float, str] | None] | None = None,
+              sym: float | None = None) -> str:  # fmt: skip
+    """A dot per row against one axis, with a zero rule: (label, value, tip, cls).
+
+    `refs[i]` is an optional reference for row i, (value, tip), drawn as a hollow grey diamond on
+    the row's line (e.g. the nominal value the row's setting departs from); the axis includes it.
+    `sym` puts the axis on a symmetric log scale, linear within `sym` of zero, with ticks at 0 and
+    at +-`sym` times a power of ten, labelled in the data's units.
+    """
+    rh, pr, pt, pb = 26.0, 24.0, 12.0, 44.0
+    pl = max(210.0, 6.4 * max((len(i[0]) for i in items), default=0) + 24.0)
     h = pt + pb + rh * len(items)
-    vals = [v for _, v, _, _ in items if math.isfinite(v)] + ([0.0] if zero else [])
+
+    def tf(v: float) -> float:
+        return v if sym is None else symlog(v, sym)
+
+    vals = [tf(v) for _, v, _, _ in items if math.isfinite(v)] + ([0.0] if zero else [])
+    vals += [tf(r[0]) for r in (refs or []) if r is not None and math.isfinite(r[0])]
     fr = Frame(w, h, limits(vals, 0.08), (0, 1), pl=pl, pr=pr, pt=pt, pb=pb)
-    xt = nice_ticks(*fr.xlim)
-    _fit(fr, xt, [0, 1])
+    lab_of: Callable[[float], str] = tick_text
+    if sym is None:
+        xt = nice_ticks(*fr.xlim)
+        _fit(fr, xt, [0, 1])
+    else:
+        top = max(abs(fr.xlim[0]), abs(fr.xlim[1]))
+        real = [0.0] + [s * sym * 10 ** k for k in range(0, 12) for s in (1.0, -1.0)]
+        xt = sorted({tf(v) for v in real if abs(tf(v)) <= top + 1e-9})
+        back = {round(t, 9): v for t, v in ((tf(v), v) for v in real)}
+        lab_of = lambda t: f"{back.get(round(t, 9), 0.0):.2g}"  # noqa: E731
     out: list[str] = []
+    shown: list[float] = []  # the labels kept: zero first, then outwards, none within 36 px of another
+    for t in sorted(xt, key=abs):
+        if all(abs(fr.sx(t) - fr.sx(s)) >= 36.0 for s in shown):
+            shown.append(t)
     for t in xt:
         x = f1(fr.sx(t))
         out.append(el("line", "grid", x1=x, x2=x, y1=pt, y2=f1(fr.bottom)))
-        out.append(text(fr.sx(t), fr.bottom + 16, tick_text(t), "tick", "middle"))
+        if t in shown:
+            out.append(text(fr.sx(t), fr.bottom + 16, lab_of(t), "tick", "middle"))
     if zero:
         x0 = f1(fr.sx(0.0))
         out.append(el("line", "zero", x1=x0, x2=x0, y1=pt, y2=f1(fr.bottom)))
@@ -368,8 +528,11 @@ def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
     for i, (label, v, tip, cls) in enumerate(items):
         y = pt + rh * i + rh / 2
         out.append(text(pl - 10, y + 4, label, "dl", "end"))
+        ref = refs[i] if refs and i < len(refs) else None
+        if ref is not None and math.isfinite(ref[0]):
+            out.append(marker("dia", fr.sx(tf(ref[0])), y, "ref", ref[1], True))
         if math.isfinite(v):
-            out.append(marker("dot", fr.sx(v), y, cls, tip))
+            out.append(marker("dot", fr.sx(tf(v)), y, cls, tip))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
 
 

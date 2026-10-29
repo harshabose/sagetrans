@@ -161,15 +161,26 @@ def test_the_c_and_ft_tables_carry_the_three_fixed_case_strings(cfgdir):
     _tiny_study(cfgdir)
     inp = load_inputs(cfgdir, only={"C", "FT"})
     c = stages.run_task(inp, "C")["tables"]
-    assert [r["case"] for r in c["C_params"]] == [
-        "optimum", "register at q = 2", "ardupilot_default"
-    ]
+    cases = [r["case"] for r in c["C_params"]]
+    # the three fixed cases, then at most the reported (never recommended) margin row
+    assert cases[:3] == ["optimum", "register at q = 2", "ardupilot_default"]
+    assert cases[3:] in ([], ["optimum_margin"])
+    assert all(k in c["C_params"][0] for k in ("os_margin_m", "sink_margin_ms", "at_edge"))
+    grids = {r["grid"] for r in c["C_q_curve"]}
+    assert grids == {"coarse", "fine"}
+    # each seed's best point in physical units, and where the upper bound of theta_A comes from
+    assert {"T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2"} <= set(c["C_search"][0])
+    opt = c["C_params"][0]
+    assert opt["theta_A_hi_deg"] == min(opt["theta_A_cfg_hi_deg"], opt["ptch_lim_deg"])
+    lo, hi = 0.0, 90.0
+    assert all(lo < r["theta_A_deg"] <= hi for r in c["C_search"])
     assert {r["case"] for r in c["C_runs"]} == {"optimum", "ardupilot_default"}
     dflt_rows = [r for r in c["C_runs"] if r["case"] == "ardupilot_default"]
     assert len(dflt_rows) == 2 and all(r["a_cap_ms2"] != "" for r in dflt_rows)  # ceiling too
     assert [r["Q_TRANS_DECEL_ms2"] for r in c["C_params"]][2] == pytest.approx(2.0)
     ft = stages.run_task(inp, "FT:18:5000:100:3")["tables"]  # the report of a winner
-    assert [r["case"] for r in ft["FT_params"]] == ["optimum", "register", "ardupilot_default"]
+    assert [r["case"] for r in ft["FT_params"]] == ["optimum", "register", "ardupilot_default",
+                                                    "optimum_robust"]
     assert {r["case"] for r in ft["FT_runs"]} == {"optimum", "register", "ardupilot_default"}
     assert {r["case"] for r in ft["FT_history"]} == {"optimum", "register", "ardupilot_default"}
     d = ft["FT_params"][2]

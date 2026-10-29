@@ -12,7 +12,8 @@ from typing import Any
 from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
-from sagetrans.io.stages import b1_ceiling_deg, grid_winner
+from sagetrans.io.stages import FT_PARAM_COLUMNS, b1_ceiling_deg, ft_bounds, grid_winner
+from sagetrans.io.view.chapters import b1_reason
 
 Table = list[dict[str, Any]]
 
@@ -260,6 +261,24 @@ def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any
     return rows
 
 
+def ft_scenarios_context(inp: StudyInputs) -> dict[str, Any]:
+    """What the FT chapter says about its history scenarios: each one's axes and note, and the
+    ensemble's ranges on the same axes (the viewer compares them; it cannot read the inputs)."""
+    ax = inp.ensemble_axes
+    scen = {}
+    for n in inp.study.FT.history_scenarios:
+        s = inp.scenarios.get(n)
+        if s is not None:
+            scen[n] = {"altitude_m": s.altitude_amsl_m, "isa_offset_k": s.isa_offset_k,
+                       "mass_factor": (s.mass_kg or inp.vehicle.m) / inp.vehicle.m, "soc": s.soc,
+                       "headwind_ms": s.headwind_ms, "note": inp.scenario_notes.get(n, "")}
+    return {"scenarios": scen,
+            "axes": {"altitude_m": list(ax.altitude_m), "isa_offset_k": list(ax.isa_offset_k),
+                     "mass_factor": list(ax.mass_factor),
+                     "headwind_ms": list(inp.study.FT.headwind_ms),  # FT's own range
+                     "soc": list(ax.soc)}}  # fmt: skip
+
+
 def assemble(
     inp: StudyInputs,
     task_results: Mapping[str, dict[str, Any]],
@@ -348,6 +367,7 @@ def assemble(
         wrow = gw["row"]
         # the optimum is the snapped winner; its search is the winner's (a three-seed search
         # at the winner's fixed Q_TRANSITION_MS), its cost_default the register start's
+        q_win_search = float(gw["q_transition_s"])
         ft_res = dataclasses.replace(
             gw["result"], params=dict(gw["snapped"]), cost=float(wrow["J_snapped"]),
             cost_default=float(ft_task["J_start"]))
@@ -366,8 +386,13 @@ def assemble(
         tables["FT_grid"] = [{"point": r["point"], "winner": r["winner"],
                               **{k: v for k, v in r.items() if k not in ("point", "winner")}}
                              for r in grid_rows]
-        tables["FT_search"] = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
-                               for sr in ft_res.search.seeds]
+        # the winner's search had Q_TRANSITION_MS fixed: each seed's best point in physical units
+        fb = ft_bounds(inp, {"q_transition": q_win_search})
+        tables["FT_search"] = [
+            {"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals,
+             **{FT_PARAM_COLUMNS[k]: v for k, v in {"q_transition": q_win_search,
+                                                    **fb.to_physical(sr.x)}.items()}}
+            for sr in ft_res.search.seeds]  # fmt: skip
         # the optimum row also carries the continuous result it was snapped from
         extra = {k: wrow[k] for k in wrow if k.endswith("_continuous")}
         extra.update(J_snapped_minus_continuous=wrow["J_snapped_minus_continuous"],
@@ -375,6 +400,11 @@ def assemble(
         for prow in tables["FT_params"]:
             for k in ("seed_spread", "at_bound", *[k for k in extra if k.endswith("continuous")]):
                 prow[k] = extra[k] if prow["case"] == "optimum" else ""
+            if prow["case"] == "optimum_robust":  # its cost against the optimum's, in seed spreads
+                sp, j0 = float(wrow["seed_spread"]), prow.get("J_optimum_same_ensemble")
+                prow["seed_spread"] = sp
+                if prow.get("robust_found") and sp > 0 and j0:
+                    prow["delta_J_in_seed_spreads"] = prow["delta_J"] / (sp * j0)
         t12_failed = [(r["q_transition_s"], r["seed_spread"]) for r in grid_rows
                       if not r["t12_ok"]]
         lo, hi = inp.study.FT.bounds.q_transition_s
@@ -452,6 +482,10 @@ def assemble(
                                                           "p95_excursion_m", "mean_energy_kJ",
                                                           "worst_sink_ms", "worst_stall_margin",
                                                           "n_flags"]),
+            *(["", "`AIRSPEED_MIN` against the C_L,max scale (reporting only, no search):", "",
+               md_table(tables["FT_robust"], ["airspeed_min_eas_ms", "cl_max_scale", "J",
+                                              "worst_stall_margin", "n_flags", "flags"])]
+              if tables.get("FT_robust") else []),
         ])  # fmt: skip
 
     rec_key = next((t for t in task_results if t.startswith("basics_rec:")), None)
@@ -541,6 +575,8 @@ def assemble(
         for n, res in b1_runs:
             errors += [f"B1 {n}: {e}" for e in res["errors"]]
         front, gap, sens_rows = tables["B1_front"], tables["B1_gap"], tables["B1_sens"]
+        for fr_row in front:
+            fr_row["reason"] = b1_reason(fr_row)
         unver = [f"{r['scenario']} {r['variant']} eps_x={r['eps_x_m']:g}" for r in front
                  if not r.get("replay_verified")]  # fmt: skip
         b1_parts = [
@@ -673,6 +709,7 @@ def assemble(
                   for n, t in {**task_results, **({ft_key: ft_task} if ft_key else {})}.items()
                   if t.get("notes")},
         "ft_grid": ft_grid_context,
+        "ft_scenarios": ft_scenarios_context(inp),
         "study": {a: getattr(inp.study, a).model_dump(mode="json")
                   for a in ("A", "D", "F", "E", "Q2", "C", "FT", "B1", "sensitivity")
                   if a in inp.study.analyses},
