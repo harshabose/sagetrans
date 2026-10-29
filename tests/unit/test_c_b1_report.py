@@ -483,3 +483,47 @@ def test_the_c_chapter_carries_seed_parameters_the_ridge_sentence_and_bound_reas
     assert "min(30, PTCH_LIM_MAX_DEG 20) = 20 deg" in c
     assert "T_bt_s = 1.20 s" in c and "T_bt_s = 2.10 s" in c  # the parameters are in the tooltip
     assert "a flat ridge, not a single optimum" in c
+
+
+# ---- B1a ----------------------------------------------------------------------------------
+def gap_rows():
+    base = {"c_source": "register parameters at q = 2", "b1_converged": True}
+    return [
+        {"scenario": "S-01", "variant": "attached", **base, "b1_replay_verified": False,
+         "c_energy_kJ": 16.0, "c_distance_m": 57.0},
+        {"scenario": "S-03", "variant": "c_envelope", **base, "b1_replay_verified": True,
+         "b1_late_command_ok": False, "c_energy_kJ": 35.7, "c_distance_m": 98.0,
+         "b1_energy_kJ": 22.9},
+        {"scenario": "S-03", "variant": "attached", **base, "b1_replay_verified": True,
+         "b1_late_command_ok": True, "c_energy_kJ": 35.7, "c_distance_m": 98.0,
+         "b1_energy_kJ": 25.5},
+        {"scenario": "S-05", "variant": "attached", **base, "b1_replay_verified": True,
+         "b1_late_command_ok": True, "c_energy_kJ": 9.4, "c_distance_m": 31.0, "b1_energy_kJ": 8.5},
+    ]
+
+
+def test_the_gap_tiles_show_attached_first_and_c_envelope_beside_it_with_its_warning():
+    from sagetrans.io.view.chapters import LATE_WARNING, gap_items
+
+    items = gap_items(gap_rows())
+    labels = [i.label for i in items]
+    below = [lab for lab in labels if lab.startswith("B1 below C")]
+    assert below == ["B1 below C (S-03, attached)", "B1 below C (S-05, attached)",
+                     "B1 below C (S-03, c_envelope)"]  # attached first, both scenarios
+    tile = {i.label: i for i in items}
+    assert tile["B1 below C (S-03, attached)"].value == "29 %" and not tile[
+        "B1 below C (S-03, attached)"].note
+    assert tile["B1 below C (S-03, c_envelope)"].value == "36 %"
+    assert tile["B1 below C (S-03, c_envelope)"].note == LATE_WARNING
+    assert labels[0] == "C energy (S-03, attached)"  # the energy tiles are the first row's
+    assert gap_items([]) == []
+
+
+def test_the_b1_chapter_quotes_the_attached_gap_first(tmp_path):
+    synthetic_run(tmp_path)
+    write_table(tmp_path, "B1_gap", gap_rows())
+    html = build_html(load(tmp_path))
+    b1 = section(html, "b1")
+    assert b1.index("B1 below C (S-03, attached)") < b1.index("B1 below C (S-03, c_envelope)")
+    assert "verified for exact timing only: fails with commands 10 ms late" in b1
+    assert "the B1-C gap quoted (S-03, c_envelope) comes from a schedule that fails" in b1

@@ -1331,35 +1331,47 @@ def build_c(c: Ctx) -> Out:
 
 
 # ------------------------------------------------------------------------------------------ B1
+LATE_WARNING = "verified for exact timing only: fails with commands 10 ms late"
+VARIANT_ORDER = ("attached", "c_envelope")
+
+
+def gap_items(gap: Sequence[Row]) -> list[Item]:
+    """The tiles of the B1-C gap: the `attached` figures first (every verified scenario), then
+    `c_envelope` beside them with its warning when its schedule fails a late command.
+
+    Read from the existing `B1_gap` rows; the energy tiles are those of the first verified row.
+    """
+    order = {v: n for n, v in enumerate(VARIANT_ORDER)}
+    rows = [(i, r) for i, r in enumerate(gap) if r.get("b1_replay_verified") is True
+            and ok(num(r.get("b1_energy_kJ"))) and ok(num(r.get("c_energy_kJ")))]  # fmt: skip
+    rows.sort(key=lambda ir: (order.get(str(ir[1].get("variant")), 9), ir[0]))
+    items: list[Item] = []
+    for n, (gi, r) in enumerate(rows):
+        c_e, b_e = num(r["c_energy_kJ"]), num(r["b1_energy_kJ"])
+        warn = LATE_WARNING if r.get("b1_late_command_ok") is False else ""
+        if n == 0:
+            for lab, col in (("C energy", "c_energy_kJ"), ("B1 energy", "b1_energy_kJ")):
+                items.append(Item(f"{lab} ({r['scenario']}, {r['variant']})",
+                                  f"{num(r[col]):.2f}", "kJ", f"B1_gap.{col}[{gi}]"))
+        if c_e:
+            items.append(Item(
+                f"B1 below C ({r['scenario']}, {r['variant']})", f"{(1 - b_e / c_e) * 100:.0f} %",
+                "", f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
+                f"1 - {b_e:.2f}/{c_e:.2f}", warn))  # fmt: skip
+    return items
+
+
 def build_b1(c: Ctx) -> Out:
     o = Out()
     front, gap = c.rows("B1_front"), c.rows("B1_gap")
     if gap:
-        gi = next(
-            (
-                i
-                for i, r in enumerate(gap)
-                if r.get("variant") == "c_envelope" and r.get("b1_replay_verified") is True
-            ),
-            None,
-        )
-        if gi is None:
-            gi = next((i for i, r in enumerate(gap) if r.get("b1_replay_verified") is True), None)
-        if gi is not None:
-            r = gap[gi]
-            cE, bE = num(r.get("c_energy_kJ")), num(r.get("b1_energy_kJ"))
-            for lab, col in (("C energy", "c_energy_kJ"), ("B1 energy", "b1_energy_kJ")):
-                it = c.item(f"{lab} ({r['scenario']}, {r['variant']})", "B1_gap", col, gi)
-                if it:
-                    o.items.append(it)
-            if ok(cE) and ok(bE) and cE:
-                o.items.append(Item("B1 below C", f"{(1 - bE / cE) * 100:.0f} %", "",
-                                    f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
-                                    f"1 - {bE:.2f}/{cE:.2f}"))  # fmt: skip
-            if r.get("b1_late_command_ok") is False:
-                o.flags.append(
-                    f"the B1-C gap quoted ({r['scenario']}, {r['variant']}) comes from a schedule "
-                    "that fails when its commands are 10 ms late")
+        o.items += gap_items(gap)
+        # the quoted gap can come from a schedule that does not survive a late command: say so
+        late = [r for r in gap if r.get("b1_replay_verified") is True
+                and r.get("b1_late_command_ok") is False]  # fmt: skip
+        for r in late:
+            o.flags.append(f"the B1-C gap quoted ({r['scenario']}, {r['variant']}) comes from a "
+                           "schedule that fails when its commands are 10 ms late")
     if front:
         bi = c.extreme("B1_front", "energy_kJ", min, lambda r: r.get("replay_verified") is True)
         if bi is not None:
