@@ -962,6 +962,42 @@ def build_c_histories(c: Ctx, o: Out) -> None:
             "c_hist_default", series, band, entry))
 
 
+def sensitivity_figure(sens: Sequence[Row], js0: float) -> str:
+    """C's one-at-a-time sensitivity as two dots per row: how many members fail (by type), and the
+    change of J without the failure penalty. The percent change of the full J is dominated by the
+    penalty (rotor lag 0.5 gives +7500 %), so it hides the smooth part. A row where members fail
+    is marked with an x."""
+    fails, smooth = [], []
+    for r in sens:
+        js = num(r.get("J_smooth"))
+        if not ok(js):
+            continue
+        n_os, n_sink = num(r.get("n_overshoot")), num(r.get("n_sinking"))
+        n_other = num(r.get("n_other_flags"))
+        n_mem = num(r.get("n_failing_members"))
+        n_mem = n_mem if ok(n_mem) else 0.0
+        label = f"{'x ' if n_mem else ''}{r['parameter']} = {r['value']}"
+        parts = ", ".join(f"{k} {v:g}" for k, v in (("overshoot", n_os), ("sinking", n_sink),
+                                                   ("other", n_other)) if ok(v) and v)
+        fails.append((label, n_mem, f"{n_mem:g} failing member(s)" + (f": {parts}" if parts else ""),
+                      "s1" if n_mem else "ref"))
+        smooth.append((label, (js / js0 - 1) * 100,
+                       f"J without the penalty = {js:.3f}; change = ({js:.3f} / {js0:.3f} - 1) x 100",
+                       "s1"))
+    body = ch.multiples(
+        [("Members that fail (by type in the tooltip)",
+          ch.dot_chart(fails, "failing members of the ensemble", "C sensitivity: failing members")),
+         ("Change of J without the failure penalty",
+          ch.dot_chart(smooth, "change of J without the penalty [%]", "C sensitivity: smooth J"))],
+        1)
+    return panelbox(
+        "One-at-a-time sensitivity",
+        "One setting changes at a time. The change of the full J is dominated by the failure "
+        "penalty, so the figure shows the failures and the smooth part of J apart; x marks a row "
+        "where members fail (the tooltip has the expressions).",
+        body, _legend(("s1", "dot", "a member fails"), ("ref", "dot", "no member fails")))
+
+
 def spread_statement(mine: Sequence[Row], opt_row: Row) -> str:
     """What the overshoot strip shows, computed: the range, and whether any member stops short.
 
@@ -1229,7 +1265,10 @@ def build_c(c: Ctx) -> Out:
     # 5. sensitivity
     sens = c.rows("C_sens")
     j0 = num(params[opt].get("J"))
-    if sens and ok(j0) and j0 != 0:
+    js0 = num(params[opt].get("J_smooth"))
+    if sens and ok(js0) and js0 != 0 and any("J_smooth" in r for r in sens):
+        o.figures.append(sensitivity_figure(sens, js0))
+    elif sens and ok(j0) and j0 != 0:  # results from before the failure counts were written
         items = [(f"{r['parameter']} = {r['value']}", (r["J"] / j0 - 1) * 100,
                   f"J = {r['J']:.3f}; change = ({r['J']:.3f} / {j0:.3f} - 1) x 100", "s1")
                  for r in sens if ok(num(r.get("J")))]  # fmt: skip

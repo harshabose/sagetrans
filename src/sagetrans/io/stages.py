@@ -850,8 +850,31 @@ def worst_end_sink(results: list[restricted.CRun]) -> float:
     return max(sinks) if sinks else math.nan
 
 
+def failure_counts(results: list[restricted.CRun]) -> dict[str, float]:
+    """Members with a failure and failures by type, every key always present (zeros filled).
+
+    `n_overshoot` and `n_sinking` count the C-specific failures, `n_not_stopped` the runs that did
+    not stop; `n_other_flags` (from `summarise_c`) is everything that is neither overshoot nor
+    sinking and so includes `n_not_stopped`.
+    """
+    fails = [r.metrics.failures for r in results]
+    return {
+        "n_failing_members": float(sum(1 for f in fails if f)),
+        "n_not_stopped": float(sum("not_stopped" in f for f in fails)),
+        "n_fail_total": float(sum(len(f) for f in fails)),
+    }
+
+
+def smooth_cost(j: float, n_fail_total: float, w: CostWeights) -> float:
+    """J without the failure penalty: the part of (10.1) that moves smoothly with the setting."""
+    return j - w.penalty * n_fail_total
+
+
 def _c_row(label: str, results: list[restricted.CRun], w: CostWeights) -> dict[str, Any]:
-    return {"case": label, **{k: _num(v) for k, v in restricted.summarise_c(results, w).items()},
+    s = restricted.summarise_c(results, w)
+    cnt = failure_counts(results)
+    return {"case": label, **{k: _num(v) for k, v in s.items()}, **cnt,
+            "J_smooth": _num(smooth_cost(s["J"], cnt["n_fail_total"], w)),
             "max_end_sink_ms": _num(worst_end_sink(results))}  # fmt: skip
 
 
@@ -1103,13 +1126,17 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     for prow in params:
         sink_w = worst_end_sink(by_case[prow["case"]])
         prow.update(margin_cols(c, prow.get("max_overshoot_m"), sink_w))
+        cnt = failure_counts(by_case[prow["case"]])
+        prow.update(cnt)
+        prow["J_smooth"] = _num(smooth_cost(float(prow["J"]), cnt["n_fail_total"], w))
     mrow = pick_margin_row(q_fine, c)
     if mrow is not None:
         prm_m = {**best, "q": mrow["q"]}
         params.append({
             "case": "optimum_margin", **deg(prm_m), "J": mrow["J"], "J_start": "",
             "seed_spread": "", "at_bound": "",
-            **{k: v for k, v in mrow.items() if k not in ("case", "J", "q", "grid")},
+            **{k: v for k, v in mrow.items()
+               if k not in ("case", "J", "q", "grid", "max_end_sink_ms")},
             **margin_cols(c, mrow["max_overshoot_m"], mrow["max_end_sink_ms"]),
         })  # fmt: skip
 

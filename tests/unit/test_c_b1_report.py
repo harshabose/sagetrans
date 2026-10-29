@@ -344,3 +344,59 @@ def test_the_c_chapter_strips_carry_the_default_members_and_the_tolerances(tmp_p
     assert "tolerance 2" in c and "tolerance 1.76" in c
     assert "member of the ArduPilot default" in c
     assert "No member of the optimum stops short" in c
+
+
+# ---- C4 ---------------------------------------------------------------------------------------
+class FakeRun:
+    def __init__(self, failures, stopped=True, vh_end=0.1, overshoot=0.5):
+        self.metrics = type("M", (), {"failures": tuple(failures)})()
+        self.stopped, self.vh_end, self.overshoot = stopped, vh_end, overshoot
+
+
+def test_failure_counts_are_complete_and_the_smooth_cost_drops_the_penalty():
+    runs = [FakeRun([]), FakeRun(["overshoot"]), FakeRun(["sinking"]),
+            FakeRun(["sinking", "overshoot"]), FakeRun(["not_stopped"], stopped=False)]
+    cnt = stages.failure_counts(runs)
+    assert cnt == {"n_failing_members": 4.0, "n_not_stopped": 1.0, "n_fail_total": 5.0}
+    assert stages.failure_counts([FakeRun([])]) == {  # a clean case still has every key, zeros
+        "n_failing_members": 0.0, "n_not_stopped": 0.0, "n_fail_total": 0.0}
+    w = type("W", (), {"penalty": 10.0})()
+    assert stages.smooth_cost(61.5, 5.0, w) == 61.5 - 50.0
+    assert stages.smooth_cost(1.48, 0.0, w) == 1.48
+
+
+def sens_rows():
+    base = {"n_overshoot": 0.0, "n_sinking": 0.0, "n_other_flags": 0.0, "n_failing_members": 0.0}
+    return [
+        {"parameter": "rotor_lag_s", "value": 0.25, **base, "J": 1.48, "J_smooth": 1.48},
+        {"parameter": "rotor_lag_s", "value": 0.5, **base, "J": 111.0, "J_smooth": 1.6,
+         "n_sinking": 11.0, "n_failing_members": 11.0},
+        {"parameter": "z_acc_p", "value": 0.015, **base, "J": 61.0, "J_smooth": 1.5,
+         "n_sinking": 6.0, "n_failing_members": 6.0},
+    ]
+
+
+def test_the_sensitivity_shows_the_failing_members_apart_from_the_smooth_change(tmp_path):
+    c2_run(tmp_path)
+    rows = sens_rows()
+    write_table(tmp_path, "C_sens", rows)
+    params = list(csv.DictReader((tmp_path / "C_params.csv").open(encoding="utf-8")))
+    for r in params:
+        r["J_smooth"] = "1.48"
+    write_table(tmp_path, "C_params", params)
+    c = section(build_html(load(tmp_path)), "c")
+    assert "Members that fail" in c and "Change of J without the failure penalty" in c
+    assert "x rotor_lag_s = 0.5" in c and "x z_acc_p = 0.015" in c  # the failing rows are marked
+    assert "x rotor_lag_s = 0.25" not in c
+    assert "11 failing member(s): sinking 11" in c and "6 failing member(s): sinking 6" in c
+    assert "(1.600 / 1.480 - 1) x 100" in c  # the expression stays in the tooltip
+    assert "+7500" not in c  # the penalty no longer sets the scale
+    # an older results folder (no J_smooth) still gets the single chart
+    for r in rows:
+        r.pop("J_smooth")
+    write_table(tmp_path, "C_sens", rows)
+    for r in params:
+        r.pop("J_smooth")
+    write_table(tmp_path, "C_params", params)
+    old = section(build_html(load(tmp_path)), "c")
+    assert "Members that fail" not in old and "One-at-a-time sensitivity" in old
