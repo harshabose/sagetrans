@@ -89,7 +89,7 @@ Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX
 
 FT:                        # forward transition from hover (docs/FT_spec.md)
   # Start: mission.profile.clearance_agl_m above the site; limits mission.profile.fwd_alt_loss_max_m / fwd_alt_gain_max_m.
-  ensemble_n: 16           # the first 16 points of C's Sobol sample (same seed), so the members compare. FT_spec 6.5: one FT evaluation of 32 runs took 14.2 s against C's 4.1 s (3.5x, limit 2x), so n is halved
+  ensemble_n: 16           # the first 16 points of D's Sobol sample (D.recommendation, seed 8; the headwind axis is FT.headwind_ms, the altitude is shifted up by the clearance). C uses a Latin hypercube (seed 8), so FT's members are not C's. FT_spec 6.5: one FT evaluation of 32 runs took 14.2 s against C's 4.1 s (3.5x, limit 2x), so n is halved
   final_ensemble_n: 32     # the optimum, the register start and the ArduPilot default are reported on the first 32 points (the search uses ensemble_n)
   ensemble_seed: 8
   headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed

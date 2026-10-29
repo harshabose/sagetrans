@@ -230,7 +230,7 @@ def steady_trim(
         L, D = forces(alpha)
         return L + (D + w_n * math.sin(gamma)) * math.tan(alpha) - w_n * math.cos(gamma)
 
-    lo, hi = -0.1, vp.wing.alpha_s - iw
+    lo, hi = -0.1, aero.alpha_at_cl_max(vp.wing) - iw
     if resid(lo) * resid(hi) > 0.0:
         raise ValueError(f"no steady trim at V = {V:.2f} m/s (wing cannot carry the weight)")
     alpha = float(brentq(resid, lo, hi, xtol=1e-13, rtol=1e-14))
@@ -253,7 +253,7 @@ def glide_trim(vp: VehicleParams, rho: float, V: float, soc: float, v1: float = 
         L = float(aero.forces(rho, V, alpha + iw, vp.wing)[0])
         return L - w_n * math.cos(gam(alpha))
 
-    lo, hi = -0.1, vp.wing.alpha_s - iw
+    lo, hi = -0.1, aero.alpha_at_cl_max(vp.wing) - iw
     if resid(lo) * resid(hi) > 0.0:
         raise ValueError(f"no glide trim at V = {V:.2f} m/s")
     alpha = float(brentq(resid, lo, hi, xtol=1e-13, rtol=1e-14))

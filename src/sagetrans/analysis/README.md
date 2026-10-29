@@ -722,8 +722,8 @@ with the source facts in `docs/ardupilot_open_questions.md` (O-14 to O-22).
   on), `stall`, `alt_loss`, `alt_gain` (beyond `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`,
   both `assumed`), `proj_loss` (the projected minimum altitude from the end-of-fade state and the recovery
   acceleration), `underspeed`, `battery_cutoff`, `touchdown`.
-* **Search and tables.** CMA-ES over four variables, bounds in `study.yaml` `FT.bounds`, the same Sobol
-  ensemble as C shifted to the transition altitude (`FT.ensemble_n` 16: one evaluation of 32 runs cost 3.5
+* **Search and tables.** CMA-ES over four variables, bounds in `study.yaml` `FT.bounds`, the first members of D's Sobol sample (same seed; C draws a Latin
+  hypercube, so these are not C's members) shifted to the transition altitude (`FT.ensemble_n` 16: one evaluation of 32 runs cost 3.5
   times C's, over the spec's 2 times). `FT_params` (the optimum, the register start and, with a defaults
   file, the `ardupilot_default` case), `FT_search`, `FT_runs`, `FT_scan` (cost with `AIRSPEED_MIN` fixed on
   a grid), `FT_sens`, `FT_history`.

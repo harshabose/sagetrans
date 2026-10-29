@@ -67,6 +67,11 @@ def tas(eas: float, scen: Scenario) -> float:
     return eas * math.sqrt(RHO0 / scen.rho)
 
 
+def first_set(value: Any, default: Any) -> Any:
+    """`value` unless it is None: a 0 or an empty string is a setting, not an absent one."""
+    return default if value is None else value
+
+
 def _num(x: float) -> float | str:
     """A table cell: the number, or empty if it is not finite (no NaN or inf in written files)."""
     return float(x) + 0.0 if math.isfinite(x) else ""  # + 0.0: no "-0.0" in the files
@@ -1700,7 +1705,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     cev, c_base, w = c_settings(inp)
     base = exit_params(inp, rotor_lag_s=c.rotor_lag_s)  # the entry state reads theta_fw0, delta_min
     v_air = braking.entry_airspeed(inp.airspeed_min, scen.rho, d.entry_convention)
-    end_band = b.end_vh_band_ms or c.sink_tol_ms
+    end_band = first_set(b.end_vh_band_ms, c.sink_tol_ms)
     lim, alpha_hi = alpha_limits(inp)
     errors: list[str] = []
     out: dict[str, Any] = {
@@ -1721,7 +1726,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     def options(v: Any, band: float, theta_deg: float | None = None) -> coll.CollocationOptions:
         kw: dict[str, Any] = {
             "n": b.intervals, "max_iter": b.max_iter, "vh_band": band,
-            "theta_cmd_max": math.radians(theta_deg or b1_ceiling_deg(inp, v)),
+            "theta_cmd_max": math.radians(first_set(theta_deg, b1_ceiling_deg(inp, v))),
         }  # fmt: skip
         if v.alpha_max_deg is not None:
             kw["alpha_max"] = math.radians(v.alpha_max_deg)
@@ -1796,8 +1801,8 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         v: Any, eh: float, ex: float, *, rs: str | None = None, band: float | None = None,
         theta_deg: float | None = None,
     ) -> tuple[dict[str, Any], Table, coll.B1Solution | None]:  # fmt: skip
-        rs, band = rs or c.rotor_start, band or end_band
-        theta = theta_deg or b1_ceiling_deg(inp, v)
+        rs, band = first_set(rs, c.rotor_start), first_set(band, end_band)
+        theta = first_set(theta_deg, b1_ceiling_deg(inp, v))
         t0 = time.time()
         progress.phase(f"B1 {scen_name}: solving {v.name} eps_h={eh:g} eps_x={ex:g}")
         prob = problem(options(v, band, theta), rs)

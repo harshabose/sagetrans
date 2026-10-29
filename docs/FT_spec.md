@@ -152,7 +152,7 @@ analyses: [A, D, F, E, Q2, FT, C, B1, sensitivity]     # FT added after Q2
 
 FT:                        # forward transition from hover (docs/FT_spec.md)
   # Start: mission.profile.clearance_agl_m above the site; limits mission.profile.fwd_alt_loss_max_m / fwd_alt_gain_max_m.
-  ensemble_n: 32           # same Sobol sample (seed) as C, so the members compare
+  ensemble_n: 32           # the first points of D's Sobol sample (same seed); C draws a Latin hypercube, so the members are not C's (corrected 2026-10-29)
   ensemble_seed: 8
   headwind_ms: [0.0, 5.0]  # the aircraft turns into the wind before the transition; a tail wind would start with a negative airspeed
   popsize: 8               # of every FT search; the seeds and iterations are under scan and grid

@@ -404,7 +404,8 @@ class FTCfg(_Strict):
     gain are `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`.
     """
 
-    # the search ensemble: the first points of C's Sobol sample (halved, spec 6.5)
+    # the search ensemble: the first points of D's Sobol sample (same seed; C uses a Latin
+    # hypercube); halved, spec 6.5
     ensemble_n: int = Field(16, ge=1)
     # the final evaluation of the optimum, the register start and the ArduPilot default: the first
     # `final_ensemble_n` points of the same sample (a prefix, so the search members are among them)
