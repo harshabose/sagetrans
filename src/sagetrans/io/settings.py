@@ -271,6 +271,19 @@ class CCfg(_Strict):
     maxiter: int = Field(20, ge=1)
     rotor_lag_s: float = Field(0.25, ge=0.0)  # D's lumped actuator lag; C's own value
     rotor_start: Literal["idle", "carry"] = "idle"  # rotors at the AIRBRAKE exit (O-13, unverified)
+    # Hold the wing angle: |alpha_w| <= margin_alpha_frac x alpha_s (the study's one definition of
+    # the margin), by limiting the pitch command to the limit plus the flight-path angle above
+    # D.alpha_gate_ms. On, C is the "enforced" configuration and the headline; off, C ignores the
+    # stall (the model's lift falls from C_L,max 1.44 to about 0.5 within 4 deg), which is the
+    # reference only (docs/time_histories.md).
+    enforce_alpha: bool = False
+    # also run C without the cap (task `C:unconstrained`): "model ignores the stall; reference
+    # only; never a recommendation". Needs enforce_alpha.
+    unconstrained_reference: bool = False
+    # ASSUMED: more fractions of alpha_s, each a C search at that limit (tasks `C:alpha:<f>`), for
+    # the table of what the margin costs. Needs enforce_alpha; the headline fraction is not
+    # repeated.
+    alpha_curve_fracs: list[float] = []
     os_tol_m: float = Field(2.0, ge=0.0)  # overshoot past x_tgt that counts as a failure (PROPOSED)
     sink_tol_ms: float = Field(1.76, ge=0.0)  # end sink rate that counts as sinking (PROPOSED)
     weights: CWeightsCfg = CWeightsCfg()
@@ -285,6 +298,19 @@ class CCfg(_Strict):
     margin_frac: float = Field(0.75, gt=0.0, le=1.0)
     q_fine_offsets_ms2: list[float] = [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2]
     sens: CSensCfg = CSensCfg()
+
+    @model_validator(mode="after")
+    def _alpha_options(self) -> CCfg:
+        if any(not 0.0 < f <= 1.0 for f in self.alpha_curve_fracs):
+            raise ValueError("C.alpha_curve_fracs: every fraction of alpha_s in (0, 1]")
+        if len(set(self.alpha_curve_fracs)) != len(self.alpha_curve_fracs):
+            raise ValueError("C.alpha_curve_fracs has a fraction twice")
+        if (self.alpha_curve_fracs or self.unconstrained_reference) and not self.enforce_alpha:
+            raise ValueError(
+                "C.unconstrained_reference and C.alpha_curve_fracs compare with the enforced "
+                "configuration: set C.enforce_alpha"
+            )
+        return self
 
     @model_validator(mode="after")
     def _fine_grid(self) -> CCfg:
@@ -404,7 +430,8 @@ class FTCfg(_Strict):
     gain are `mission.profile.fwd_alt_loss_max_m` and `fwd_alt_gain_max_m`.
     """
 
-    # the search ensemble: the first points of C's Sobol sample (halved, spec 6.5)
+    # the search ensemble: the first points of D's Sobol sample (same seed; C uses a Latin
+    # hypercube); halved, spec 6.5
     ensemble_n: int = Field(16, ge=1)
     # the final evaluation of the optimum, the register start and the ArduPilot default: the first
     # `final_ensemble_n` points of the same sample (a prefix, so the search members are among them)
@@ -447,12 +474,17 @@ class B1VariantCfg(_Strict):
     alpha_max_deg: float | None = Field(None, gt=0.0)  # |alpha_w| <= this angle
     # pitch-command limit; None = the register's PTCH_LIM_MAX_DEG (what C's ramp can reach)
     theta_cmd_max_deg: float | None = Field(34.4, gt=0.0)
+    # true: the limit is the study's `margin_alpha_frac` x alpha_s (the one definition of the wing
+    # margin, shared with C); `alpha_margin` is then filled in from it when the study is loaded
+    margin: bool = False
 
     @model_validator(mode="after")
     def _one_limit(self) -> B1VariantCfg:
-        if (self.alpha_margin is None) == (self.alpha_max_deg is None):
+        given = [self.alpha_margin is not None, self.alpha_max_deg is not None, self.margin]
+        if sum(given) != 1:
             raise ValueError(
-                f"B1 variant '{self.name}': give exactly one of alpha_margin and alpha_max_deg"
+                f"B1 variant '{self.name}': give exactly one of alpha_margin, alpha_max_deg and "
+                "margin"
             )
         return self
 
@@ -498,6 +530,9 @@ class B1Cfg(_Strict):
     eps_h_m: list[float] = [1.0]  # headline altitude band (C holds about 0.5 to 1 m)
     eps_x_m: list[float] = [40.0, 50.0, 60.0, 75.0, 100.0, 300.0]  # distance caps: the front
     end_vh_band_ms: float | None = Field(None, gt=0.0)  # null = C.sink_tol_ms
+    # every variant ends in vertical force balance (docs/time_histories.md): without it the optimum
+    # ends falling at about 0.5 g, which understates the energy of every variant
+    end_balance: bool = False
     variants: list[B1VariantCfg] = Field(default_factory=_default_variants, min_length=1)
     band_sweep: B1BandSweepCfg = B1BandSweepCfg()
     sens: B1SensCfg = B1SensCfg()
@@ -545,6 +580,10 @@ class StudyCfg(_Strict):
     parallel: ParallelCfg = ParallelCfg()
     analyses: list[AnalysisName] = list(ALL_ANALYSES)  # type: ignore[arg-type]
     switch_test: Literal["ground", "air"] = "ground"
+    # The wing-angle margin, defined once: |alpha_w| <= margin_alpha_frac x alpha_s. C holds it when
+    # C.enforce_alpha is on and the B1 variant with `margin: true` flies it. ASSUMED, PROPOSED:
+    # alpha_s is a guess (no lift peak in the CFD up to 15 deg); the C_L peak is at 13.43 deg.
+    margin_alpha_frac: float = Field(0.7, gt=0.0, le=1.0)
     A: ACfg = ACfg()
     D: DCfg = DCfg()
     F: FCfg = FCfg()
@@ -554,6 +593,15 @@ class StudyCfg(_Strict):
     FT: FTCfg = FTCfg()
     B1: B1Cfg = B1Cfg()
     sensitivity: SensCfg = SensCfg()
+
+    @model_validator(mode="after")
+    def _margin_variants(self) -> StudyCfg:
+        """Fill in the limit of the B1 variants that follow `margin_alpha_frac` (one definition)."""
+        if any(v.margin for v in self.B1.variants):
+            variants = [v.model_copy(update={"alpha_margin": self.margin_alpha_frac})
+                        if v.margin else v for v in self.B1.variants]
+            object.__setattr__(self, "B1", self.B1.model_copy(update={"variants": variants}))
+        return self
 
     def result_relevant(self) -> dict[str, object]:
         """The settings that change numbers (everything except naming, mode and parallelism)."""

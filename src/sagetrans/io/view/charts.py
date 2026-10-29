@@ -60,6 +60,18 @@ def nice_ticks(lo: float, hi: float, n: int = 5) -> list[float]:
     return ticks
 
 
+def int_ticks(lo: float, hi: float, n: int = 5) -> list[float]:
+    """Whole-number ticks covering [lo, hi] (a count axis: 0.5 failing members does not exist)."""
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return [0.0, 1.0]
+    a, b = math.floor(lo + 1e-9), max(math.ceil(hi - 1e-9), math.floor(lo + 1e-9) + 1)
+    step = max(1, math.ceil((b - a) / max(n, 1)))
+    ticks = list(range(a, b + 1, step))
+    if ticks[-1] < b:
+        ticks.append(ticks[-1] + step)
+    return [float(v) for v in ticks]
+
+
 def tick_text(v: float) -> str:
     if abs(v) >= 1e6 or (v != 0 and abs(v) < 0.01):
         return f"{v:.3g}"
@@ -104,7 +116,8 @@ def limits(vals: Sequence[float], pad: float = 0.06, floor: float | None = None)
     if hi - lo < 1e-12:
         hi = lo + (abs(lo) * 0.1 or 1.0)
     span = hi - lo
-    return (lo - span * pad if floor is None else min(floor, lo)), hi + span * pad
+    low = lo - span * pad if floor is None or lo < floor else floor
+    return low, hi + span * pad
 
 
 def _fit(fr: Frame, xt: list[float], yt: list[float]) -> None:
@@ -221,17 +234,31 @@ def xy_chart(
                 out.append(marker(kind, fr.sx(x), fr.sy(y), s.cls,
                                   s.tips[i] if i < len(s.tips) else "",
                                   bool(s.hollow[i]) if i < len(s.hollow) else False))  # fmt: skip
-    placed: list[tuple[float, float, float, float]] = []  # label boxes already drawn
-    for s in series:
+    # Every marker is an obstacle for a label. The labels are placed one at a time, the series
+    # drawn last (the one on top, such as the optimum) first, so it keeps its preferred spot; a
+    # label that had to move far from its point gets a leader line.
+    placed: list[tuple[float, float, float, float]] = [
+        (fr.sx(x) - 7.0, fr.sy(y) - 7.0, fr.sx(x) + 7.0, fr.sy(y) + 7.0)
+        for s in series for k, (x, y) in enumerate(s.pts)
+        if math.isfinite(y) and (s.kinds[k] if k < len(s.kinds) else s.marker) != "none"
+    ]  # fmt: skip
+    for s in reversed(series):
         for i, lab in s.labels.items():
             px, py = fr.sx(s.pts[i][0]), fr.sy(s.pts[i][1])
             dx, dy = place_label(px, py, lab, s.label_pos.get(i, (8.0, -8.0)), placed)
+            if math.hypot(dx, dy) > LEADER_AFTER_PX:
+                out.append(el("line", "rule", x1=f1(px), y1=f1(py), x2=f1(px + dx), y2=f1(py + dy - 4)))
             out.append(text(px + dx, py + dy, lab, "dl", "end" if dx < 0 else "start"))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
 
 
-LABEL_ALTERNATES = ((-9.0, 17.0), (9.0, 17.0), (9.0, -8.0), (-9.0, -8.0), (-9.0, 31.0),
-                    (9.0, 31.0), (-9.0, -22.0), (9.0, -22.0), (-9.0, 45.0), (9.0, 45.0))
+LEADER_AFTER_PX = 26.0  # a label further than this from its point is joined to it by a line
+LABEL_ALTERNATES = (
+    (-9.0, 17.0), (9.0, 17.0), (9.0, -8.0), (-9.0, -8.0), (-9.0, 31.0), (9.0, 31.0), (-9.0, -22.0),
+    (9.0, -22.0), (-9.0, 45.0), (9.0, 45.0), (-9.0, -36.0), (9.0, -36.0), (-9.0, 59.0),
+    (9.0, 59.0), (-9.0, -50.0), (9.0, -50.0), (-30.0, 73.0), (30.0, 73.0), (-30.0, -64.0),
+    (30.0, -64.0), (-50.0, 87.0), (50.0, 87.0), (-50.0, -78.0), (50.0, -78.0),
+)
 
 
 def place_label(px: float, py: float, lab: str, pref: tuple[float, float],
@@ -483,13 +510,14 @@ def symlog(v: float, lin: float) -> float:
 
 def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str, w: float = 720,
               zero: bool = True, refs: Sequence[tuple[float, str] | None] | None = None,
-              sym: float | None = None) -> str:  # fmt: skip
+              sym: float | None = None, integer: bool = False) -> str:  # fmt: skip
     """A dot per row against one axis, with a zero rule: (label, value, tip, cls).
 
     `refs[i]` is an optional reference for row i, (value, tip), drawn as a hollow grey diamond on
     the row's line (e.g. the nominal value the row's setting departs from); the axis includes it.
     `sym` puts the axis on a symmetric log scale, linear within `sym` of zero, with ticks at 0 and
-    at +-`sym` times a power of ten, labelled in the data's units.
+    at +-`sym` times a power of ten, labelled in the data's units. `integer` puts whole-number
+    ticks only (a count).
     """
     rh, pr, pt, pb = 26.0, 24.0, 12.0, 44.0
     pl = max(210.0, 6.4 * max((len(i[0]) for i in items), default=0) + 24.0)
@@ -500,10 +528,14 @@ def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
 
     vals = [tf(v) for _, v, _, _ in items if math.isfinite(v)] + ([0.0] if zero else [])
     vals += [tf(r[0]) for r in (refs or []) if r is not None and math.isfinite(r[0])]
-    fr = Frame(w, h, limits(vals, 0.08), (0, 1), pl=pl, pr=pr, pt=pt, pb=pb)
+    xlim = limits(vals, 0.08)
+    if integer:  # a count: from zero (or the least value) to at least one, no padding below zero
+        finite = [v for v in vals if math.isfinite(v)] or [0.0]
+        xlim = (min(0.0, min(finite)), max(1.0, max(finite)))
+    fr = Frame(w, h, xlim, (0, 1), pl=pl, pr=pr, pt=pt, pb=pb)
     lab_of: Callable[[float], str] = tick_text
     if sym is None:
-        xt = nice_ticks(*fr.xlim)
+        xt = int_ticks(*fr.xlim) if integer else nice_ticks(*fr.xlim)
         _fit(fr, xt, [0, 1])
     else:
         top = max(abs(fr.xlim[0]), abs(fr.xlim[1]))
@@ -537,8 +569,10 @@ def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
 
 
 def bar_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str, w: float = 720,
-              waterfall: bool = False) -> str:  # fmt: skip
-    """Horizontal bars (label, value, tip, cls); a waterfall chains each bar to the last."""
+              waterfall: bool = False, hatched: Sequence[int] = ()) -> str:  # fmt: skip
+    """Horizontal bars (label, value, tip, cls); a waterfall chains each bar to the last.
+
+    The bars at the indices in `hatched` are drawn hatched, a reference that is not a result."""
     rh, pl, pr, pt, pb = 26.0, 190.0, 70.0, 8.0, 40.0
     h = pt + pb + rh * len(items)
     spans, run = [], 0.0
@@ -559,9 +593,14 @@ def bar_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
         y = pt + rh * i + 4
         x0, x1 = fr.sx(min(a, b)), fr.sx(max(a, b))
         out.append(text(pl - 10, y + 13, label, "dl", "end"))
-        out.append(el("rect", f"bar {cls}", x=f1(x0), y=f1(y), width=f1(max(x1 - x0, 1.5)),
-                      height=16, rx=3, tabindex=0, data_tip=tip))  # fmt: skip
+        out.append(el("rect", f"bar {cls}{' hatched' if i in hatched else ''}", x=f1(x0),
+                      y=f1(y), width=f1(max(x1 - x0, 1.5)), height=16, rx=3, tabindex=0,
+                      data_tip=tip))  # fmt: skip
         out.append(text(x1 + 6, y + 13, f"{v:.1f}", "dl"))
+    if hatched:
+        out.insert(0, '<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" '
+                      'patternTransform="rotate(45)"><rect width="6" height="6" class="hatchbg"/>'
+                      '<line x1="0" y1="0" x2="0" y2="6" class="hatchln"/></pattern></defs>')
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
 
 

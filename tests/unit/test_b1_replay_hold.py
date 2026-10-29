@@ -133,3 +133,30 @@ def test_the_replay_reads_the_middle_of_the_step_by_default_and_the_start_on_req
     coll.replay(prob, sol)
     coll.replay(prob, sol, "start")
     assert leads == [pytest.approx(0.5 * DT_DEFAULT), 0.0]
+
+
+# ---- end_balance: the last node is in vertical force balance --------------------------------
+def test_end_balance_removes_the_final_fall_and_is_off_by_default():
+    """S-01, 60 m cap, 20 deg ceiling, 20 intervals. Without it the last node falls at about 0.6 g
+    (the throttle and pitch dump energy); with it the vertical acceleration there is zero."""
+    import casadi as ca
+
+    assert coll.CollocationOptions().end_balance is False
+    inp = load_inputs(ROOT / "configs", only={"B1"})
+    c, d, vp = inp.study.C, inp.study.D, inp.vehicle
+    scen = inp.scenarios["S-01"]
+    base = stages.exit_params(inp, rotor_lag_s=c.rotor_lag_s)
+    v_air = braking.entry_airspeed(inp.airspeed_min, scen.rho, d.entry_convention)
+    acc = {}
+    for on in (False, True):
+        opt = coll.CollocationOptions(n=20, theta_cmd_max=math.radians(20.0),
+                                      alpha_max=math.radians(30.0), end_balance=on)
+        prob = coll.make_problem_exit(vp, scen, base, v_air, opt, inp.controller_overrides,
+                                      inp.theta_p, c.rotor_start)
+        guess = coll.baseline_guess(prob, math.radians(20.0), 3.0)
+        sol = coll.solve_verified(prob, 1.0, 60.0, "energy", guesses=[guess], ns=(20,)).sol
+        assert sol.ok
+        u = [sol.u[-1, 0], 0.0, sol.u[-1, 1]]
+        acc[on] = float(prob.vehicle.f(sol.x[-1], u, ca.DM(prob.params))[0][3])
+    assert acc[False] < -2.0  # the unbalanced end: falling
+    assert abs(acc[True]) < 0.05  # the balanced end: ready to hover

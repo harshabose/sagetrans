@@ -864,6 +864,7 @@ C_HIST_STYLE = {  # case -> (class, dashed, thick)
     "C ardupilot_default": ("ref", True, False),
     "B1 attached": ("s2", False, False),
     "B1 c_envelope": ("s3", False, False),
+    "C unconstrained (reference)": ("ink", True, False),
 }
 
 
@@ -916,6 +917,9 @@ def build_c_histories(c: Ctx, o: Out) -> None:
     band = band_vals[0] if band_vals else None
 
     series, (_, name) = select_history(hist, b1h, "core", headline)
+    ref_h = [r for r in c.rows("C_ref_history") if r.get("scenario") == name]
+    if series and ref_h:
+        series["C unconstrained (reference)"] = ref_h
     if series and name is not None:
         first = next(rows[0] for case, rows in series.items() if case.startswith("C"))
         entry = {case: num(first.get("V0_tas_ms")) for case in series}
@@ -940,7 +944,9 @@ def build_c_histories(c: Ctx, o: Out) -> None:
             f"Same scenario as B1 ({name})",
             f"Scenario {name}: {scenario_caption(first)}. C's optimum and the ArduPilot default "
             "run on the scenario that B1's headline replay uses; each curve ends with a marker "
-            f"where the run stopped.{note}",
+            + ("where the run stopped. The dashed curve is C without the wing-angle cap (the "
+               "model ignores the stall; reference only)." if ref_h else "where the run stopped.")
+            + note,
             "c_hist_core", series, band, entry))
     series, (_, mem) = select_history(hist, [], "default_fails")
     if series and mem is not None:
@@ -1032,7 +1038,8 @@ def sensitivity_figure(sens: Sequence[Row], js0: float) -> str:
                        "s1"))
     body = ch.multiples(
         [("Members that fail (by type in the tooltip)",
-          ch.dot_chart(fails, "failing members of the ensemble", "C sensitivity: failing members")),
+          ch.dot_chart(fails, "failing members of the ensemble", "C sensitivity: failing members",
+                       integer=True)),
          ("Change of J without the failure penalty",
           ch.dot_chart(smooth, "change of J without the penalty [%]", "C sensitivity: smooth J"))],
         1)
@@ -1070,7 +1077,35 @@ def spread_statement(mine: Sequence[Row], opt_row: Row) -> str:
     return head + cause
 
 
-def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str | None:
+def flat_tail_statement(curve: Sequence[Row], runs: Sequence[Row]) -> str:
+    """Why the curves go flat at high q, computed from the rows: past the capability of the pitch
+    ramp the run no longer depends on q (the pitch sits at its ceiling), so the energy, the
+    distance and the end sink repeat; only the overshoot, which is read against v^2 / (2 q), grows.
+    Empty when no two of the highest-q rows repeat."""
+    rs = sorted((r for r in curve if (r.get("grid") or "coarse") == "coarse"
+                 and ok(num(r.get("q"))) and ok(num(r.get("p95_distance_m")))
+                 and ok(num(r.get("max_end_sink_ms")))), key=lambda r: num(r["q"]))  # fmt: skip
+    flat: list[Row] = []
+    for r in reversed(rs):
+        if flat and (abs(num(r["p95_distance_m"]) - num(flat[0]["p95_distance_m"])) > 1e-6
+                     or abs(num(r["max_end_sink_ms"]) - num(flat[0]["max_end_sink_ms"])) > 1e-6):
+            break
+        flat.append(r)
+    if len(flat) < 2:
+        return ""
+    q_lo = num(flat[-1]["q"])
+    caps = [num(r.get("a_cap_ms2")) for r in runs if r.get("case", "optimum") == "optimum"
+            and ok(num(r.get("a_cap_ms2")))]  # fmt: skip
+    cap = (f" The pitch ramp can deliver {min(caps):.2f} m/s^2 for the weakest member and "
+           f"{max(caps):.2f} for the strongest (`a_cap_ms2`)." if caps else "")
+    return (f"From q = {q_lo:g} the energy, the distance and the end sink do not change with q "
+            f"({num(flat[0]['max_end_sink_ms']):.2f} m/s): the pitch is at its ceiling for the "
+            "whole run, so the run is the same whatever q is; only the overshoot, which is read "
+            "against the target v^2 / (2 q), keeps growing." + cap)
+
+
+def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int,
+                  runs: Sequence[Row] = ()) -> str | None:
     """Worst overshoot and worst end sink against q: the coarse curve, the fine grid, the optimum,
     the margin row and each tolerance as a line (two small charts, the sink one as important as
     the overshoot one). None if the curve has neither column."""
@@ -1101,7 +1136,7 @@ def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str 
         if series and ok(tol):
             panels.append((lab, ch.xy_chart(
                 series, "Q_TRANS_DECEL q [m/s^2]", ylab, f"{lab} against q", w=340, h=280,
-                hlines=[(tol, f"tolerance {tol:g} (PROPOSED)")])))
+                y_from_zero=True, hlines=[(tol, f"tolerance {tol:g} (PROPOSED)")])))
     if not panels:
         return None
     os_m, sk_m = num(params[opt].get("os_margin_m")), num(params[opt].get("sink_margin_ms"))
@@ -1109,12 +1144,129 @@ def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str 
                if ok(os_m) and ok(sk_m) else "")
     sentence = ("The optimum relies on the overshoot and end-sink tolerances, which are PROPOSED, "
                 "not on a measured limit." + margins)
+    flat = flat_tail_statement(curve, runs)
+    if flat:
+        sentence += " " + flat
     leg = _legend(("s1", "line", "coarse curve (hollow: a member fails)"), ("s1", "sq", "fine grid"),
                   ("s1", "dia", "optimum"), ("s3", "dia", "margin row (reported, not recommended)"))
     return panelbox(
         "Worst overshoot and worst end sink against q",
         "The optimum's other three values fixed; q varied. A hollow mark has a failing member.",
         ch.multiples(panels, 2) + f'<p class="cap">{ch.esc(sentence)}</p>', leg)
+
+
+CONFIG_COLS = ("Q_TRANS_DECEL_ms2", "T_bt_s", "theta_A_deg", "spin_min", "mean_energy_kJ",
+               "p95_distance_m", "p95_stop_time_s", "n_fail_total", "max_overshoot_m",
+               "max_end_sink_ms")
+EXPOSURE_COLS = ("stall_alpha_peak_deg_max", "stall_members_above_peak", "stall_t_above_peak_s_max",
+                 "stall_t_above_limit_s_max", "stall_wing_share_min")
+LIMIT_NOTE = ("the limit caps the pitch command, so the angle can sit about a degree above it; "
+              "the C_L peak is the stall")
+UNCONSTRAINED = ("unconstrained: the model ignores the stall; reference only; never a "
+                 "recommendation")
+
+
+def exposure_cells(r: Row) -> Row:
+    """The stall-exposure cells of a C_params row, with "k of n" for the members above the peak."""
+    k, n = num(r.get("stall_members_above_peak")), num(r.get("stall_members"))
+    return {**{c: r.get(c) for c in EXPOSURE_COLS},
+            "stall_members_above_peak": f"{k:g} of {n:g}" if ok(k) and ok(n) else ""}
+
+
+def configurations_figure(params: Sequence[Row], opt: int, ref: Sequence[Row]) -> str | None:
+    """The enforced headline and the unconstrained reference side by side, with a sentence of
+    ratios computed from the rows (energy, distance, stop time, time above the lift peak)."""
+    head = params[opt]
+    refo = next((r for r in ref if r.get("case") == "optimum"), None)
+    if refo is None or head.get("alpha_enforced") is not True:
+        return None
+    lim = num(head.get("alpha_limit_deg"))
+    rows = [
+        {"configuration": f"enforced, |alpha_w| <= {lim:.2f} deg (headline)",
+         **{c: head.get(c) for c in CONFIG_COLS}, **exposure_cells(head)},
+        {"configuration": UNCONSTRAINED, **{c: refo.get(c) for c in CONFIG_COLS},
+         **exposure_cells(refo)},
+    ]  # fmt: skip
+    sent = ""
+    e1, e2 = num(head.get("mean_energy_kJ")), num(refo.get("mean_energy_kJ"))
+    d1, d2 = num(head.get("p95_distance_m")), num(refo.get("p95_distance_m"))
+    t1, t2 = num(head.get("p95_stop_time_s")), num(refo.get("p95_stop_time_s"))
+    if all(ok(v) and v > 0 for v in (e1, e2, d1, d2, t1, t2)):
+        sent = (f"Holding the wing below the limit costs {e1 / e2:.2f} x the energy, "
+                f"{d1 / d2:.2f} x the stopping distance and {t1 / t2:.2f} x the stopping time of "
+                "the unconstrained search; q is "
+                f"{num(head.get('Q_TRANS_DECEL_ms2')):.2f} against "
+                f"{num(refo.get('Q_TRANS_DECEL_ms2')):.2f} m/s^2.")
+    cols = ["configuration", *CONFIG_COLS, *EXPOSURE_COLS]
+    return panelbox(
+        "The enforced configuration and the unconstrained reference",
+        "C twice: the wing held to the limit (the headline, written to the recommended settings) "
+        "and not held (the model's lift falls from its peak to about a third within a few "
+        "degrees, so the unconstrained optimum flies through the stall). The exposure columns "
+        "are the worst member (the least wing share is the lowest over members); they are not "
+        "penalised and not failure flags. " + sent,
+        table_html("C_configurations", cols, rows))
+
+
+def exposure_figure(params: Sequence[Row], ref: Sequence[Row]) -> str | None:
+    """Stall exposure of every case in both configurations (report only)."""
+    rows = []
+    for cfg, ps in (("enforced", params), ("unconstrained", ref)):
+        for r in ps:
+            if r.get("case") in ("optimum", "ardupilot_default") and ok(
+                    num(r.get("stall_alpha_peak_deg_max"))):
+                rows.append({"configuration": cfg, "case": r["case"], **exposure_cells(r)})
+    if not rows:
+        return None
+    return panelbox(
+        "Stall exposure",
+        "Per case, over the ensemble members, airspeed at least D.alpha_gate_ms and t > 0: the "
+        "peak |alpha_w|, how many members go above the C_L peak angle, the longest time above "
+        "the peak and above the limit, and the least wing share of the weight. " + LIMIT_NOTE
+        + ".",
+        table_html("C_stall_exposure", ["configuration", "case", *EXPOSURE_COLS], rows))
+
+
+def alpha_curve_figure(curve: Sequence[Row]) -> str | None:
+    """What the margin costs: one C search per wing limit, and the unconstrained one."""
+    if not curve:
+        return None
+    rows = []
+    for r in curve:
+        kind = str(r.get("kind", ""))
+        label = {"headline": "headline (margin_alpha_frac)", "unconstrained": UNCONSTRAINED,
+                 }.get(kind, "curve point")
+        rows.append({"limit": label, **r})
+    cols = ["limit", "alpha_frac", "limit_deg", "Q_TRANS_DECEL_ms2", "T_bt_s", "theta_A_deg",
+            "spin_min", "p95_distance_m", "p95_stop_time_s", "mean_energy_kJ", "n_fail_total",
+            "max_overshoot_m", "max_end_sink_ms"]
+    return panelbox(
+        "The price of the margin",
+        "One C search per wing limit (a fraction of alpha_s; the limit in degrees follows). "
+        "The distance and the stop time are 95th percentiles over the ensemble, the energy the "
+        "mean, the failures the total count.",
+        table_html("C_alpha_curve", cols, rows))
+
+
+def caveats_panel(p: Row) -> str:
+    """What the C result rests on, computed from the values the run used."""
+    bits = []
+    a_s, m_blend, clmax = num(p.get("alpha_s_deg")), num(p.get("blend_M")), num(p.get("cl_max"))
+    pk = num(p.get("alpha_peak_deg"))
+    if ok(a_s):
+        bits.append(
+            f"alpha_s = {a_s:.2f} deg is a placeholder (the CFD shows no lift peak up to 15 deg), "
+            + (f"and the blend sharpness M = {m_blend:g} 1/rad is a numerical parameter that also "
+               f"sets C_L,max ({clmax:.3f}, at alpha_w = {pk:.2f} deg)" if ok(m_blend) and ok(clmax)
+               and ok(pk) else "")
+            + ": the size of the stall effect, and so the enforced result, is provisional.")
+    if p.get("rotor_constant_coeffs") is True:
+        bits.append("The rotor model has constant thrust and torque coefficients and no in-plane "
+                    "force (CT1, CT2, CQ1, CQ2, CH1 and k_mu are zero in the register): thrust "
+                    "does not change with airspeed and the rotors add no drag in forward flight.")
+    if not bits:
+        return ""
+    return panelbox("What this result rests on", " ".join(bits), "")
 
 
 def build_c(c: Ctx) -> Out:
@@ -1178,6 +1330,29 @@ def build_c(c: Ctx) -> Out:
     bound = str(params[opt].get("at_bound") or "")
     if bound:
         o.flags.append("at a search bound: " + bound + bound_reason(params[opt], bound))
+    held = params[opt].get("alpha_enforced")
+    lim_deg = num(params[opt].get("alpha_limit_deg"))
+    if held is True and ok(lim_deg):
+        o.items.insert(0, Item("Configuration", f"enforced: |alpha_w| <= {lim_deg:.2f} deg", "",
+                               f"C_params.alpha_limit_deg[{opt}]"))
+    elif held is False:
+        o.items.insert(0, Item("Configuration", "unconstrained", "",
+                               f"C_params.alpha_enforced[{opt}]",
+                               note="the model ignores the stall"))
+        o.flags.append("C ignores the stall: " + UNCONSTRAINED)
+    for idx, tag in ((opt, "optimum"), (dfl, "ArduPilot default")):
+        if idx is None:
+            continue
+        for lab, col, unit in (
+            ("Peak |alpha_w|, worst member", "stall_alpha_peak_deg_max", "deg"),
+            ("Time above the C_L peak angle, worst member", "stall_t_above_peak_s_max", "s"),
+            ("Time above the wing limit, worst member", "stall_t_above_limit_s_max", "s"),
+            ("Least wing share of the weight", "stall_wing_share_min", ""),
+        ):
+            it = c.item(f"{lab} ({tag})", "C_params", col, idx, unit,
+                        note=LIMIT_NOTE if col == "stall_t_above_limit_s_max" else "")
+            if it:
+                o.items.append(it)
 
     # 1. energy against distance: C only (B1's points are single scenarios; its chapter has them)
     series, labels = [], []
@@ -1229,10 +1404,16 @@ def build_c(c: Ctx) -> Out:
     else:
         o.absent.append("not in this run: C_q_curve")
 
+    ref_params = c.rows("C_ref_params")
+    for fig in (caveats_panel(params[opt]), configurations_figure(params, opt, ref_params),
+                exposure_figure(params, ref_params), alpha_curve_figure(c.rows("C_alpha_curve"))):
+        if fig:
+            o.figures.append(fig)
+
     # 2. time histories
     build_c_histories(c, o)
 
-    mf = margin_figure(curve, params, opt)
+    mf = margin_figure(curve, params, opt, runs)
     if mf:
         o.figures.append(mf)
     # 3. convergence
@@ -1268,6 +1449,8 @@ def build_c(c: Ctx) -> Out:
             ("excursion_m", "excursion [m]"),
             ("end_sink_ms", "end sink [m/s]"),
             ("overshoot_m", "overshoot [m]"),
+            ("stall_t_above_peak_s", "time above the C_L peak [s]"),
+            ("stall_wing_share_min", "least wing share of the weight"),
         ]
         dmem = [r for r in runs if r.get("case") == "ardupilot_default"]
         rows: list[ch.Strip] = []
@@ -1326,13 +1509,26 @@ def build_c(c: Ctx) -> Out:
         ("C_sens", None),
         ("C_search", None),
         ("C_history", None),
+        ("C_alpha_curve", None),
+        ("C_ref_params", None),
+        ("C_ref_runs", None),
+        ("C_ref_history", None),
     ]
     return o
 
 
 # ------------------------------------------------------------------------------------------ B1
 LATE_WARNING = "verified for exact timing only: fails with commands 10 ms late"
-VARIANT_ORDER = ("attached", "c_envelope")
+VARIANT_ORDER = ("margin", "attached", "c_envelope")
+VARIANT_CLS = {"margin": "s4", "attached": "s2", "c_envelope": "s3"}  # colour follows the variant
+VARIANT_ROLE = {"margin": "flyable bound", "attached": "upper bound at the lift peak",
+                "c_envelope": "upper bound at the lift peak"}  # fmt: skip
+
+
+def variants_in_order(names: Sequence[Any]) -> list[Any]:
+    """The variants present, the flyable one first, any other (a config's own) after them."""
+    rank = {v: i for i, v in enumerate(VARIANT_ORDER)}
+    return sorted(uniq(list(names)), key=lambda v: rank.get(str(v), len(rank)))
 
 
 REASONS = ("verified", "not converged", "replay mismatch", "fails 10 ms late")
@@ -1376,13 +1572,13 @@ def verified_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
     panels, leg, fronts, with_points = [], {}, 0, 0
     for s in uniq([r["scenario"] for r in front]):
         series, most = [], 0
-        for v in uniq([r.get("variant") for r in front]):
+        for v in variants_in_order([r.get("variant") for r in front]):
             rs = sorted([r for r in front if r["scenario"] == s and r.get("variant") == v
                          and r.get("replay_verified") is True and ok(num(r.get("energy_kJ")))],
                         key=lambda r: num(r.get("distance_m")))  # fmt: skip
             most = max(most, len(rs))
             if rs:
-                cls = {"attached": "s2", "c_envelope": "s3"}.get(v, "ink")
+                cls = VARIANT_CLS.get(v, "ink")
                 series.append(ch.Series(
                     f"B1 {v}", cls, [(r["distance_m"], r["energy_kJ"]) for r in rs],
                     [tip(r, ["eps_x_m", "energy_kJ", "distance_m", "excursion_m", "t_f_s"],
@@ -1420,36 +1616,142 @@ def verified_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
         ch.multiples(panels), _legend(*leg.values()))
 
 
-def gap_contents(front: Sequence[Row], c_row: Row | None) -> str:
-    """A plain paragraph on what "B1 below C" contains, with the numbers from the files.
+def _verified_gap(r: Row) -> bool:
+    return (r.get("b1_replay_verified") is True and ok(num(r.get("b1_energy_kJ")))
+            and ok(num(r.get("c_energy_kJ"))))  # fmt: skip
 
-    B1 attached may command a pitch up to its `theta_cmd_max_deg` where C is capped at
-    PTCH_LIM_MAX_DEG; B1 has no rotor lag where C has `C.rotor_lag_s`; B1 knows the scenario in
-    advance. The gap is the sum of the optimal-control saving, the extra pitch freedom and the
-    missing lag, not what a better ArduPilot parameter set could save.
+
+def limit_text(front: Sequence[Row], variant: str) -> str:
+    """The wing limit of a variant in words, from the B1_front columns (no number if absent)."""
+    lim = next((num(r["alpha_limit_deg"]) for r in front if r.get("variant") == variant
+                and ok(num(r.get("alpha_limit_deg")))), NAN)  # fmt: skip
+    return f"|alpha_w| up to {lim:.2f} deg" if ok(lim) else "its wing limit"
+
+
+def gap_contents(front: Sequence[Row], gap: Sequence[Row], c_row: Row | None) -> str:
+    """What "B1 below C" contains, written from the computed rows (the numbers are the files').
+
+    C and B1 `margin` fly the same wing limit and the same pitch ceiling, so the pitch freedom is
+    already removed from the gap between them; what is left is B1's missing rotor lag and its
+    clairvoyance (it knows the scenario and is open loop, where C's four settings serve every
+    ensemble member). `attached` and `c_envelope` add the lift peak: a wing limit above the margin
+    (and, for `attached`, a pitch command above C's ceiling). C without the wing cap is a reference
+    that ignores the stall.
     """
-    cmd = next((num(r.get("theta_cmd_max_deg")) for r in front if r.get("variant") == "attached"
-                and ok(num(r.get("theta_cmd_max_deg")))), NAN)  # fmt: skip
-    ptch = num(c_row.get("ptch_lim_deg")) if c_row else NAN
     lag = num(c_row.get("rotor_lag_s")) if c_row else NAN
-    pitch = ("B1 `attached` may command a pitch up to "
-             + (f"{cmd:g} deg" if ok(cmd) else "its theta_cmd_max_deg")
-             + " while C is capped at PTCH_LIM_MAX_DEG"
-             + (f" ({ptch:g} deg)" if ok(ptch) else "") + ". ")
-    lagt = ("B1 has no rotor lag where C has C.rotor_lag_s"
-            + (f" ({lag:g} s)" if ok(lag) else "") + ". ")
-    know = ("B1 knows the scenario in advance and is open loop, where C's four settings must "
-            "serve every member of the ensemble. ")
-    sums = ("So \"B1 below C\" is the sum of the optimal-control saving, the extra pitch freedom "
-            "and the missing lag. It is not a measure of what a better ArduPilot parameter set "
-            "could save.")
-    return panelbox("What the gap between B1 and C contains", pitch + lagt + know + sums, "")
+    ptch = num(c_row.get("ptch_lim_deg")) if c_row else NAN
+    lim = num(c_row.get("alpha_limit_deg")) if c_row else NAN
+    held = bool(c_row and c_row.get("alpha_enforced") is True)
+    out: list[str] = []
+    for s in uniq([r.get("scenario") for r in gap]):
+        rows = {str(r.get("variant")): r for r in gap if r.get("scenario") == s}
+        base = next((r for r in rows.values() if ok(num(r.get("c_energy_kJ")))), None)
+        if base is None:
+            continue
+        c_e, c_d = num(base["c_energy_kJ"]), num(base.get("c_distance_m"))
+        txt = (f"{s}: C (register parameters, q = 2" + (f", wing held to {lim:.2f} deg" if held
+               and ok(lim) else ", wing not held") + f") needs {c_e:.1f} kJ over "
+               f"{c_d:.0f} m. ")
+        e_m = num(rows["margin"].get("b1_energy_kJ")) if "margin" in rows and _verified_gap(
+            rows["margin"]) else NAN
+        if ok(e_m):
+            txt += (f"B1 `margin` needs {e_m:.1f} kJ ({(1 - e_m / c_e) * 100:.0f} % less): it flies "
+                    "the same wing limit and the same pitch ceiling"
+                    + (f" ({ptch:g} deg)" if ok(ptch) else "")
+                    + ", so the pitch freedom is already removed from that saving; what is left is "
+                    "B1's missing rotor lag" + (f" (C has {lag:g} s)" if ok(lag) else "")
+                    + " and its clairvoyance (B1 knows the scenario and is open loop, where C's four "
+                    "settings serve every ensemble member). ")
+        elif "margin" in rows:
+            txt += "B1 `margin` has no verified point here, so nothing is said about it. "
+        for v in ("attached", "c_envelope"):
+            r = rows.get(v)
+            if r is not None and not _verified_gap(r):
+                txt += f"B1 `{v}` has no verified point here, so nothing is said about it. "
+            if r is not None and _verified_gap(r):
+                e_v = num(r["b1_energy_kJ"])
+                step = f"{e_v - e_m:+.1f} kJ against `margin`, " if ok(e_m) else ""
+                txt += (f"B1 `{v}` needs {e_v:.1f} kJ ({step}{(1 - e_v / c_e) * 100:.0f} % below C): "
+                        f"it adds operation at the lift peak ({limit_text(front, v)}"
+                        + (", and a pitch command above C's ceiling" if v == "attached" else "")
+                        + "). ")
+        e_u = num(base.get("c_unconstrained_energy_kJ"))
+        if ok(e_u):
+            txt += (f"C without the wing cap needs {e_u:.1f} kJ over "
+                    f"{num(base.get('c_unconstrained_distance_m')):.0f} m because the model ignores "
+                    "the stall: a reference, not a competitor.")
+        out.append(txt.strip())
+    if not out:
+        return panelbox("What the gap between B1 and C contains",
+                        "No scenario has both a C run and a verified B1 solution.", "")
+    out.append("So the B1-C gap is not what a better ArduPilot parameter set could save: it is the "
+               "sum of the missing rotor lag, the clairvoyance and, for `attached` and "
+               "`c_envelope`, the lift-peak operation.")
+    return panelbox("What the gap between B1 and C contains", " ".join(out), "")
 
 
-def attached_statement(front: Sequence[Row]) -> str:
-    """Is `attached` attached? Where the wing limit sits against the peak of the model's C_L, in the
-    same angle convention (alpha_w, with the wing incidence), from the B1_front columns."""
-    rows = [r for r in front if r.get("variant") == "attached" and ok(num(r.get("alpha_limit_deg")))
+def gap_ladder_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
+    """The gap ladder, one panel per scenario: C (wing held), B1 `margin`, `attached` and
+    `c_envelope` at C's own distance, verified points only, and C without the wing cap as a hatched
+    reference. A scenario without a C run draws nothing and says so."""
+    panels = []
+    for s in uniq([r.get("scenario") for r in front]):
+        rows = {str(r.get("variant")): r for r in gap if r.get("scenario") == s}
+        base = next((r for r in rows.values() if ok(num(r.get("c_energy_kJ")))), None)
+        if base is None:
+            panels.append((str(s), absent("no scenario-matched C run: nothing to compare with")))
+            continue
+        held = base.get("c_wing_held") is True
+        c_e = num(base["c_energy_kJ"])
+        items = [("C" + (" (wing held)" if held else ""), c_e,
+                  tip(base, ["c_energy_kJ", "c_distance_m", "c_source"], f"C, {s}"), "s1")]
+        for v in variants_in_order(list(rows)):
+            r = rows[str(v)]
+            if _verified_gap(r):
+                items.append((f"B1 {v}", num(r["b1_energy_kJ"]),
+                              tip(r, ["b1_energy_kJ", "b1_distance_m", "energy_margin"],
+                                  f"B1 {v}, {s}"), VARIANT_CLS.get(str(v), "ink")))
+        hatched = []
+        e_u = num(base.get("c_unconstrained_energy_kJ"))
+        if ok(e_u):
+            hatched = [len(items)]
+            items.append(("C without the cap (ref.)", e_u,
+                          tip(base, ["c_unconstrained_energy_kJ", "c_unconstrained_distance_m"],
+                              "C unconstrained: the model ignores the stall; reference only"),
+                          "ref"))
+        steps = []
+        for it in items[1:]:
+            name = it[0]
+            delta = it[1] - c_e
+            if name == "B1 margin":
+                steps.append(f"{name}: {delta:+.1f} kJ, the missing rotor lag and the clairvoyance "
+                             "(the pitch freedom is already removed)")
+            elif name.startswith("B1 "):
+                steps.append(f"{name}: {delta:+.1f} kJ, adds lift-peak operation")
+        steps += [f"B1 {v}: no verified point here" for v in variants_in_order(list(rows))
+                  if not _verified_gap(rows[str(v)])]
+        note = f'<p class="cap">{ch.esc("; ".join(steps))}.</p>' if steps else ""
+        panels.append((str(s), ch.bar_chart(items, "bus energy [kJ]", f"Gap ladder {s}", w=470,
+                                            hatched=hatched) + note))
+    if not panels:
+        return None
+    return panelbox(
+        "Gap ladder: C, B1 margin, attached, c_envelope",
+        "Energy of the same problem at C's own distance (C at the register parameters with q = 2), "
+        "verified B1 points only. The hatched bar is C without the wing cap: it ignores the stall, "
+        "is a reference and never a recommendation.",
+        ch.multiples(panels, 1),
+        _legend(("s1", "line", "C, wing held"), ("s4", "line", "B1 margin (flyable bound)"),
+                ("s2", "line", "B1 attached (upper bound at the lift peak)"),
+                ("s3", "line", "B1 c_envelope (upper bound at the lift peak)"),
+                ("ref", "dash", "C without the cap (reference only)")))
+
+
+def attached_statement(front: Sequence[Row], variant: str = "attached") -> str:
+    """Is `attached` attached? Where the wing limit of `variant` sits against the peak of the
+    model's C_L, in the same angle convention (alpha_w, with the wing incidence), from the B1_front
+    columns."""
+    rows = [r for r in front if r.get("variant") == variant and ok(num(r.get("alpha_limit_deg")))
             and ok(num(r.get("alpha_w_clmax_deg")))]  # fmt: skip
     if not rows:
         return ""
@@ -1457,7 +1759,7 @@ def attached_statement(front: Sequence[Row]) -> str:
     lim, pk, a_s = num(r["alpha_limit_deg"]), num(r["alpha_w_clmax_deg"]), num(r.get("alpha_s_deg"))
     clmax, frac = num(r.get("cl_max")), num(r.get("cl_at_limit_over_max"))
     below = pk - lim
-    text = (f"The attached limit is |alpha_w| <= {lim:.2f} deg"
+    text = (f"The {variant} limit is |alpha_w| <= {lim:.2f} deg"
             + (f" ({lim / a_s:.2f} x alpha_s, alpha_s = {a_s:.2f} deg)" if ok(a_s) and a_s else "")
             + f". The model's C_L peaks at alpha_w = {pk:.2f} deg"
             + (f" (C_L,max {clmax:.3f})" if ok(clmax) else "") + ", in the same convention. ")
@@ -1470,7 +1772,7 @@ def attached_statement(front: Sequence[Row]) -> str:
     else:
         text += f"The limit sits {-below:.2f} deg ABOVE that peak, in the stalled region"
     peaks = [num(x.get("alpha_w_peak_above_vs_deg")) for x in front
-             if x.get("variant") == "attached" and x.get("replay_verified") is True
+             if x.get("variant") == variant and x.get("replay_verified") is True
              and ok(num(x.get("alpha_w_peak_above_vs_deg")))]  # fmt: skip
     if peaks:
         span = (f"{min(peaks):.2f} deg" if f"{min(peaks):.2f}" == f"{max(peaks):.2f}"
@@ -1512,39 +1814,56 @@ def b1_sensitivity_figure(sens: Sequence[Row], front: Sequence[Row]) -> str | No
                      f"{nom.get('eps_x_m'):g} m)") if nom is not None else None)  # fmt: skip
     if not items:
         return None
+    swept = {str(r.get("variant")) for r in sens}
+    unswept = [v for v in variants_in_order([r.get("variant") for r in front])
+               if str(v) not in swept]
+    skipped = (" The variant" + ("s " if len(unswept) > 1 else " ")
+               + ", ".join(f"`{v}`" for v in unswept) + " is not swept here." if unswept else "")
     leg = _legend(("s2", "dot", "B1 with the setting changed"),
                   ("ref", "hollow", "nominal: the same scenario and cap, setting unchanged"))
     return panelbox(
         "Sensitivity",
         "Energy of B1 when one setting changes; the hollow marker on each row is the nominal "
         "energy of that row's scenario, variant and distance cap. A row marked [nominal "
-        "unverified] has no verified nominal point to compare with.",
+        "unverified] has no verified nominal point to compare with." + skipped,
         ch.dot_chart(items, "bus energy [kJ]", "B1 sensitivity", zero=False, refs=refs), leg)
 
 
 def gap_items(gap: Sequence[Row]) -> list[Item]:
-    """The tiles of the B1-C gap: the `attached` figures first (every verified scenario), then
-    `c_envelope` beside them with its warning when its schedule fails a late command.
+    """The tiles of the B1-C gap, variant by variant and never averaged or picked across them:
+    `margin` first ("flyable bound"; a scenario where it has no verified point says so and quotes
+    nothing), then `attached` and `c_envelope` ("upper bounds at the lift peak"; `c_envelope` with
+    its warning when its schedule fails a late command).
 
     Read from the existing `B1_gap` rows; the energy tiles are those of the first verified row.
     """
-    order = {v: n for n, v in enumerate(VARIANT_ORDER)}
-    rows = [(i, r) for i, r in enumerate(gap) if r.get("b1_replay_verified") is True
-            and ok(num(r.get("b1_energy_kJ"))) and ok(num(r.get("c_energy_kJ")))]  # fmt: skip
-    rows.sort(key=lambda ir: (order.get(str(ir[1].get("variant")), 9), ir[0]))
     items: list[Item] = []
-    for n, (gi, r) in enumerate(rows):
-        c_e, b_e = num(r["c_energy_kJ"]), num(r["b1_energy_kJ"])
-        warn = LATE_WARNING if r.get("b1_late_command_ok") is False else ""
-        if n == 0:
-            for lab, col in (("C energy", "c_energy_kJ"), ("B1 energy", "b1_energy_kJ")):
-                items.append(Item(f"{lab} ({r['scenario']}, {r['variant']})",
-                                  f"{num(r[col]):.2f}", "kJ", f"B1_gap.{col}[{gi}]"))
-        if c_e:
-            items.append(Item(
-                f"B1 below C ({r['scenario']}, {r['variant']})", f"{(1 - b_e / c_e) * 100:.0f} %",
-                "", f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
-                f"1 - {b_e:.2f}/{c_e:.2f}", warn))  # fmt: skip
+    first = True
+    for v in variants_in_order([r.get("variant") for r in gap]):
+        role = VARIANT_ROLE.get(str(v), "")
+        for gi, r in enumerate(gap):
+            if r.get("variant") != v:
+                continue
+            label = f"B1 below C ({r['scenario']}, {v})"
+            if not (r.get("b1_replay_verified") is True and ok(num(r.get("b1_energy_kJ")))
+                    and ok(num(r.get("c_energy_kJ")))):  # fmt: skip
+                if v == "margin":
+                    items.append(Item(label, "no verified solution", "",
+                                      f"B1_gap.b1_replay_verified[{gi}]",
+                                      note=f"{role}: nothing is quoted for it here"))
+                continue
+            c_e, b_e = num(r["c_energy_kJ"]), num(r["b1_energy_kJ"])
+            warn = LATE_WARNING if r.get("b1_late_command_ok") is False else ""
+            if first:
+                first = False
+                for lab, col in (("C energy", "c_energy_kJ"), ("B1 energy", "b1_energy_kJ")):
+                    items.append(Item(f"{lab} ({r['scenario']}, {r['variant']})",
+                                      f"{num(r[col]):.2f}", "kJ", f"B1_gap.{col}[{gi}]"))
+            if c_e:
+                items.append(Item(
+                    label, f"{(1 - b_e / c_e) * 100:.0f} %", "",
+                    f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
+                    f"1 - {b_e:.2f}/{c_e:.2f}", ". ".join(x for x in (role, warn) if x)))
     return items
 
 
@@ -1554,7 +1873,13 @@ def build_b1(c: Ctx) -> Out:
     if gap:
         o.items += gap_items(gap)
         c_row = next((r for r in c.rows("C_params") if r.get("case") == "optimum"), None)
-        o.figures.append(gap_contents(front, c_row))
+        o.figures.append(gap_contents(front, gap, c_row))
+        ladder = gap_ladder_figure(front, gap)
+        if ladder:
+            o.figures.append(ladder)
+        mar = attached_statement(front, "margin")
+        if mar:
+            o.figures.append(panelbox('Is "margin" flyable?', mar, ""))
         att = attached_statement(front)
         if att:
             o.figures.append(panelbox('Is "attached" attached?', att, ""))
@@ -1605,7 +1930,8 @@ def build_b1(c: Ctx) -> Out:
             o.figures.append(fig)
     if gap:
         items = []
-        for r in gap:
+        for r in sorted(gap, key=lambda g: variants_in_order(
+                [x.get("variant") for x in gap]).index(g.get("variant"))):
             if r.get("b1_replay_verified") is True and ok(num(r.get("b1_energy_kJ"))):
                 lab = f"{r['scenario']} {r['variant']}"
                 items.append(
@@ -1616,7 +1942,7 @@ def build_b1(c: Ctx) -> Out:
                         "s1",
                     )
                 )
-                cls = {"attached": "s2", "c_envelope": "s3"}.get(r["variant"], "ink")
+                cls = VARIANT_CLS.get(r["variant"], "ink")
                 items.append(
                     (
                         lab + ": B1",
@@ -1634,6 +1960,7 @@ def build_b1(c: Ctx) -> Out:
                     ch.bar_chart(items, "bus energy [kJ]", "Gap B1 to C"),
                     _legend(
                         ("s1", "line", "C"),
+                        ("s4", "line", "B1 margin"),
                         ("s2", "line", "B1 attached"),
                         ("s3", "line", "B1 c_envelope"),
                     ),
@@ -1642,9 +1969,9 @@ def build_b1(c: Ctx) -> Out:
     sched = c.rows("B1_schedule")
     if sched:
         ts = []
-        for v in uniq([r.get("variant") for r in sched]):
+        for v in variants_in_order([r.get("variant") for r in sched]):
             rs = [r for r in sched if r.get("variant") == v]
-            cls = {"attached": "s2", "c_envelope": "s3"}.get(v, "ink")
+            cls = VARIANT_CLS.get(v, "ink")
             ts.append(
                 ch.TSeries(
                     f"B1 {v}",
@@ -1679,12 +2006,12 @@ def build_b1(c: Ctx) -> Out:
     if bh:
         plan = {
             f"B1 {v}": (
-                {"attached": "s2", "c_envelope": "s3"}.get(v, "ink"),
+                VARIANT_CLS.get(v, "ink"),
                 f"B1 {v}",
                 False,
                 True,
             )
-            for v in uniq(
+            for v in variants_in_order(
                 [r.get("variant") or str(r.get("case", "")).replace("B1 ", "") for r in bh]
             )
         }

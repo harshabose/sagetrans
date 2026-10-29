@@ -70,6 +70,10 @@ class CollocationOptions:
     spin_floor: float = 0.0  # rotor throttle floor (Q_M_SPIN_MIN); 0 = none
     v_f: float = 1.0  # end ground speed
     vh_band: float = 0.5  # |v_h| at the end, m/s
+    # end in vertical force balance (vertical acceleration 0 at the last node): the aircraft is then
+    # ready to hover. Without it only the climb rate is bounded at the end, and the last interval
+    # buys energy by letting the aircraft fall at about 0.5 g (the throttle and pitch dump).
+    end_balance: bool = False
     prespin_max: float = 0.0  # rad/s, free rotor start speed (0 = rotors at rest)
     t_f_max: float = 60.0
     max_iter: int = 600
@@ -365,6 +369,8 @@ def solve(
         else:
             o.subject_to(z[0, j] * xs[j] + shift[j] == x0[j])
     o.subject_to(xk(n)[2] == opt.v_f)  # end: ground speed V_f
+    if opt.end_balance:
+        o.subject_to(f(xk(n), uk(n), p)[0][3] / 10.0 == 0)  # end: vertical force balance
     o.subject_to(o.bounded(-opt.vh_band, xk(n)[3], opt.vh_band))
     o.subject_to(xk(n)[0] - x0[0] <= eps_x)
     o.subject_to(o.bounded(1.0, t_f * t_scale, opt.t_f_max))

@@ -4,6 +4,7 @@ import csv
 import json
 import math
 import re
+from html import unescape
 from pathlib import Path
 
 import numpy as np
@@ -502,31 +503,57 @@ def gap_rows():
     ]
 
 
-def test_the_gap_tiles_show_attached_first_and_c_envelope_beside_it_with_its_warning():
+def margin_rows():
+    base = {"c_source": "register parameters at q = 2", "b1_converged": True}
+    return [
+        {"scenario": "S-01", "variant": "margin", **base, "b1_replay_verified": False,
+         "c_energy_kJ": 16.0, "c_distance_m": 57.0},
+        {"scenario": "S-03", "variant": "margin", **base, "b1_replay_verified": True,
+         "b1_late_command_ok": True, "c_energy_kJ": 35.7, "c_distance_m": 98.0,
+         "b1_energy_kJ": 28.0},
+    ]
+
+
+def test_the_gap_tiles_show_margin_first_then_attached_and_c_envelope_with_their_notes():
     from sagetrans.io.view.chapters import LATE_WARNING, gap_items
 
-    items = gap_items(gap_rows())
+    items = gap_items(gap_rows() + margin_rows())
     labels = [i.label for i in items]
     below = [lab for lab in labels if lab.startswith("B1 below C")]
-    assert below == ["B1 below C (S-03, attached)", "B1 below C (S-05, attached)",
-                     "B1 below C (S-03, c_envelope)"]  # attached first, both scenarios
+    assert below == ["B1 below C (S-01, margin)", "B1 below C (S-03, margin)",
+                     "B1 below C (S-03, attached)", "B1 below C (S-05, attached)",
+                     "B1 below C (S-03, c_envelope)"]  # margin first, both its scenarios
     tile = {i.label: i for i in items}
-    assert tile["B1 below C (S-03, attached)"].value == "29 %" and not tile[
-        "B1 below C (S-03, attached)"].note
-    assert tile["B1 below C (S-03, c_envelope)"].value == "36 %"
-    assert tile["B1 below C (S-03, c_envelope)"].note == LATE_WARNING
-    assert labels[0] == "C energy (S-03, attached)"  # the energy tiles are the first row's
+    m = tile["B1 below C (S-03, margin)"]
+    assert m.value == "22 %" and m.note == "flyable bound"
+    none = tile["B1 below C (S-01, margin)"]  # unverified: nothing is quoted
+    assert none.value == "no verified solution" and "nothing is quoted" in none.note
+    a = tile["B1 below C (S-03, attached)"]
+    assert a.value == "29 %" and a.note == "upper bound at the lift peak"
+    e = tile["B1 below C (S-03, c_envelope)"]
+    assert e.value == "36 %" and e.note == "upper bound at the lift peak. " + LATE_WARNING
+    assert "C energy (S-03, margin)" in labels  # the energy tiles are the first verified row's
+    assert labels.index("C energy (S-03, margin)") < labels.index("B1 below C (S-03, margin)")
     assert gap_items([]) == []
 
 
-def test_the_b1_chapter_quotes_the_attached_gap_first(tmp_path):
+def test_without_a_margin_row_the_tiles_keep_attached_first():
+    from sagetrans.io.view.chapters import gap_items
+
+    below = [i.label for i in gap_items(gap_rows()) if i.label.startswith("B1 below C")]
+    assert below == ["B1 below C (S-03, attached)", "B1 below C (S-05, attached)",
+                     "B1 below C (S-03, c_envelope)"]
+
+
+def test_the_b1_chapter_quotes_margin_first_then_the_upper_bounds(tmp_path):
     synthetic_run(tmp_path)
-    write_table(tmp_path, "B1_gap", gap_rows())
-    html = build_html(load(tmp_path))
-    b1 = section(html, "b1")
-    assert b1.index("B1 below C (S-03, attached)") < b1.index("B1 below C (S-03, c_envelope)")
+    write_table(tmp_path, "B1_gap", gap_rows() + margin_rows())
+    b1 = section(build_html(load(tmp_path)), "b1")
+    assert (b1.index("B1 below C (S-03, margin)") < b1.index("B1 below C (S-03, attached)")
+            < b1.index("B1 below C (S-03, c_envelope)"))
     assert "verified for exact timing only: fails with commands 10 ms late" in b1
     assert "the B1-C gap quoted (S-03, c_envelope) comes from a schedule that fails" in b1
+    assert "Gap ladder" in b1
 
 
 # ---- B1b ----------------------------------------------------------------------------------
@@ -600,29 +627,62 @@ def test_the_b1_chapter_has_the_fold_and_the_new_figure(tmp_path):
 
 
 # ---- B1c ----------------------------------------------------------------------------------
-def test_the_gap_paragraph_names_the_three_differences_with_the_numbers_from_the_files():
+def test_the_gap_paragraph_reads_margin_against_c_and_the_upper_bounds_against_margin():
     from sagetrans.io.view.chapters import gap_contents
 
-    front = [{"variant": "attached", "theta_cmd_max_deg": 34.4},
-             {"variant": "c_envelope", "theta_cmd_max_deg": 20.0}]
-    html = gap_contents(front, {"ptch_lim_deg": 20.0, "rotor_lag_s": 0.25})
-    assert "B1 `attached` may command a pitch up to 34.4 deg while C is capped at " in html
-    assert "PTCH_LIM_MAX_DEG (20 deg)" in html and "C.rotor_lag_s (0.25 s)" in html
-    assert "B1 knows the scenario in advance" in html
-    assert "sum of the optimal-control saving, the extra pitch freedom and the missing lag" in html
-    assert "not a measure of what a better ArduPilot parameter set could save" in html
-    bare = gap_contents([], None)  # an older folder: the words stay, no number is invented
-    assert "theta_cmd_max_deg" in bare and "PTCH_LIM_MAX_DEG." in bare and " deg)" not in bare
+    gap = gap_rows() + margin_rows()
+    for g in gap:  # stages writes the C fields on every row of a scenario
+        g.update({"c_wing_held": True, "c_unconstrained_energy_kJ": 21.0,
+                  "c_unconstrained_distance_m": 60.0})
+    c_row = {"ptch_lim_deg": 20.0, "rotor_lag_s": 0.25, "alpha_enforced": True,
+             "alpha_limit_deg": 10.99}
+    front = [{"variant": "attached", "alpha_limit_deg": 13.34},
+             {"variant": "c_envelope", "alpha_limit_deg": 30.0}]
+    html = unescape(gap_contents(front, gap, c_row))
+    assert "C (register parameters, q = 2, wing held to 10.99 deg) needs 35.7 kJ over 98 m" in html
+    assert "B1 `margin` needs 28.0 kJ (22 % less)" in html
+    assert "the same wing limit and the same pitch ceiling (20 deg)" in html
+    assert "the pitch freedom is already removed" in html
+    assert "missing rotor lag (C has 0.25 s)" in html and "clairvoyance" in html
+    assert "B1 `attached` needs 25.5 kJ (-2.5 kJ against `margin`, 29 % below C)" in html
+    assert "(|alpha_w| up to 13.34 deg, and a pitch command above C's ceiling)" in html
+    assert "B1 `c_envelope` needs 22.9 kJ (-5.1 kJ against `margin`, 36 % below C)" in html
+    assert "C without the wing cap needs 21.0 kJ over 60 m" in html and "not a competitor" in html
+    assert "S-01: C (register parameters, q = 2, wing held to 10.99 deg) needs 16.0 kJ" in html
+    assert "B1 `margin` has no verified point here, so nothing is said about it" in html
+
+
+def test_the_gap_paragraph_invents_nothing_without_a_c_row_or_a_verified_margin():
+    from sagetrans.io.view.chapters import gap_contents
+
+    html = gap_contents([], gap_rows(), None)
+    assert "B1 `margin`" not in html and "B1 `attached` needs 25.5 kJ (29 % below C)" in html
+    assert "No scenario has both" in gap_contents([], [], None)
 
 
 def test_the_b1_chapter_carries_the_gap_paragraph(tmp_path):
     synthetic_run(tmp_path)
-    write_table(tmp_path, "B1_gap", gap_rows())
+    write_table(tmp_path, "B1_gap", gap_rows() + margin_rows())
     params = list(csv.DictReader((tmp_path / "C_params.csv").open(encoding="utf-8")))
     params[0].update({"ptch_lim_deg": "20", "rotor_lag_s": "0.25"})
     write_table(tmp_path, "C_params", params)
     b1 = section(build_html(load(tmp_path)), "b1")
-    assert "What the gap between B1 and C contains" in b1 and "C.rotor_lag_s (0.25 s)" in b1
+    assert "What the gap between B1 and C contains" in b1 and "C has 0.25 s" in b1
+
+
+def test_the_ladder_has_a_bar_per_verified_variant_and_a_hatched_reference():
+    from sagetrans.io.view.chapters import gap_ladder_figure
+
+    gap = gap_rows() + margin_rows()
+    for g in gap:  # stages writes the C fields on every row of a scenario
+        g.update({"c_wing_held": True, "c_unconstrained_energy_kJ": 21.0,
+                  "c_unconstrained_distance_m": 60.0})
+    front = [{"scenario": s} for s in ("S-01", "S-03", "S-09")]
+    html = gap_ladder_figure(front, gap)
+    assert html is not None and html.count("hatched") >= 1
+    assert "C (wing held)" in html and "B1 margin" in html and "C without the cap (ref.)" in html
+    assert html.count("no scenario-matched C run") == 1  # S-09 has none; S-01 has a C but no B1
+    assert gap_ladder_figure([], gap) is None
 
 
 # ---- B1d ----------------------------------------------------------------------------------
@@ -665,6 +725,31 @@ def test_the_chapter_text_says_how_far_below_the_peak_the_attached_limit_sits():
     past = attached_statement(attached_rows(limit=14.5))
     assert "ABOVE that peak" in past
     assert attached_statement([{"variant": "attached"}]) == ""  # an older folder: no claim
+
+
+def test_the_margin_statement_reads_the_margin_variants_own_columns():
+    from sagetrans.io.view.chapters import attached_statement
+
+    rows = [{**r, "variant": "margin", "alpha_limit_deg": 10.99, "cl_at_limit_over_max": 0.93}
+            for r in attached_rows()]
+    s = attached_statement(rows + attached_rows(), "margin")
+    assert s.startswith("The margin limit is |alpha_w| <= 10.99 deg (0.70 x alpha_s")
+    assert "sits 2.44 deg below that peak, where C_L is 93.00% of C_L,max" in s
+    assert "a margin in angle before the lift peak" in s and "attached" not in s
+    assert attached_statement(attached_rows(), "margin") == ""  # no margin rows: no claim
+
+
+def test_the_sensitivity_caption_names_a_variant_that_is_not_swept():
+    from sagetrans.io.view.chapters import b1_sensitivity_figure
+
+    front = [{"scenario": "S-01", "variant": v, "eps_x_m": 100.0, "eps_h_m": 1.0,
+              "replay_verified": True, "energy_kJ": 20.0} for v in ("margin", "attached")]
+    sens = [{"scenario": "S-01", "variant": "attached", "sensitivity": "eps_h_m", "value": 2.0,
+             "eps_x_m": 100.0, "eps_h_m": 2.0, "energy_kJ": 19.0}]
+    html = b1_sensitivity_figure(sens, front)
+    assert html is not None and "The variant `margin` is not swept here." in html
+    swept = b1_sensitivity_figure(sens, front[1:])
+    assert swept is not None and "not swept" not in swept
 
 
 # ---- B1e ----------------------------------------------------------------------------------
@@ -1163,3 +1248,63 @@ def test_the_attached_statement_gives_one_value_when_the_replays_agree():
     s = attached_statement(rows)
     assert "verified points is 13.38 deg." in s and "13.38 to 13.38" not in s
     assert "`" not in s  # the page does not render markdown
+
+
+# ---- every new table in one small folder ---------------------------------------------------------
+def test_the_viewer_and_the_workbook_build_from_a_small_folder_with_every_new_table(tmp_path):
+    from openpyxl import load_workbook
+
+    from sagetrans.io.view.workbook import write_workbook
+
+    synthetic_run(tmp_path)
+    exposure = {"stall_members": 4.0, "stall_alpha_peak_deg_max": 11.7,
+                "stall_members_above_peak": 0.0, "stall_t_above_peak_s_max": 0.0,
+                "stall_t_above_limit_s_max": 0.4, "stall_wing_share_min": 0.62}
+    held = {"alpha_enforced": True, "alpha_limit_deg": 10.99, "p95_stop_time_s": 18.0,
+            "alpha_s_deg": 15.7, "blend_M": 70.0, "cl_max": 1.444, "alpha_peak_deg": 13.43,
+            "rotor_constant_coeffs": True, "max_overshoot_m": 1.4, "max_end_sink_ms": 1.2}
+    write_table(tmp_path, "C_params", [
+        {"case": "optimum", "T_bt_s": 2.0, "theta_A_deg": 9.0, "spin_min": 0.1,
+         "Q_TRANS_DECEL_ms2": 1.05, "J": 2.0, "p95_distance_m": 237.0, "mean_energy_kJ": 36.6,
+         **held, **exposure},
+        {"case": "ardupilot_default", "T_bt_s": 3.0, "theta_A_deg": 30.0, "spin_min": 0.15,
+         "Q_TRANS_DECEL_ms2": 2.0, "J": 61.5, "p95_distance_m": 121.0, "mean_energy_kJ": 20.3}])
+    write_table(tmp_path, "C_ref_params", [
+        {"case": "optimum", "T_bt_s": 1.6, "theta_A_deg": 19.6, "spin_min": 0.11,
+         "Q_TRANS_DECEL_ms2": 1.79, "J": 1.5, "p95_distance_m": 140.0, "mean_energy_kJ": 21.0,
+         "p95_stop_time_s": 10.4, "alpha_enforced": False, **{**exposure,
+                                                              "stall_members_above_peak": 4.0}}])
+    write_table(tmp_path, "C_ref_runs", [{"member": 0, "energy_kJ": 21.0}])
+    write_table(tmp_path, "C_ref_history", hist_rows("C optimum", "core", "S-01", -1))
+    write_table(tmp_path, "C_alpha_curve", [
+        {"kind": "unconstrained", "alpha_frac": "", "limit_deg": "", "Q_TRANS_DECEL_ms2": 1.79,
+         "p95_distance_m": 140.0, "p95_stop_time_s": 10.4, "mean_energy_kJ": 21.0},
+        {"kind": "enforced", "alpha_frac": 1.0, "limit_deg": 15.7, "Q_TRANS_DECEL_ms2": 1.3,
+         "p95_distance_m": 200.0, "p95_stop_time_s": 14.0, "mean_energy_kJ": 30.0},
+        {"kind": "enforced", "alpha_frac": 0.7, "limit_deg": 10.99, "Q_TRANS_DECEL_ms2": 1.05,
+         "p95_distance_m": 237.0, "p95_stop_time_s": 18.0, "mean_energy_kJ": 36.6}])
+    limit = {"alpha_s_deg": 15.7, "alpha_w_clmax_deg": 13.43, "cl_max": 1.444}
+    front = [{"scenario": "S-03", "variant": v, "eps_x_m": x, "eps_h_m": 1.0, "converged": True,
+              "replay_verified": True, "replay_late_command_ok": True, "energy_kJ": e,
+              "distance_m": x, "end_balance": True, "alpha_limit_deg": lim,
+              "cl_at_limit_over_max": cl, **limit}
+             for v, lim, cl, e in (("margin", 10.99, 0.93, 28.0), ("attached", 13.34, 0.9998, 25.5),
+                                   ("c_envelope", 30.0, 0.5, 22.9))
+             for x in (100.0, 200.0, 300.0)]
+    write_table(tmp_path, "B1_front", front)
+    gap = [{**g, "c_wing_held": True, "c_unconstrained_energy_kJ": 21.0,
+            "c_unconstrained_distance_m": 140.0} for g in gap_rows()[1:3] + margin_rows()[1:]]
+    write_table(tmp_path, "B1_gap", gap)
+    html = build_html(load(tmp_path))
+    c, b1 = section(html, "c"), section(html, "b1")
+    for text in ("The enforced configuration and the unconstrained reference",
+                 "the model ignores the stall; reference only; never a recommendation",
+                 "What this result rests on"):
+        assert text in c, text
+    b1 = unescape(b1)
+    assert "Gap ladder" in b1 and 'Is "margin" flyable?' in b1
+    assert b1.index("B1 below C (S-03, margin)") < b1.index("B1 below C (S-03, attached)")
+    out = tmp_path / "tables.xlsx"
+    write_workbook(load(tmp_path), out)
+    sheets = " ".join(load_workbook(out).sheetnames)
+    assert "C_alpha_curve" in sheets and "C_ref_params" in sheets

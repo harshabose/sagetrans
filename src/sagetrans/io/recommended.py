@@ -106,6 +106,17 @@ def q_note(
     c = inp.study.C
     q = _num(c_row.get("Q_TRANS_DECEL_ms2"))
     bits = ["searched (back transition)" + (f": C's q is {q:.2f} m/s^2" if q is not None else "")]
+    lim = _num(c_row.get("alpha_limit_deg"))
+    if c_row.get("alpha_enforced") is True and lim is not None:
+        bits.append(f"the wing angle is held to {lim:.1f} deg ({inp.study.margin_alpha_frac:g} x "
+                    "alpha_s)")
+    elif c_row.get("alpha_enforced") is False:
+        bits.append("the wing angle is NOT held: the model ignores the stall, so this q is not a "
+                    "recommendation")
+    dist, secs = _num(c_row.get("p95_distance_m")), _num(c_row.get("p95_stop_time_s"))
+    if dist is not None and secs is not None:
+        bits.append(f"the stop takes {dist:.0f} m and {secs:.1f} s (95th percentile over the "
+                    "ensemble)")
     a = _num(d_row.get("a_rec_min_ms2")) if d_row else None
     if a and q is not None:
         bits.append(f"D's a_rec minimum is {a:.2f} m/s^2, so C is {100.0 * (q / a - 1.0):.0f} % "
@@ -126,6 +137,8 @@ def q_note(
     elif c.q_fine_offsets_ms2:
         bits.append(
             f"no q on the fine grid keeps both within {c.margin_frac:.0%} of the tolerances")
+    bits.append("provisional: depends on alpha_s, which is a guess (no lift peak in the CFD up to "
+                "15 deg)")
     return "; ".join(bits)
 
 
