@@ -1773,6 +1773,49 @@ def ft_scenario_caption(name: str, info: dict[str, Any] | None, axes: dict[str, 
     return text
 
 
+def robust_statement(robust: Sequence[Row], opt: Row | None, rob: Row | None) -> str:
+    """One computed sentence on FT_robust: where the smallest AIRSPEED_MIN that is flag-free at
+    every C_L,max scale sits against the optimum's, and at which scales the optimum is clean."""
+    if not robust or opt is None or not ok(num(opt.get("airspeed_min_eas_ms"))):
+        return ""
+    scales = sorted({num(r.get("cl_max_scale")) for r in robust if ok(num(r.get("cl_max_scale")))})
+    v_opt = num(opt["airspeed_min_eas_ms"])
+    lab = ", ".join(f"{s:g}" for s in scales)
+    clean_opt = [s for s in scales if all(
+        not num(r.get("n_flags")) for r in robust if abs(num(r.get("airspeed_min_eas_ms")) - v_opt)
+        < 1e-9 and abs(num(r.get("cl_max_scale")) - s) < 1e-9)]  # fmt: skip
+    if rob is None or rob.get("robust_found") is not True:
+        return (f"No AIRSPEED_MIN in the table is flag-free at every C_L,max scale ({lab}); the "
+                f"optimum's {v_opt:g} m/s is flag-free at "
+                + (", ".join(f"{s:g}" for s in clean_opt) if clean_opt else "none of them") + ".")
+    v_rob = num(rob["airspeed_min_eas_ms"])
+    if abs(v_rob - v_opt) < 1e-9:
+        return (f"AIRSPEED_MIN {v_rob:g} m/s, the optimum, is flag-free at all {len(scales)} "
+                f"C_L,max scales ({lab}); it is also the smallest value in the table that is.")
+    text = (f"AIRSPEED_MIN {v_rob:g} m/s is flag-free at all {len(scales)} C_L,max scales ({lab}); "
+            f"the optimum's {v_opt:g} m/s is flag-free only at "
+            + (", ".join(f"{s:g}" for s in clean_opt) if clean_opt else "none of them") + ".")
+    dj, sp = num(rob.get("delta_J")), num(rob.get("delta_J_in_seed_spreads"))
+    if ok(dj):
+        text += (f" Its cost J is {num(rob.get('J')):.3f}, {dj:+.3f} against the optimum on the same "
+                 "ensemble" + (f" ({sp:+.1f} seed spreads)" if ok(sp) else "") + ".")
+    return text + " It is reported, not recommended: the owner decides."
+
+
+def robust_figure(robust: Sequence[Row], opt: Row | None, rob: Row | None) -> str | None:
+    if not robust:
+        return None
+    cols = ["airspeed_min_eas_ms", "cl_max_scale", "J", "worst_stall_margin", "n_flags", "flags"]
+    shown = [{**r, "flags": r.get("flags") or "none"} for r in robust]
+    return panelbox(
+        "Stall margin robustness",
+        robust_statement(robust, opt, rob)
+        + " The table moves AIRSPEED_MIN around the optimum with the other three settings held, "
+        "each at a scaled C_L,max (the model's value is not validated); the same ensemble as the "
+        "sensitivity, no search.",
+        table_html("FT_robust", [c for c in cols if any(c in r for r in shown)], shown))
+
+
 def build_ft(c: Ctx) -> Out:
     o = Out()
     params, runs, hist = c.rows("FT_params"), c.rows("FT_runs"), c.rows("FT_history")
@@ -1821,6 +1864,10 @@ def build_ft(c: Ctx) -> Out:
         o.flags.append("at a search bound: " + bound)
 
     stall = c.study("FT", "stall_margin", 1.2)
+    wsm = num(params[opt].get("worst_stall_margin"))
+    if ok(wsm) and stall:
+        o.items.append(Item("Stall margin spare", f"{wsm:.3f} vs {stall:g} ({wsm / stall - 1:.1%})",
+                            "", f"FT_params.worst_stall_margin[{opt}] / FT.stall_margin"))
     loss = c.context.get("mission", {}).get("fwd_alt_loss_max_m")
     gain = c.context.get("mission", {}).get("fwd_alt_gain_max_m")
     case_leg = [
@@ -1987,6 +2034,11 @@ def build_ft(c: Ctx) -> Out:
                         ("s1", "hollow", "T-12 spread above limit"), ("s2", "line", "winner")),
             )
         )
+    # 3c. the stall margin against the C_L,max scale
+    rob = next((r for r in params if r.get("case") == "optimum_robust"), None)
+    rfig = robust_figure(c.rows("FT_robust"), params[opt], rob)
+    if rfig:
+        o.figures.append(rfig)
     # 4. scan
     scan = c.rows("FT_scan")
     if scan:
@@ -2104,6 +2156,7 @@ def build_ft(c: Ctx) -> Out:
         ("FT_runs", None),
         ("FT_search", None),
         ("FT_sens", None),
+        ("FT_robust", None),
         ("FT_history", None),
     ]
     return o

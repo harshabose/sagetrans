@@ -1263,6 +1263,60 @@ def _ft_sens_eval(fev: forward.FTEval, key: str, value: Any) -> forward.FTEval:
     return dataclasses.replace(fev, template=dataclasses.replace(tp, **{own[key]: value}))
 
 
+def flag_names(summary: dict[str, Any]) -> str:
+    """The failure kinds a `summarise_ft` row counts (those with a member), in the fixed order."""
+    return ",".join(f for f in forward.FT_FLAGS if summary.get(f"n_{f}"))
+
+
+def robust_rows(best: dict[str, float], steps: list[float], scales: list[float],
+                evaluate: Callable[[dict[str, float], float], dict[str, Any]],
+                ) -> Table:  # fmt: skip
+    """`FT_robust`: the optimum's other three settings with AIRSPEED_MIN = optimum + each step,
+    each evaluated at each C_L,max scale. `evaluate(prm, scale)` is the `summarise_ft` row."""
+    rows: Table = []
+    for step in steps:
+        prm = {**best, "airspeed_min": best["airspeed_min"] + step}
+        for scale in scales:
+            sm = evaluate(prm, scale)
+            rows.append({"airspeed_min_eas_ms": prm["airspeed_min"], "step_ms": step,
+                         "cl_max_scale": scale, **{k: _num(x) for k, x in sm.items()},
+                         "flags": flag_names(sm)})  # fmt: skip
+    return rows
+
+
+def optimum_robust_row(rows: Table, best: dict[str, float]) -> dict[str, Any]:
+    """The `optimum_robust` row of `FT_params`: the smallest AIRSPEED_MIN of `FT_robust` that is
+    flag-free at every C_L,max scale (a reported alternative, never the recommendation).
+
+    Its cost is read at the scale 1.0 (or the scale nearest to it) and compared with the optimum's
+    cost in the SAME table, so both are on the same ensemble. With no such AIRSPEED_MIN the
+    settings are empty and `robust_found` is False."""
+    by_v: dict[float, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_v.setdefault(float(r["airspeed_min_eas_ms"]), []).append(r)
+
+    def at_nominal(rs: list[dict[str, Any]]) -> dict[str, Any]:
+        return min(rs, key=lambda r: abs(float(r["cl_max_scale"]) - 1.0))
+
+    j_opt = next((float(at_nominal(rs)["J"]) for v, rs in by_v.items()
+                  if abs(v - best["airspeed_min"]) < 1e-9), math.nan)  # fmt: skip
+    clean = sorted(v for v, rs in by_v.items() if all(not r["n_flags"] for r in rs))
+    row: dict[str, Any] = {"case": "optimum_robust", "robust_found": bool(clean),
+                           "cl_max_scales": ",".join(f"{s:g}" for s in sorted(
+                               {float(r["cl_max_scale"]) for r in rows})),
+                           "J_optimum_same_ensemble": j_opt}  # fmt: skip
+    if not clean:
+        return row
+    v = clean[0]
+    nom = at_nominal(by_v[v])
+    row.update({"airspeed_min_eas_ms": v, "q_transition_s": best["q_transition"],
+                "tkoff_thr_max": best["tkoff_thr_max"], "tran_pit_max_deg": best["tran_pit_max"],
+                "J": float(nom["J"]), "delta_J": float(nom["J"]) - j_opt,
+                "worst_stall_margin": min(float(r["worst_stall_margin"]) for r in by_v[v]),
+                "n_flags": 0.0})  # fmt: skip
+    return row
+
+
 def vehicle_with_cl_max(vp: VehicleParams, scale: float) -> VehicleParams:
     """The vehicle with its wing's C_L,max scaled, the least invasive way: only `alpha_s` moves.
 
@@ -1496,6 +1550,20 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
                               "cl_max": runs.cl_max(vp_s.wing), "alpha_s_rad": vp_s.wing.alpha_s,
                               **{k: _num(x) for k, x in sm.items()}})  # fmt: skip
             progress.step(f"sensitivity {key}={v}", len(sens_rows) - 1, n_sens)
+    progress.phase("FT report: AIRSPEED_MIN against the C_L,max scale")
+    rb = f.robust
+
+    def robust_eval(prm: dict[str, float], scale: float) -> dict[str, Any]:
+        vp_r = vp if abs(scale - 1.0) < 1e-12 else vehicle_with_cl_max(vp, scale)
+        return forward.summarise_ft(forward_runs(vp_r, core, prm, fev), w)
+
+    robust = robust_rows(best, rb.airspeed_min_steps, rb.cl_max_scale, robust_eval)
+    for r in robust:
+        r.update({"ensemble_n": len(core)})
+    params.append({**optimum_robust_row(robust, best), "ensemble_n": len(core)})
+    notes.append("FT_robust and the optimum_robust row of FT_params are evaluated on the first "
+                 f"{len(core)} members, the ensemble of the sensitivities, and are reported only: "
+                 "no search, never the recommendation.")
     progress.phase("FT report: histories")
     hist: Table = []
     for name in f.history_scenarios:
@@ -1511,7 +1579,7 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
         "optimum": best, "J_start": j_start, "scens": core, "E_ref": w.E_ref,
         "notes": [*notes, *([dflt_note] if dflt_note else [])],
         "tables": {"FT_params": params, "FT_runs": run_rows, "FT_sens": sens_rows,
-                   "FT_history": hist},
+                   "FT_robust": robust, "FT_history": hist},
     }  # fmt: skip
 
 

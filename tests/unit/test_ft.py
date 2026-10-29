@@ -123,9 +123,12 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
     assert out["optimum"] == {"airspeed_min": 18.0, "q_transition": 5.0, "tkoff_thr_max": 1.0,
                               "tran_pit_max": 3.0}
     tables = out["tables"]
-    assert set(tables) == {"FT_params", "FT_runs", "FT_sens", "FT_history"}
+    assert set(tables) == {"FT_params", "FT_runs", "FT_sens", "FT_robust", "FT_history"}
     params = tables["FT_params"]
-    assert [r["case"] for r in params] == ["optimum", "register"]
+    assert [r["case"] for r in params] == ["optimum", "register", "optimum_robust"]
+    n_rob = len(inp.study.FT.robust.airspeed_min_steps) * len(inp.study.FT.robust.cl_max_scale)
+    assert len(tables["FT_robust"]) == n_rob and "flags" in tables["FT_robust"][0]
+    assert params[2]["robust_found"] in (True, False)
     for col in ("J", "J_exc", "J_E", "J_pen", "J_start"):
         assert col in params[0]
     assert abs(params[0]["J"] - (params[0]["J_exc"] + params[0]["J_E"] + params[0]["J_x"]
@@ -135,7 +138,8 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
         (c, k) for c in ("optimum", "register") for k in ("core", "corner")
     }
     # the search ensemble is 2; the three cases are reported on the first 4 members (a prefix)
-    assert all(r["ensemble_n"] == 4 for r in params)
+    assert all(r["ensemble_n"] == 4 for r in params[:2])
+    assert params[2]["ensemble_n"] == 2  # optimum_robust: the search ensemble, like FT_sens
     members = {r["member"] for r in runs if r["set"] == "core" and r["case"] == "optimum"}
     assert members == {0, 1, 2, 3}
     assert any("first 4 members" in n and "first 2 members" in n for n in out["notes"])

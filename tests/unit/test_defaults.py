@@ -179,7 +179,8 @@ def test_the_c_and_ft_tables_carry_the_three_fixed_case_strings(cfgdir):
     assert len(dflt_rows) == 2 and all(r["a_cap_ms2"] != "" for r in dflt_rows)  # ceiling too
     assert [r["Q_TRANS_DECEL_ms2"] for r in c["C_params"]][2] == pytest.approx(2.0)
     ft = stages.run_task(inp, "FT:18:5000:100:3")["tables"]  # the report of a winner
-    assert [r["case"] for r in ft["FT_params"]] == ["optimum", "register", "ardupilot_default"]
+    assert [r["case"] for r in ft["FT_params"]] == ["optimum", "register", "ardupilot_default",
+                                                    "optimum_robust"]
     assert {r["case"] for r in ft["FT_runs"]} == {"optimum", "register", "ardupilot_default"}
     assert {r["case"] for r in ft["FT_history"]} == {"optimum", "register", "ardupilot_default"}
     d = ft["FT_params"][2]

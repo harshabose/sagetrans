@@ -836,3 +836,115 @@ def test_the_ft_chapter_has_the_airspeed_rules_marks_and_scenario_caption(tmp_pa
     assert "AIRSPEED_MIN optimum (18)" in ft and "AIRSPEED_MIN register (17)" in ft
     assert "Scenario S-07: altitude 1500 m" in ft and "inside the ensemble" in ft
     assert "fade starts at 3.0 s" in ft and "done at 6.0 s" in ft and "fade (optimum)" in ft
+
+
+# ---- F3 -------------------------------------------------------------------------------------
+BEST = {"airspeed_min": 18.0, "q_transition": 17.0, "tkoff_thr_max": 1.0, "tran_pit_max": 6.0}
+
+
+def fake_eval(flagged):
+    """summarise_ft-like rows: `flagged(airspeed_min, scale)` -> number of flagged members."""
+    def ev(prm, scale):
+        n = flagged(prm["airspeed_min"], scale)
+        return {"J": 0.76 + 0.01 * (prm["airspeed_min"] - 18.0) + 20.0 * n,
+                "worst_stall_margin": prm["airspeed_min"] / 14.5 * scale, "n_flags": float(n),
+                "n_stall_margin": float(n), "n_stall": 0.0, "n_alt_loss": 0.0}
+    return ev
+
+
+def test_ft_robust_has_a_row_per_airspeed_and_scale_and_names_the_flags():
+    rows = stages.robust_rows(BEST, [-1, 0, 1, 2], [0.9, 1.0, 1.1], fake_eval(lambda v, s: 0))
+    assert len(rows) == 12
+    assert [r["airspeed_min_eas_ms"] for r in rows[::3]] == [17.0, 18.0, 19.0, 20.0]
+    assert {r["cl_max_scale"] for r in rows} == {0.9, 1.0, 1.1} and rows[0]["flags"] == ""
+    bad = stages.robust_rows(BEST, [0], [0.9], fake_eval(lambda v, s: 2))
+    assert bad[0]["flags"] == "stall_margin" and bad[0]["n_flags"] == 2.0
+
+
+def test_optimum_robust_is_the_smallest_airspeed_clean_at_every_scale():
+    # 17 is flagged everywhere, 18 only at C_L,max x 0.9, 19 and 20 are clean
+    rows = stages.robust_rows(BEST, [-1, 0, 1, 2], [0.9, 1.0, 1.1],
+                              fake_eval(lambda v, s: int(v < 17.5 or (v < 18.5 and s < 0.95))))
+    r = stages.optimum_robust_row(rows, BEST)
+    assert r["case"] == "optimum_robust" and r["robust_found"] is True
+    assert r["airspeed_min_eas_ms"] == 19.0 and r["q_transition_s"] == 17.0
+    assert r["tkoff_thr_max"] == 1.0 and r["tran_pit_max_deg"] == 6.0 and r["n_flags"] == 0.0
+    j_opt = 0.76 + 20.0 * 0  # the optimum at the nominal scale (1.0) is clean
+    assert abs(r["J_optimum_same_ensemble"] - j_opt) < 1e-9
+    assert abs(r["delta_J"] - 0.01) < 1e-9 and abs(r["J"] - 0.77) < 1e-9
+    assert abs(r["worst_stall_margin"] - 19.0 / 14.5 * 0.9) < 1e-9  # the worst over the scales
+
+
+def test_with_no_flag_free_airspeed_the_row_says_so_and_has_no_settings():
+    rows = stages.robust_rows(BEST, [-1, 0, 1, 2], [0.9, 1.0], fake_eval(lambda v, s: 1))
+    r = stages.optimum_robust_row(rows, BEST)
+    assert r["robust_found"] is False and "airspeed_min_eas_ms" not in r and "delta_J" not in r
+    assert r["case"] == "optimum_robust" and r["cl_max_scales"] == "0.9,1"
+
+
+def test_when_the_optimum_is_already_robust_the_row_equals_it():
+    rows = stages.robust_rows(BEST, [-1, 0, 1, 2], [0.9, 1.0, 1.1],
+                              fake_eval(lambda v, s: int(v < 17.5)))
+    r = stages.optimum_robust_row(rows, BEST)
+    assert r["airspeed_min_eas_ms"] == 18.0 and r["delta_J"] == 0.0
+    assert r["J"] == r["J_optimum_same_ensemble"]
+
+
+def test_the_robust_settings_are_refused_out_of_range():
+    import pytest
+    from pydantic import ValidationError
+
+    from sagetrans.io.settings import FTRobustCfg
+
+    FTRobustCfg()  # the defaults are valid
+    for bad in ({"airspeed_min_steps": []}, {"airspeed_min_steps": [-1, 11]},
+                {"airspeed_min_steps": [float("nan")]}, {"cl_max_scale": []},
+                {"cl_max_scale": [0.4]}, {"cl_max_scale": [1.6]}, {"cl_max_scale": [0.9, 0.0]},
+                {"unknown": 1}):
+        with pytest.raises(ValidationError):
+            FTRobustCfg(**bad)
+
+
+def robust_table(flag_at):
+    rows = []
+    for v in (17.0, 18.0, 19.0, 20.0):
+        for s in (0.9, 1.0, 1.1):
+            n = flag_at(v, s)
+            rows.append({"airspeed_min_eas_ms": v, "cl_max_scale": s, "J": 0.76 + 20.0 * n,
+                         "worst_stall_margin": 1.25 if not n else 1.18, "n_flags": float(n),
+                         "flags": "stall_margin" if n else ""})
+    return rows
+
+
+def test_the_robust_sentence_is_computed_from_the_table():
+    from sagetrans.io.view.chapters import robust_statement
+
+    opt = {"airspeed_min_eas_ms": 18.0}
+    rob = {"case": "optimum_robust", "robust_found": True, "airspeed_min_eas_ms": 19.0,
+           "J": 0.77, "delta_J": 0.01, "delta_J_in_seed_spreads": 1.3}
+    rows = robust_table(lambda v, s: int(v < 17.5 or (v < 18.5 and s < 0.95)))
+    s = robust_statement(rows, opt, rob)
+    assert s.startswith("AIRSPEED_MIN 19 m/s is flag-free at all 3 C_L,max scales (0.9, 1, 1.1); ")
+    assert "the optimum's 18 m/s is flag-free only at 1, 1.1." in s
+    assert "+0.010 against the optimum on the same ensemble (+1.3 seed spreads)" in s
+    assert "reported, not recommended" in s
+    none = robust_statement(robust_table(lambda v, s: 1), opt, {"robust_found": False})
+    assert none.startswith("No AIRSPEED_MIN in the table is flag-free at every C_L,max scale")
+    assert "flag-free at none of them" in none
+    same = robust_statement(robust_table(lambda v, s: int(v < 17.5)), opt,
+                            {"robust_found": True, "airspeed_min_eas_ms": 18.0})
+    assert "AIRSPEED_MIN 18 m/s, the optimum, is flag-free at all 3" in same
+    assert robust_statement([], opt, None) == ""
+
+
+def test_the_ft_chapter_has_the_robust_table_the_tile_and_the_sentence(tmp_path):
+    ft_run(tmp_path)
+    flagged = robust_table(lambda v, s: int(v < 17.5 or (v < 18.5 and s < 0.95)))
+    write_table(tmp_path, "FT_robust", flagged)
+    rows = list(csv.DictReader((tmp_path / "FT_params.csv").open()))
+    rows.append({"case": "optimum_robust", "robust_found": "True", "airspeed_min_eas_ms": "19",
+                 "J": "0.77", "delta_J": "0.01", "delta_J_in_seed_spreads": "1.3"})
+    write_table(tmp_path, "FT_params", rows)
+    ft = section(build_html(load(tmp_path)), "ft")
+    assert "Stall margin spare" in ft and "1.246 vs 1.2 (3.8%)" in ft
+    assert "Stall margin robustness" in ft and "flag-free only at 1, 1.1." in ft

@@ -274,7 +274,8 @@ def ft_scenarios_context(inp: StudyInputs) -> dict[str, Any]:
                        "headwind_ms": s.headwind_ms, "note": inp.scenario_notes.get(n, "")}
     return {"scenarios": scen,
             "axes": {"altitude_m": list(ax.altitude_m), "isa_offset_k": list(ax.isa_offset_k),
-                     "mass_factor": list(ax.mass_factor), "headwind_ms": list(ax.headwind_ms),
+                     "mass_factor": list(ax.mass_factor),
+                     "headwind_ms": list(inp.study.FT.headwind_ms),  # FT's own range
                      "soc": list(ax.soc)}}  # fmt: skip
 
 
@@ -393,6 +394,11 @@ def assemble(
         for prow in tables["FT_params"]:
             for k in ("seed_spread", "at_bound", *[k for k in extra if k.endswith("continuous")]):
                 prow[k] = extra[k] if prow["case"] == "optimum" else ""
+            if prow["case"] == "optimum_robust":  # its cost against the optimum's, in seed spreads
+                sp, j0 = float(wrow["seed_spread"]), prow.get("J_optimum_same_ensemble")
+                prow["seed_spread"] = sp
+                if prow.get("robust_found") and sp > 0 and j0:
+                    prow["delta_J_in_seed_spreads"] = prow["delta_J"] / (sp * j0)
         t12_failed = [(r["q_transition_s"], r["seed_spread"]) for r in grid_rows
                       if not r["t12_ok"]]
         lo, hi = inp.study.FT.bounds.q_transition_s
@@ -470,6 +476,10 @@ def assemble(
                                                           "p95_excursion_m", "mean_energy_kJ",
                                                           "worst_sink_ms", "worst_stall_margin",
                                                           "n_flags"]),
+            *(["", "`AIRSPEED_MIN` against the C_L,max scale (reporting only, no search):", "",
+               md_table(tables["FT_robust"], ["airspeed_min_eas_ms", "cl_max_scale", "J",
+                                              "worst_stall_margin", "n_flags", "flags"])]
+              if tables.get("FT_robust") else []),
         ])  # fmt: skip
 
     rec_key = next((t for t in task_results if t.startswith("basics_rec:")), None)

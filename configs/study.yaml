@@ -128,6 +128,9 @@ FT:                        # forward transition from hover (docs/FT_spec.md)
     tecs_start: [warm, cold]
     rec_cl_frac: [0.7, 0.8, 0.9]       # changes only the projection
     CL_max_scale: [0.9, 1.1]           # the model's C_L,max x this, through alpha_s; lift, stall speed, stall flag and recovery follow
+  robust:                  # FT_robust: reporting only, no search (the same ensemble as sens; 12 evaluations at these values)
+    airspeed_min_steps: [-1, 0, 1, 2]   # ASSUMED: m/s added to the optimum's AIRSPEED_MIN
+    cl_max_scale: [0.9, 1.0, 1.1]       # ASSUMED: the model's C_L,max is not validated; +-10 % is a stated spread, not a measured one
 
 C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C_fix_spec.md)
   # The entry (theta_fw0_deg, pit_lim_mode, entry_convention) comes from the D block.

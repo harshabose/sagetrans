@@ -55,6 +55,7 @@ DESCRIPTIONS = {
     "FT_search": "FT: best cost of each search seed",
     "FT_scan": "FT: best cost with AIRSPEED_MIN fixed on a grid",
     "FT_sens": "FT: one-at-a-time sensitivity at the optimum",
+    "FT_robust": "FT: AIRSPEED_MIN against the C_L,max scale (reporting only)",
     "FT_history": "FT: time series of the named scenarios",
     "sens_oat": "Sensitivity: one-at-a-time swings",
     "sens_global": "Sensitivity: Morris screening",

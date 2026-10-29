@@ -377,6 +377,26 @@ class FTSensCfg(_Strict):
     CL_max_scale: list[float] = [0.9, 1.1]
 
 
+class FTRobustCfg(_Strict):
+    """`FT_robust`: the optimum's other three settings with AIRSPEED_MIN moved, each at a scaled
+    C_L,max (reporting only: 12 ensemble evaluations at the defaults, no search)."""
+
+    airspeed_min_steps: list[float] = [-1.0, 0.0, 1.0, 2.0]  # m/s added to the optimum's value
+    cl_max_scale: list[float] = [0.9, 1.0, 1.1]  # the model's C_L,max times this
+
+    @model_validator(mode="after")
+    def _ranges(self) -> FTRobustCfg:
+        if not self.airspeed_min_steps or any(
+            not math.isfinite(s) or abs(s) > 10.0 for s in self.airspeed_min_steps
+        ):
+            raise ValueError("FT.robust.airspeed_min_steps: finite steps within 10 m/s, not empty")
+        if not self.cl_max_scale or any(
+            not math.isfinite(s) or not 0.5 <= s <= 1.5 for s in self.cl_max_scale
+        ):
+            raise ValueError("FT.robust.cl_max_scale: factors in [0.5, 1.5], not empty")
+        return self
+
+
 class FTCfg(_Strict):
     """Analysis FT, the forward transition from hover (docs/FT_spec.md).
 
@@ -405,6 +425,7 @@ class FTCfg(_Strict):
     grid: FTGridCfg = FTGridCfg()
     history_scenarios: list[str] = ["S-07", "S-03"]  # histories: optimum and register start
     sens: FTSensCfg = FTSensCfg()
+    robust: FTRobustCfg = FTRobustCfg()
 
     @model_validator(mode="after")
     def _headwind_range(self) -> FTCfg:
