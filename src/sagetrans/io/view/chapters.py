@@ -962,6 +962,32 @@ def build_c_histories(c: Ctx, o: Out) -> None:
             "c_hist_default", series, band, entry))
 
 
+def spread_statement(mine: Sequence[Row], opt_row: Row) -> str:
+    """What the overshoot strip shows, computed: the range, and whether any member stops short.
+
+    The cause is read from the code (restricted._simulate_c): the stop target is
+    x_tgt = V_ground^2 / (2 q), the distance of a constant deceleration q from t = 0, while the
+    pitch ramp over T_bt delays the braking, so a member stops past the target.
+    """
+    os_v = [num(r.get("overshoot_m")) for r in mine if ok(num(r.get("overshoot_m")))]
+    if not os_v:
+        return ""
+    short = [v for v in os_v if v <= 0.0]
+    lo, hi = min(os_v), max(os_v)
+    if short:
+        head = (f"{len(short)} of {len(os_v)} members stop short of the target; the overshoot "
+                f"ranges from {lo:.2f} to {hi:.2f} m.")
+    else:
+        head = (f"No member of the optimum stops short of the target: the overshoot is positive "
+                f"in all {len(os_v)} and ranges from {lo:.2f} to {hi:.2f} m.")
+    sink = [num(r.get("end_sink_ms")) for r in mine if ok(num(r.get("end_sink_ms")))]
+    if sink:
+        head += f" The end sink is at most {max(sink):.2f} m/s."
+    cause = (" The stop target assumes the planned deceleration q from t = 0, while the pitch "
+             "ramp over T_bt delays the braking, so the aircraft stops past it.")
+    return head + cause
+
+
 def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str | None:
     """Worst overshoot and worst end sink against q: the coarse curve, the fine grid, the optimum,
     the margin row and each tolerance as a line (two small charts, the sink one as important as
@@ -1170,21 +1196,33 @@ def build_c(c: Ctx) -> Out:
         ]
         dmem = [r for r in runs if r.get("case") == "ardupilot_default"]
         rows: list[ch.Strip] = []
+        extras: list[ch.StripExtra] = []
+        tols = {"overshoot_m": (num(params[opt].get("os_tol_m")), "tolerance"),
+                "end_sink_ms": (num(params[opt].get("sink_tol_ms")), "tolerance")}
         for col, lab in metrics:
             if not any(col in r for r in mine):
                 continue
             dots = [(num(r.get(col)), tip(r, ["member", col, "flags"]), bool(r.get("flags")), "s1")
                    for r in mine if ok(num(r.get(col)))]  # fmt: skip
-            dv = sorted(num(r.get(col)) for r in dmem if ok(num(r.get(col))))
-            rows.append((lab, dots, dv[len(dv) // 2] if dv else None))
+            rows.append((lab, dots, None))
+            tv, tl = tols.get(col, (NAN, ""))
+            extras.append((
+                [(num(r.get(col)), tip(r, ["member", col, "flags"], "ArduPilot default"))
+                 for r in dmem if ok(num(r.get(col)))],
+                (tv, f"{tl} {tv:g}") if ok(tv) else None))  # fmt: skip
         leg = [("s1", "dot", "member of the optimum"), ("hollow", "hollow", "flagged member")]
         if dmem:
-            leg.append(("ref", "line", "ArduPilot default: median of its members"))
+            leg.append(("ref", "hollow", "member of the ArduPilot default"))
+        if any(x[1] for x in extras):
+            leg.append(("ref", "dash", "tolerance (PROPOSED)"))
+        stat = spread_statement(mine, params[opt])
         o.figures.append(
             panelbox(
                 "Ensemble spread",
-                "One strip per metric, one dot per member.",
-                ch.strip_chart(rows, "Ensemble spread"),
+                "One strip per metric, one dot per member; the ArduPilot default's members are "
+                "the hollow grey dots below each strip.",
+                ch.strip_chart(rows, "Ensemble spread", extras=extras)
+                + (f'<p class="cap">{ch.esc(stat)}</p>' if stat else ""),
                 _legend(*leg),
             )
         )

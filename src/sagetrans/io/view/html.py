@@ -103,6 +103,7 @@ section.chap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width
 .sw.ink.dot,.sw.ink.sq,.sw.ink.dia{background:var(--ink2)}
 .sw.ref.dot,.sw.ref.sq,.sw.ref.dia{background:var(--refc)}
 .sw.hollow{background:var(--panel);border:2px solid var(--s1)}
+.sw.ref.hollow{border-color:var(--refc)}
 .sw.cellno{width:12px;height:12px;border:1px solid var(--axis);border-radius:2px;background:var(--panel)}
 .sw.cellok{width:12px;height:12px;border-radius:2px;background:var(--accent-soft);
  border:1px solid var(--accent)}

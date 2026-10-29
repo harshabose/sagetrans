@@ -301,3 +301,46 @@ def test_the_margin_row_is_never_the_recommendation(tmp_path):
     assert float(q["value"]) == 2.03  # the optimum, not the margin row
     assert "margin row" in q["note"] and "q = 1.50 m/s^2" in q["note"]  # but it is named
     assert "D is not in this run" in q["note"]  # the tiny run has no D: said, not broken
+
+
+# ---- C3 ---------------------------------------------------------------------------------------
+def test_a_strip_shows_the_second_case_as_hollow_dots_and_a_tolerance_rule():
+    dots = [(0.8, "m0", False, "s1"), (1.2, "m1", False, "s1")]
+    plain = ch.strip_chart([("overshoot [m]", dots, None)], "x")
+    full = ch.strip_chart([("overshoot [m]", dots, None)], "x",
+                          extras=[([(3.4, "d0"), (3.8, "d1")], (2.0, "tolerance 2"))])
+    assert "mk ref hollow" not in plain
+    assert full.count("mk ref hollow") == 2 and "tolerance 2" in full
+    def top(svg):  # the right-hand end label of the strip's axis
+        return max(float(v) for v in re.findall(r'class="tick"[^>]*>([-0-9.]+)<', svg))
+
+    assert top(plain) < 1.5 and top(full) >= 3.8  # the axis grew to include the default's members
+
+
+def test_the_spread_statement_is_computed_and_names_the_cause():
+    from sagetrans.io.view.chapters import spread_statement
+
+    rows = [{"overshoot_m": v, "end_sink_ms": 0.5 + 0.1 * i}
+            for i, v in enumerate((0.77, 1.1, 1.73))]
+    s = spread_statement(rows, {})
+    assert "No member of the optimum stops short" in s and "positive in all 3" in s
+    assert "0.77 to 1.73 m" in s and "at most 0.70 m/s" in s
+    assert "planned deceleration q from t = 0" in s and "pitch ramp over T_bt" in s
+    short = spread_statement([{"overshoot_m": -0.2}, {"overshoot_m": 0.5}], {})
+    assert "1 of 2 members stop short" in short
+    assert spread_statement([], {}) == ""
+
+
+def test_the_c_chapter_strips_carry_the_default_members_and_the_tolerances(tmp_path):
+    c2_run(tmp_path)
+    runs = []
+    for case, base in (("optimum", 1.0), ("ardupilot_default", 3.0)):
+        for m in range(4):
+            runs.append({"case": case, "member": m, "energy_kJ": 20.0, "excursion_m": 1.0,
+                         "end_sink_ms": 0.5, "overshoot_m": base + 0.2 * m, "flags": ""})
+    write_table(tmp_path, "C_runs", runs)
+    c = section(build_html(load(tmp_path)), "c")
+    assert c.count("mk ref hollow") == 16  # four default members on each of the four strips
+    assert "tolerance 2" in c and "tolerance 1.76" in c
+    assert "member of the ArduPilot default" in c
+    assert "No member of the optimum stops short" in c

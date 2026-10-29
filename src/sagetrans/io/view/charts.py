@@ -326,17 +326,26 @@ def nearest(ts: Sequence[float], t: float) -> int | None:
 
 
 Strip = tuple[str, Sequence[tuple[float, str, bool, str]], float | None]
+# optional second layer of a strip: hollow grey dots (value, tip) just below the main line, e.g. the
+# members of the ArduPilot default, and a labelled vertical rule (value, label), e.g. a tolerance
+StripExtra = tuple[Sequence[tuple[float, str]], tuple[float, str] | None]
 
 
-def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720) -> str:
+def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720,
+                extras: Sequence[StripExtra] | None = None) -> str:  # fmt: skip
     """One strip per metric on its own scale: a dot per member, a grey tick for a reference.
 
-    Each row is (label, [(value, tip, hollow, cls)], reference value or None).
+    Each row is (label, [(value, tip, hollow, cls)], reference value or None). `extras[i]` adds, to
+    strip i, a hollow grey dot per member of a second case and a vertical rule; the axis includes
+    both.
     """
     rh, pl, pr = 46.0, 150.0, 20.0
     out: list[str] = []
     for i, (label, pts, ref) in enumerate(rows):
-        vals = [p[0] for p in pts if math.isfinite(p[0])] + ([ref] if ref is not None else [])
+        x_dots, x_rule = extras[i] if extras and i < len(extras) else ((), None)
+        vals = ([p[0] for p in pts if math.isfinite(p[0])] + ([ref] if ref is not None else [])
+                + [v for v, _ in x_dots if math.isfinite(v)]
+                + ([x_rule[0]] if x_rule is not None else []))  # fmt: skip
         if not vals:
             continue
         lo, hi = limits(vals, 0.04)
@@ -349,9 +358,16 @@ def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720) -> str:
         if ref is not None and math.isfinite(ref):
             x = f1(fr.sx(ref))
             out.append(el("line", "refmk", x1=x, x2=x, y1=f1(y0 - 10), y2=f1(y0 + 10)))
+        if x_rule is not None and math.isfinite(x_rule[0]):
+            x = f1(fr.sx(x_rule[0]))
+            out.append(el("line", "rule", x1=x, x2=x, y1=f1(y0 - 15), y2=f1(y0 + 15)))
+            out.append(text(fr.sx(x_rule[0]) + 3, y0 - 8, x_rule[1], "dl"))
         for v, tip, hol, cls in pts:
             if math.isfinite(v):
                 out.append(marker("dot", fr.sx(v), y0, cls, tip, hol))
+        for v, tip in x_dots:
+            if math.isfinite(v):
+                out.append(marker("dot", fr.sx(v), y0 + 8, "ref", tip, True))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {rh * len(rows) + 28:g}", role="img",
               aria_label=aria)  # fmt: skip
 
