@@ -871,14 +871,41 @@ def default_case(
     return out, ""
 
 
-def _c_trace(sim: Any, i_w: float, case: str, member: int, every: int = 5) -> Table:
-    """`C_history` rows of one run: every `every`-th sample, angles in degrees (as B1's series)."""
+def _sample_indices(n: int, every: int = 5) -> list[int]:
+    """Every `every`-th sample and always the last one, so a curve ends where the run stopped."""
+    idx = list(range(0, n, every))
+    if idx and idx[-1] != n - 1:
+        idx.append(n - 1)
+    return idx
+
+
+def _hist_meta(
+    view: str, name: str, scen: Scenario, vp: VehicleParams, run: restricted.CRun, band: float,
+    **extra: Any,
+) -> dict[str, Any]:  # fmt: skip
+    """What the caption of a history figure states: the scenario and the entry speed."""
+    return {
+        "view": view, "scenario": name, "altitude_m": scen.altitude_amsl_m,
+        "isa_offset_k": scen.isa_offset_k, "soc": scen.soc, "headwind_ms": scen.headwind_ms,
+        "mass_kg": vp.m if scen.mass_kg is None else scen.mass_kg, "V0_tas_ms": run.v_air0,
+        "V0_eas_ms": run.v_air0 * math.sqrt(scen.rho / RHO0), "band_eps_h_m": band,
+        "run_overshoot_m": _num(run.overshoot), **extra,
+    }  # fmt: skip
+
+
+def _c_trace(
+    sim: Any, i_w: float, case: str, member: int, every: int = 5,
+    meta: dict[str, Any] | None = None,
+) -> Table:  # fmt: skip
+    """`C_history` rows of one run: every `every`-th sample (and the last), angles in degrees (as
+    B1's series). `meta` is the scenario description every row of the run carries."""
     cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
             "theta": np.degrees(sim["theta"]), "alpha_w_deg": np.degrees(sim["alpha"] + i_w),
             "delta_r": sim["delta_r"], "theta_cmd": np.degrees(sim["theta_cmd"]),
             "omega_r": sim["omega_r"]}  # fmt: skip
-    return [{"case": case, "member": member, **{k: float(v[i]) for k, v in cols.items()}}
-            for i in range(0, len(sim.t), every)]  # fmt: skip
+    return [{"case": case, "member": member, **(meta or {}),
+             **{k: float(v[i]) for k, v in cols.items()}}
+            for i in _sample_indices(len(sim.t), every)]  # fmt: skip
 
 
 def task_c(inp: StudyInputs) -> dict[str, Any]:
@@ -988,10 +1015,33 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         member_rows("ardupilot_default", dflt, dflt_runs)
 
     progress.phase("C: histories and the q curve")
-    history: Table = _c_trace(opt[0].sim, vp.wing.i_w, "C optimum", 0)
-    history += _c_trace(reg_runs[0].sim, vp.wing.i_w, "C register", 0)
+    # Two views (member = -1 is "not an ensemble member"): the B1 headline scenario with C's
+    # optimum and the ArduPilot default on it, and the ensemble member on which the default
+    # overshoots most with both cases. Every row of a run says which scenario it is.
+    history: Table = []
+    band = float(inp.study.B1.eps_h_m[0])
+    core_name = inp.study.B1.scenarios[0] if inp.study.B1.scenarios else ""
+    hist_notes: list[str] = []
+    if core_name in inp.scenarios:
+        core = inp.scenarios[core_name]
+        try:
+            for case, prm in (("C optimum", best), ("C ardupilot_default", dflt)):
+                if prm is None:
+                    continue
+                cr = restricted.run_c(vp, core, prm, cev, base)
+                history += _c_trace(cr.sim, vp.wing.i_w, case, -1,
+                                    meta=_hist_meta("core", core_name, core, vp, cr, band))
+        except (ValueError, RuntimeError) as exc:
+            hist_notes.append(f"C on the B1 scenario {core_name} could not be run: {exc}")
     if dflt_runs is not None:
-        history += _c_trace(dflt_runs[0].sim, vp.wing.i_w, "C ardupilot_default", 0)
+        over = [r.overshoot if math.isfinite(r.overshoot) else -math.inf for r in dflt_runs]
+        worst = max(range(len(over)), key=over.__getitem__)
+        fails = over[worst] > c.os_tol_m
+        for case, runs_i in (("C optimum", opt), ("C ardupilot_default", dflt_runs)):
+            history += _c_trace(
+                runs_i[worst].sim, vp.wing.i_w, case, worst,
+                meta=_hist_meta("default_fails", "ensemble member", scens[worst], vp,
+                                runs_i[worst], band, default_fails=bool(fails)))
 
     q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q}
                for q in c.q_curve]  # fmt: skip
@@ -1019,7 +1069,8 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         row.pop("case", None)
     progress.note(f"C reports: {time.time() - t0:.0f} s")
     return {
-        "result": r, "scens": scens, "notes": [theta_note, *([dflt_note] if dflt_note else [])],
+        "result": r, "scens": scens,
+        "notes": [theta_note, *([dflt_note] if dflt_note else []), *hist_notes],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
                    "C_q_curve": q_curve, "C_sens": sens_rows, "C_history": history},
     }  # fmt: skip
@@ -1489,7 +1540,8 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
                 "theta": np.degrees(sim["theta"]), "alpha_w_deg": aw, "delta_r": sim["delta_r"],
                 "theta_cmd": np.degrees(sim["theta_cmd"]), "omega_r": sim["omega_r"]}  # fmt: skip
-        return [{k: float(v[i]) for k, v in cols.items()} for i in range(0, len(sim.t), 5)]
+        return [{k: float(v[i]) for k, v in cols.items()}
+                for i in _sample_indices(len(sim.t), 5)]
 
     def row(
         prob: coll.Problem, ver: coll.Verified, variant: str, eh: float, ex: float, rs: str,

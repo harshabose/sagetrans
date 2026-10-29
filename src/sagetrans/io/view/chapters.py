@@ -805,6 +805,163 @@ def _c_cases(c: Ctx) -> list[str]:
     return uniq([r.get("case") for r in c.rows("C_params")])
 
 
+def history_panels(band: float | None) -> list[ch.Panel]:
+    """The four panels of C's history figures: the airspeed axis starts at 0 and the altitude panel
+    draws the B1 altitude band as two thin lines."""
+    lines = [(band, f"+{band:g} m"), (-band, f"-{band:g} m")] if band else []
+    return [
+        ch.Panel("V", "airspeed [m/s]", "m/s", ymin=0.0),
+        ch.Panel("h", "altitude change [m]", "m", 2, True, hlines=lines),
+        ch.Panel("theta", "pitch [deg]", "deg", 1),
+        ch.Panel("delta_r", "rotor throttle [-]", "", 2),
+    ]
+
+
+def select_history(
+    c_rows: Sequence[Row], b1_rows: Sequence[Row], view: str, headline: str | None = None
+) -> tuple[dict[str, list[Row]], tuple[str, Any]]:
+    """The rows of one history figure, by series, all from ONE scenario or ONE ensemble member.
+
+    `view` is "core" (C's runs on the B1 headline scenario, with B1's replays of the same scenario)
+    or "default_fails" (both C cases on the ensemble member where the default overshoots most; no B1).
+    Returns `({case: rows}, ("scenario", name) | ("member", index))`. A figure never mixes
+    scenarios: C rows of another scenario or member, and B1 rows of another scenario, are dropped.
+    """
+    cr = [r for r in c_rows if r.get("view") == view]
+    if view == "core":
+        name = headline or (cr[0].get("scenario") if cr else None)
+        cr = [r for r in cr if r.get("scenario") == name]
+        br = [r for r in b1_rows if name is not None and r.get("scenario") == name]
+        ident: tuple[str, Any] = ("scenario", name)
+    else:
+        mem = cr[0].get("member") if cr else None
+        cr = [r for r in cr if r.get("member") == mem]
+        br = []
+        ident = ("member", mem)
+    out: dict[str, list[Row]] = {}
+    for r in [*cr, *br]:
+        out.setdefault(str(r.get("case")), []).append(r)
+    return out, ident
+
+
+def scenario_caption(r: Row) -> str:
+    """Altitude, ISA offset, mass, SoC, headwind and the entry airspeed (true and equivalent)."""
+    bits = [
+        ("altitude", "altitude_m", "{:g} m"), ("ISA", "isa_offset_k", "{:+.1f} K"),
+        ("mass", "mass_kg", "{:.1f} kg"), ("SoC", "soc", "{:.2f}"),
+        ("headwind", "headwind_ms", "{:+.2f} m/s"),
+    ]
+    parts = [f"{lab} {fmt.format(num(r.get(col)))}" for lab, col, fmt in bits
+             if ok(num(r.get(col)))]  # fmt: skip
+    if ok(num(r.get("V0_tas_ms"))) and ok(num(r.get("V0_eas_ms"))):
+        parts.append(f"entry airspeed {num(r['V0_tas_ms']):.1f} m/s true, "
+                     f"{num(r['V0_eas_ms']):.1f} m/s equivalent")  # fmt: skip
+    return ", ".join(parts)
+
+
+C_HIST_STYLE = {  # case -> (class, dashed, thick)
+    "C optimum": ("s1", False, True),
+    "C ardupilot_default": ("ref", True, False),
+    "B1 attached": ("s2", False, False),
+    "B1 c_envelope": ("s3", False, False),
+}
+
+
+def history_figure(
+    title: str, caption: str, fig_id: str, series: dict[str, list[Row]], band: float | None,
+    entry: dict[str, float],
+) -> str:  # fmt: skip
+    """One history figure from `select_history` output; legend entries carry the entry speed."""
+    ts = []
+    for case, rows in series.items():
+        rs = [r for r in rows if ok(num(r.get("t")))]
+        if not rs:
+            continue
+        cls, dash, thick = C_HIST_STYLE.get(case, ("ink", False, False))
+        v0 = entry.get(case)
+        short = f"{case.replace('ardupilot_default', 'ArduPilot default')}" + (
+            f" ({v0:.1f} m/s)" if v0 is not None and ok(v0) else "")
+        ts.append(ch.TSeries(
+            case, cls, short, [r["t"] for r in rs],
+            {k: relative(k, [num(r.get(k)) for r in rs]) for k in ("V", "h", "theta", "delta_r")},
+            dash, False, thick, "", True))  # fmt: skip
+    leg = [(s.cls, "dash" if s.dash else "line", s.short) for s in ts]
+    return panelbox(title, caption, ch.panel_figure(fig_id, history_panels(band), ts), _legend(*leg))
+
+
+def build_c_histories(c: Ctx, o: Out) -> None:
+    """C's two time-history figures: the B1 scenario, and where the default fails."""
+    hist = c.rows("C_history")
+    if not hist:
+        o.absent.append("not in this run: C_history")
+        return
+    if not any("view" in r for r in hist):  # a results folder from before the two figures
+        plan = {
+            "C optimum": ("s1", "C optimum", False, True),
+            "C ardupilot_default": ("ref", "ArduPilot default", True, False),
+        }
+        ts = hist_series(hist, plan, ["V", "h", "theta", "delta_r"])
+        o.figures.append(panelbox(
+            "Time histories",
+            "Member 0 of the ensemble under C's optimum (and the ArduPilot default); "
+            "an older results folder: the scenario is not recorded.",
+            ch.panel_figure("c_hist", HIST_PANELS, ts),
+            _legend(*[(s.cls, "dash" if s.dash else "line", s.short) for s in ts])))
+        return
+    b1h = [{**r, "case": r.get("case") or f"B1 {r.get('variant')}"} for r in c.rows("B1_history")]
+    b1h = b1h or [{**r, "case": f"B1 {r.get('variant')}"} for r in c.rows("B1_schedule")]
+    headline = b1h[0].get("scenario") if b1h else None
+    front = c.rows("B1_front")
+    band_vals = [num(r.get("band_eps_h_m")) for r in hist if ok(num(r.get("band_eps_h_m")))]
+    band = band_vals[0] if band_vals else None
+
+    series, (_, name) = select_history(hist, b1h, "core", headline)
+    if series and name is not None:
+        first = next(rows[0] for case, rows in series.items() if case.startswith("C"))
+        entry = {case: num(first.get("V0_tas_ms")) for case in series}
+        for case in series:  # B1's own entry speed, when its table has it
+            if case.startswith("B1 "):
+                fr = next((r for r in front if r.get("scenario") == name
+                           and f"B1 {r.get('variant')}" == case and ok(num(r.get("V0_air_ms")))), None)
+                if fr is not None:
+                    entry[case] = num(fr["V0_air_ms"])
+        note = ""
+        if any(k.startswith("B1 ") for k in series):
+            env_rows = [r for r in front if r.get("scenario") == name
+                        and r.get("variant") == "c_envelope" and r.get("replay_verified") is True]
+            late = [r.get("replay_late_command_ok") for r in env_rows]
+            tail = ""
+            if "B1 c_envelope" in series and late:
+                tail = ("; c_envelope is verified for exact timing only" if False in late
+                        else "; c_envelope also replays with commands 10 ms late")
+            note = (" The B1 curves are open-loop bounds that use the altitude band, not "
+                    "controllers" + tail + ".")
+        o.figures.append(history_figure(
+            f"Same scenario as B1 ({name})",
+            f"Scenario {name}: {scenario_caption(first)}. C's optimum and the ArduPilot default "
+            "run on the scenario that B1's headline replay uses; each curve ends with a marker "
+            f"where the run stopped.{note}",
+            "c_hist_core", series, band, entry))
+    series, (_, mem) = select_history(hist, [], "default_fails")
+    if series and mem is not None:
+        first = next(iter(series.values()))[0]
+        entry = {case: num(first.get("V0_tas_ms")) for case in series}
+        dfl = next((rows[0] for case, rows in series.items() if "default" in case), None)
+        opt_row = next((rows[0] for case, rows in series.items() if case == "C optimum"), None)
+        fails = bool(first.get("default_fails"))
+        d_os = num(dfl.get("run_overshoot_m")) if dfl else NAN
+        o_os = num(opt_row.get("run_overshoot_m")) if opt_row else NAN
+        said = (f"The default overshoots this member by {d_os:.2f} m and the optimum by {o_os:.2f} m."
+                if ok(d_os) and ok(o_os) else "")
+        if not fails:
+            said += (" No member fails under the default; this is the one with the largest "
+                     "overshoot anyway.")
+        o.figures.append(history_figure(
+            f"Where the default fails (ensemble member {mem:g})",
+            f"Ensemble member {mem:g}: {scenario_caption(first)}. {said}",
+            "c_hist_default", series, band, entry))
+
+
 def build_c(c: Ctx) -> Out:
     o = Out()
     params, runs, curve = c.rows("C_params"), c.rows("C_runs"), c.rows("C_q_curve")
@@ -914,44 +1071,7 @@ def build_c(c: Ctx) -> Out:
         o.absent.append("not in this run: C_q_curve")
 
     # 2. time histories
-    hist = c.rows("C_history")
-    if hist:
-        plan = {
-            "C optimum": ("s1", "C optimum", False, True),
-            "C ardupilot_default": ("ref", "ArduPilot default", True, False),
-        }
-        ts = hist_series(hist, plan, ["V", "h", "theta", "delta_r"])
-        for case, v in (("B1 attached", "s2"), ("B1 c_envelope", "s3")):
-            bh = [r for r in c.rows("B1_history") if r.get("case") == case]
-            if bh:
-                ts.append(
-                    ch.TSeries(
-                        case,
-                        v,
-                        case,
-                        [r["t"] for r in bh],
-                        {k2: relative(k2, [num(r.get(k2)) for r in bh]) for k2 in ("V", "h", "theta", "delta_r")},
-                    )
-                )
-        leg = [
-            (
-                s.cls,
-                "dash" if s.dash else "line",
-                "ArduPilot default" if s.cls == "ref" else s.short,
-            )
-            for s in ts
-        ]
-        o.figures.append(
-            panelbox(
-                "Time histories",
-                "Member 0 of the ensemble under C's optimum (and the ArduPilot default); "
-                "B1's replayed solution for its headline scenario. Hover for the values at one instant.",
-                ch.panel_figure("c_hist", HIST_PANELS, ts),
-                _legend(*leg),
-            )
-        )
-    else:
-        o.absent.append("not in this run: C_history")
+    build_c_histories(c, o)
 
     # 3. convergence
     srch = c.rows("C_search")

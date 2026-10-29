@@ -230,6 +230,7 @@ class Panel:
     hlines: list[tuple[float, str]] = field(default_factory=list)
     band: tuple[float, float] | None = None  # a shaded band, e.g. the altitude limits
     vticks: list[tuple[float, str]] = field(default_factory=list)  # instants, e.g. mode changes
+    ymin: float | None = None  # the axis starts here (airspeed: 0), not at the data minimum
 
 
 @dataclass
@@ -245,6 +246,7 @@ class TSeries:
     steps: bool = False
     thick: bool = False
     direct: str = ""  # a direct label at the end of the line (the reference series)
+    end_mark: bool = False  # a marker at the last sample: where the run stopped
 
 
 def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries],
@@ -267,7 +269,11 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
         vals += [v for v, _ in p.hlines] + (list(p.band) if p.band else [])
         if not vals:
             continue
+        if p.ymin is not None:
+            vals.append(p.ymin)
         fr = Frame(w, h, (0.0, t1), limits(vals), pl=pl, pr=pr, pt=12, pb=34)
+        if p.ymin is not None:
+            fr.ylim = (p.ymin, fr.ylim[1])
         xt, yt = nice_ticks(0.0, t1, 4), nice_ticks(*fr.ylim, 4)
         _fit(fr, xt, yt)
         o = [text(pl, 9, p.label, "ptitle")]
@@ -290,6 +296,9 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
                 o.append(el("path", cls, d=_path(list(zip(s.t, ys, strict=True)), fr, s.steps)))
                 if s.direct and pi == first:
                     o.append(text(fr.sx(s.t[-1]) - 4, fr.sy(ys[-1]) + 16, s.direct, "dl", "end"))
+                if s.end_mark and math.isfinite(ys[-1]):
+                    o.append(marker("dot", fr.sx(s.t[-1]), fr.sy(ys[-1]), s.cls,
+                                    f"{s.short}: stops at {s.t[-1]:.2f} s ({p.label} {ys[-1]:.2f})"))
         o.append(el("line", "xh", x1=0, x2=0, y1=12, y2=f1(fr.bottom), visibility="hidden"))
         o.append(el("rect", "hit", x=pl, y=12, width=f1(w - pl - pr), height=f1(fr.bottom - 12),
                     fill="transparent"))  # fmt: skip
