@@ -209,6 +209,23 @@ def stage(folder: Path, names: Sequence[str], record: dict, branch: str, dest: P
     return files
 
 
+def explain_missing(folder: Path, gone: Sequence[str]) -> str:
+    """Why the links would 404 and what to do: leftovers of earlier runs, or files that are gone."""
+    left = [u for u in gone if (folder / u.removeprefix("./")).is_file()]
+    absent = [u for u in gone if u not in left]
+    text = "the page links to files that would not be on the branch (they would 404):"
+    if left:
+        text += (f"\n  {len(left)} are in the folder but not in the run record: leftovers of an "
+                 "earlier run, which `run.py` does not delete, listed (and linked) by the viewer "
+                 "as 'not in the record'. Move them out of the folder, run `python run.py --view` "
+                 "again (it rewrites the page without them) and publish again:\n    "
+                 + "\n    ".join(left))
+    if absent:
+        text += ("\n  " + f"{len(absent)} are not in the folder at all:\n    "
+                 + "\n    ".join(absent))
+    return text
+
+
 def branch_exists(repo: Path, branch: str, remote: str | None) -> str:
     if git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False):
         return f"the branch {branch} already exists in this clone (delete it or publish another)"
@@ -250,9 +267,7 @@ def publish(
         html = (staging / INDEX).read_text(encoding="utf-8")
         gone = missing_links(html, files)
         if gone:
-            raise PublishError(
-                "the page links to files that would not be on the branch (they would 404):\n  "
-                + "\n  ".join(gone))
+            raise PublishError(explain_missing(folder, gone))
         size = sum((staging / n).stat().st_size for n in files)
         info = {"branch": branch, "files": str(len(files)), "bytes": str(size), "commit": ""}
         if dry_run:

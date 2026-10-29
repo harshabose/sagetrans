@@ -91,6 +91,20 @@ def test_a_page_that_would_404_is_not_published(tmp_path, repo):
     assert sh(repo, "branch", "--list", "results/*") == ""
 
 
+def test_leftover_files_of_an_earlier_run_are_named_as_such_and_not_published(tmp_path, repo):
+    html = PAGE_HTML.replace("</body>", "<a href='B1_pareto_S-01.csv'>old</a>"
+                             "<a href='gone.png'>x</a></body>")
+    folder = make_folder(tmp_path, html=html)
+    (folder / "B1_pareto_S-01.csv").write_text("old", encoding="utf-8")  # not in the record
+    with pytest.raises(pub.PublishError) as exc:
+        pub.publish(folder, repo)
+    msg = str(exc.value)
+    assert "1 are in the folder but not in the run record" in msg and "--view" in msg
+    assert "B1_pareto_S-01.csv" in msg and "1 are not in the folder at all" in msg
+    assert "gone.png" in msg
+    assert sh(repo, "branch", "--list", "results/*") == ""
+
+
 def test_the_relative_links_leave_out_anchors_external_urls_and_queries():
     assert pub.relative_links(PAGE_HTML) == ["./run_record.json", "C_params.csv", "fig.svg",
                                              "report.html"]
