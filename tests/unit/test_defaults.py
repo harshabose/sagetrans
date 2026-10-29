@@ -168,6 +168,12 @@ def test_the_c_and_ft_tables_carry_the_three_fixed_case_strings(cfgdir):
     assert all(k in c["C_params"][0] for k in ("os_margin_m", "sink_margin_ms", "at_edge"))
     grids = {r["grid"] for r in c["C_q_curve"]}
     assert grids == {"coarse", "fine"}
+    # each seed's best point in physical units, and where the upper bound of theta_A comes from
+    assert {"T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2"} <= set(c["C_search"][0])
+    opt = c["C_params"][0]
+    assert opt["theta_A_hi_deg"] == min(opt["theta_A_cfg_hi_deg"], opt["ptch_lim_deg"])
+    lo, hi = 0.0, 90.0
+    assert all(lo < r["theta_A_deg"] <= hi for r in c["C_search"])
     assert {r["case"] for r in c["C_runs"]} == {"optimum", "ardupilot_default"}
     dflt_rows = [r for r in c["C_runs"] if r["case"] == "ardupilot_default"]
     assert len(dflt_rows) == 2 and all(r["a_cap_ms2"] != "" for r in dflt_rows)  # ceiling too

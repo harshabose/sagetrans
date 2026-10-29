@@ -431,3 +431,55 @@ def test_the_energy_figure_labels_every_q_draws_the_optimum_last_and_drops_b1(tm
     found = re.findall(r'class="dl" x="[0-9.]+" y="([0-9.]+)"[^>]*>([^<]*)<', fig)
     ys = {text: float(y) for y, text in found}
     assert abs(ys["C optimum"] - ys["ArduPilot default"]) >= 20.0
+
+
+# ---- C6 ---------------------------------------------------------------------------------------
+def seeds(js, **cols):
+    return [{"seed": i + 1, "best_cost": j, "evaluations": 160,
+             **{k: v[i] for k, v in cols.items()}} for i, j in enumerate(js)]
+
+
+def test_the_seed_statement_tells_a_ridge_from_a_single_optimum_from_no_convergence():
+    from sagetrans.io.view.chapters import seed_statement
+
+    ridge = seeds([1.4796, 1.4789, 1.4795], T_bt_s=[1.2, 1.6, 2.1],
+                  theta_A_deg=[19.5, 19.6, 19.6], spin_min=[0.11, 0.11, 0.11],
+                  Q_TRANS_DECEL_ms2=[2.03, 2.03, 2.04])
+    s = seed_statement(ridge)
+    assert "agree on J" in s and "flat ridge" in s and "T_bt 1.2 to 2.1" in s
+    assert "theta_A" not in s and "spin_min" not in s  # only what actually differs is named
+    same = seeds([1.4796, 1.4789], T_bt_s=[1.6, 1.61], theta_A_deg=[19.6, 19.6],
+                 spin_min=[0.109, 0.11], Q_TRANS_DECEL_ms2=[2.03, 2.03])
+    assert "single well-defined optimum" in seed_statement(same)
+    loose = seeds([1.40, 1.55], T_bt_s=[1.6, 1.6])
+    assert "disagree on J" in seed_statement(loose) and "not converged" in seed_statement(loose)
+    assert seed_statement(seeds([1.4796, 1.4789])) == ""  # an older folder: no parameters
+    assert seed_statement(seeds([1.4])) == ""
+
+
+def test_the_bound_chip_says_where_the_upper_bound_comes_from():
+    from sagetrans.io.view.chapters import bound_reason
+
+    row = {"theta_A_cfg_hi_deg": 30.0, "ptch_lim_deg": 20.0, "theta_A_hi_deg": 20.0}
+    text = bound_reason(row, "theta_A:hi")
+    assert "the upper bound of theta_A is the pitch limit" in text
+    assert "min(30, PTCH_LIM_MAX_DEG 20) = 20 deg" in text
+    wide = {**row, "ptch_lim_deg": 35.0, "theta_A_hi_deg": 30.0}
+    assert "configured bound" in bound_reason(wide, "theta_A:hi")
+    assert bound_reason(row, "spin_min:lo") == "" and bound_reason({}, "theta_A:hi") == ""
+
+
+def test_the_c_chapter_carries_seed_parameters_the_ridge_sentence_and_bound_reason(tmp_path):
+    c2_run(tmp_path)
+    params = list(csv.DictReader((tmp_path / "C_params.csv").open(encoding="utf-8")))
+    params[0].update({"at_bound": "theta_A:hi", "theta_A_cfg_hi_deg": "30", "ptch_lim_deg": "20",
+                      "theta_A_hi_deg": "20"})
+    write_table(tmp_path, "C_params", params)
+    write_table(tmp_path, "C_search", seeds(
+        [1.4796, 1.4789, 1.4795], T_bt_s=[1.2, 1.6, 2.1], theta_A_deg=[19.5, 19.6, 19.6],
+        spin_min=[0.11, 0.11, 0.11], Q_TRANS_DECEL_ms2=[2.03, 2.03, 2.04]))
+    c = section(build_html(load(tmp_path)), "c")
+    assert "at a search bound: theta_A:hi (the upper bound of theta_A is the pitch limit" in c
+    assert "min(30, PTCH_LIM_MAX_DEG 20) = 20 deg" in c
+    assert "T_bt_s = 1.20 s" in c and "T_bt_s = 2.10 s" in c  # the parameters are in the tooltip
+    assert "a flat ridge, not a single optimum" in c

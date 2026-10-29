@@ -962,6 +962,52 @@ def build_c_histories(c: Ctx, o: Out) -> None:
             "c_hist_default", series, band, entry))
 
 
+T12_LIMIT = 0.01  # the repeatability limit of the seeds (io.gate.T12_SPREAD_MAX)
+SEED_PARAMS = (("T_bt_s", "T_bt"), ("theta_A_deg", "theta_A"), ("spin_min", "spin_min"),
+               ("Q_TRANS_DECEL_ms2", "q"))  # fmt: skip
+
+
+def seed_statement(srch: Sequence[Row]) -> str:
+    """One sentence on the seeds, from the data: do they agree on J, and on the parameters?
+
+    Seeds that agree on J but differ in parameters mean a flat ridge (many settings, one cost);
+    agreeing on both means a single well-defined optimum; disagreeing on J means the search has
+    not converged (the T-12 limit is 1 %).
+    """
+    js = [num(r.get("best_cost")) for r in srch if ok(num(r.get("best_cost")))]
+    if len(js) < 2:
+        return ""
+    spread = (max(js) - min(js)) / max(abs(min(js)), 1e-12)
+    if spread > T12_LIMIT:
+        return (f"The seeds disagree on J (spread {spread:.2%}, the limit is {T12_LIMIT:.0%}): "
+                "the search has not converged.")
+    differ = []
+    for col, name in SEED_PARAMS:
+        v = [num(r.get(col)) for r in srch if ok(num(r.get(col)))]
+        if len(v) == len(srch) and v:
+            mean = sum(v) / len(v)
+            if max(v) - min(v) > 0.05 * max(abs(mean), 1e-12):
+                differ.append(f"{name} {min(v):.3g} to {max(v):.3g}")
+    if differ:
+        return (f"The seeds agree on J (spread {spread:.2%}) but differ in the parameters "
+                f"({'; '.join(differ)}): a flat ridge, not a single optimum.")
+    if any(ok(num(r.get(c))) for r in srch for c, _ in SEED_PARAMS):
+        return (f"The seeds agree on J (spread {spread:.2%}) and on the parameters: a single "
+                "well-defined optimum.")
+    return ""
+
+
+def bound_reason(row: Row, bound: str) -> str:
+    """Where the upper bound of theta_A comes from, computed: min(30, PTCH_LIM_MAX_DEG)."""
+    cfg, ptch, hi = (num(row.get(k)) for k in ("theta_A_cfg_hi_deg", "ptch_lim_deg",
+                                              "theta_A_hi_deg"))
+    if "theta_A:hi" not in bound or not (ok(cfg) and ok(ptch) and ok(hi)):
+        return ""
+    which = "the pitch limit" if ptch < cfg else "the configured bound"
+    return (f" (the upper bound of theta_A is {which}: min({cfg:g}, PTCH_LIM_MAX_DEG {ptch:g}) "
+            f"= {hi:g} deg)")
+
+
 def sensitivity_figure(sens: Sequence[Row], js0: float) -> str:
     """C's one-at-a-time sensitivity as two dots per row: how many members fail (by type), and the
     change of J without the failure penalty. The percent change of the full J is dominated by the
@@ -1131,7 +1177,7 @@ def build_c(c: Ctx) -> Out:
             f"{num(params[opt].get('sink_margin_ms')):.2f} m/s")
     bound = str(params[opt].get("at_bound") or "")
     if bound:
-        o.flags.append("at a search bound: " + bound)
+        o.flags.append("at a search bound: " + bound + bound_reason(params[opt], bound))
 
     # 1. energy against distance: C only (B1's points are single scenarios; its chapter has them)
     series, labels = [], []
@@ -1201,7 +1247,8 @@ def build_c(c: Ctx) -> Out:
                         (
                             f"seed {r['seed']:g}",
                             r["best_cost"],
-                            tip(r, ["seed", "best_cost", "evaluations"]),
+                            tip(r, ["seed", "best_cost", "evaluations", "T_bt_s", "theta_A_deg",
+                                    "spin_min", "Q_TRANS_DECEL_ms2"]),
                             "s1",
                         )
                         for r in srch
@@ -1209,7 +1256,9 @@ def build_c(c: Ctx) -> Out:
                     "best cost J",
                     "Search convergence",
                     zero=False,
-                ),
+                )
+                + (f'<p class="cap">{ch.esc(seed_statement(srch))}</p>'
+                   if seed_statement(srch) else ""),
             )
         )
     # 4. spread strips

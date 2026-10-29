@@ -1042,8 +1042,17 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
             "seed_spread": "", "at_bound": "",
             **{k: _num(v) for k, v in s_dflt.items() if k != "J"},
         })  # fmt: skip
-    search = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
-              for sr in r.search.seeds]  # fmt: skip
+    # each seed's best point in physical units (the stored unit-cube point mapped through the
+    # bounds; no search is run), so seeds that agree on J can be told apart by their parameters
+    search = []
+    for sr in r.search.seeds:
+        pt = bounds.to_physical(sr.x)
+        search.append({"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals,
+                       "T_bt_s": pt["T_bt"], "theta_A_deg": math.degrees(pt["theta_A"]),
+                       "spin_min": pt["spin_min"], "Q_TRANS_DECEL_ms2": pt["q"]})  # fmt: skip
+    # what the "at a search bound" chip needs to say where the upper bound of theta_A comes from
+    params[0].update({"theta_A_hi_deg": theta_hi, "theta_A_cfg_hi_deg": c.bounds.theta_A_deg[1],
+                      "ptch_lim_deg": math.degrees(inp.theta_p)})  # fmt: skip
 
     # per member and case: the run, the capability ceiling, D's alpha and VRS checks (report only)
     progress.phase("C: per-member tables")
