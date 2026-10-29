@@ -13,6 +13,7 @@ from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
 from sagetrans.io.stages import b1_ceiling_deg, grid_winner
+from sagetrans.io.view.chapters import b1_reason
 
 Table = list[dict[str, Any]]
 
@@ -541,6 +542,8 @@ def assemble(
         for n, res in b1_runs:
             errors += [f"B1 {n}: {e}" for e in res["errors"]]
         front, gap, sens_rows = tables["B1_front"], tables["B1_gap"], tables["B1_sens"]
+        for fr_row in front:
+            fr_row["reason"] = b1_reason(fr_row)
         unver = [f"{r['scenario']} {r['variant']} eps_x={r['eps_x_m']:g}" for r in front
                  if not r.get("replay_verified")]  # fmt: skip
         b1_parts = [

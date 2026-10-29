@@ -527,3 +527,73 @@ def test_the_b1_chapter_quotes_the_attached_gap_first(tmp_path):
     assert b1.index("B1 below C (S-03, attached)") < b1.index("B1 below C (S-03, c_envelope)")
     assert "verified for exact timing only: fails with commands 10 ms late" in b1
     assert "the B1-C gap quoted (S-03, c_envelope) comes from a schedule that fails" in b1
+
+
+# ---- B1b ----------------------------------------------------------------------------------
+def front_rows():
+    def pt(s, v, x, e, conv=True, ver=True, late=True):
+        return {"scenario": s, "variant": v, "eps_x_m": x, "converged": conv,
+                "replay_verified": ver, "replay_late_command_ok": late if ver else None,
+                "energy_kJ": e if ver else "", "distance_m": x, "excursion_m": 1.0}
+
+    return [
+        pt("S-01", "attached", 40.0, 0, conv=False, ver=False),
+        pt("S-01", "attached", 50.0, 0, conv=False, ver=False),
+        pt("S-01", "attached", 60.0, 0, conv=True, ver=False),
+        pt("S-01", "c_envelope", 60.0, 10.5, late=False),
+        pt("S-03", "attached", 60.0, 26.0), pt("S-03", "attached", 75.0, 24.0),
+        pt("S-03", "attached", 100.0, 22.5), pt("S-03", "c_envelope", 100.0, 21.0, late=False),
+        pt("S-02", "attached", 60.0, 0, conv=False, ver=False),
+    ]
+
+
+def test_the_reasons_are_derived_and_counted_by_scenario_variant_and_reason():
+    from sagetrans.io.view.chapters import b1_reason, reasons_fold
+
+    rows = front_rows()
+    assert [b1_reason(r) for r in rows[:4]] == [
+        "not converged", "not converged", "replay mismatch", "fails 10 ms late"]
+    assert b1_reason(rows[4]) == "verified"
+    assert b1_reason({**rows[4], "reason": "set by the writer"}) == "set by the writer"
+    html = reasons_fold(rows)
+    assert html.startswith("<details>") and "count by scenario, variant and reason" in html
+    cells = re.findall(r"<tr[^>]*>(.*?)</tr>", html)
+    s01 = next(c for c in cells if "S-01" in c and "attached" in c)
+    counts = re.findall(r">([0-9]+)<", s01)
+    assert counts == ["0", "2", "1", "0", "3"]  # verified, not converged, mismatch, late, points
+
+
+def test_each_panel_draws_the_c_run_of_its_own_scenario_or_nothing():
+    from sagetrans.io.view.chapters import verified_figure
+
+    gap = [{"scenario": "S-03", "variant": "attached", "b1_replay_verified": True,
+            "c_energy_kJ": 35.7, "c_distance_m": 98.0, "c_source": "register parameters at q = 2"},
+           {"scenario": "S-01", "variant": "attached", "b1_replay_verified": False,
+            "c_energy_kJ": 16.0, "c_distance_m": 57.0}]
+    html = verified_figure(front_rows(), gap)
+    assert html is not None
+    assert html.count("C, S-03") == 1 and "C, S-01" not in html  # no gap row, nothing drawn
+    assert "C, S-02" not in html
+    assert html.count("no scenario-matched C run") == 2  # S-01 and S-02 have none
+    assert html.count("no verified solution") == 1  # S-02 has no verified point: no empty frame
+    assert "S-03 (front)" in html and "S-01 (front)" not in html  # only S-03 has three points
+    assert "Verified solutions by scenario" in html and "Pareto front by scenario" not in html
+
+
+def test_the_title_is_a_front_only_when_every_drawn_panel_is_one():
+    from sagetrans.io.view.chapters import verified_figure
+
+    only_s03 = [r for r in front_rows() if r["scenario"] == "S-03"]
+    html = verified_figure(only_s03, [])
+    assert html is not None and "Pareto front by scenario" in html
+    assert verified_figure([], []) is None
+
+
+def test_the_b1_chapter_has_the_fold_and_the_new_figure(tmp_path):
+    synthetic_run(tmp_path)
+    write_table(tmp_path, "B1_front", front_rows())
+    write_table(tmp_path, "B1_gap", gap_rows())
+    b1 = section(build_html(load(tmp_path)), "b1")
+    assert "Why points are not quoted" in b1 and "Verified solutions by scenario" in b1
+    assert "Pareto front</h3>" not in b1  # the old title and the shared ensemble point are gone
+    assert "C optimum (ensemble mean, p95 distance)" not in b1

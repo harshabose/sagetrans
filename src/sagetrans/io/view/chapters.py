@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from sagetrans.io.view import charts as ch
-from sagetrans.io.view.html import Item, Out, absent, panelbox, table_html
+from sagetrans.io.view.html import Item, Out, absent, details, panelbox, table_html
 from sagetrans.io.view.load import Results
 from sagetrans.io.view.units import fmt_value, header_label, unit_of
 
@@ -1335,6 +1335,91 @@ LATE_WARNING = "verified for exact timing only: fails with commands 10 ms late"
 VARIANT_ORDER = ("attached", "c_envelope")
 
 
+REASONS = ("verified", "not converged", "replay mismatch", "fails 10 ms late")
+
+
+def b1_reason(r: Row) -> str:
+    """Why a B1 point is or is not quoted: the `reason` column, or derived from the flags."""
+    if r.get("reason"):
+        return str(r["reason"])
+    if r.get("converged") is not True:
+        return "not converged"
+    if r.get("replay_verified") is not True:
+        return "replay mismatch"
+    if r.get("replay_late_command_ok") is False:
+        return "fails 10 ms late"
+    return "verified"
+
+
+def reasons_fold(front: Sequence[Row]) -> str:
+    """A collapsible table: points by scenario, variant and reason (all of B1_front)."""
+    cnt: dict[tuple[str, str], dict[str, int]] = {}
+    for r in front:
+        key = (str(r.get("scenario")), str(r.get("variant")))
+        cnt.setdefault(key, dict.fromkeys(REASONS, 0))[b1_reason(r)] += 1
+    rows = [{"scenario": s, "variant": v, **c, "points": sum(c.values())}
+            for (s, v), c in sorted(cnt.items())]  # fmt: skip
+    return details(
+        "Why points are not quoted: count by scenario, variant and reason",
+        table_html("B1_front_reasons", ["scenario", "variant", *REASONS, "points"], rows))
+
+
+def verified_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
+    """One panel per scenario: the verified B1 points per variant and, where B1_gap has one, C's
+    run of THAT scenario (at the register parameters with q = 2). A panel with three or more
+    verified points of a variant draws them as a front; a panel with none says so."""
+    matched: dict[str, Row] = {}
+    for g in gap:
+        if (g.get("b1_replay_verified") is True and ok(num(g.get("c_energy_kJ")))
+                and ok(num(g.get("c_distance_m")))):  # fmt: skip
+            matched.setdefault(g["scenario"], g)
+    panels, leg, fronts, with_points = [], {}, 0, 0
+    for s in uniq([r["scenario"] for r in front]):
+        series, most = [], 0
+        for v in uniq([r.get("variant") for r in front]):
+            rs = sorted([r for r in front if r["scenario"] == s and r.get("variant") == v
+                         and r.get("replay_verified") is True and ok(num(r.get("energy_kJ")))],
+                        key=lambda r: r["distance_m"])  # fmt: skip
+            most = max(most, len(rs))
+            if rs:
+                cls = {"attached": "s2", "c_envelope": "s3"}.get(v, "ink")
+                series.append(ch.Series(
+                    f"B1 {v}", cls, [(r["distance_m"], r["energy_kJ"]) for r in rs],
+                    [tip(r, ["eps_x_m", "energy_kJ", "distance_m", "excursion_m", "t_f_s"],
+                         f"B1 {v}") for r in rs],
+                    line=len(rs) >= 3))  # fmt: skip
+                leg[v] = (cls, "line", f"B1 {v}")
+        mc = matched.get(s)
+        notes = ""
+        if mc is not None:
+            series.append(ch.Series(
+                "C, this scenario", "s1", [(num(mc["c_distance_m"]), num(mc["c_energy_kJ"]))],
+                [tip(mc, ["c_energy_kJ", "c_distance_m", "c_source"], f"C, {s}")],
+                line=False, marker="dia"))
+            leg["C"] = ("s1", "dia", "C, the same scenario (register parameters, q = 2)")
+        else:
+            notes = absent("no scenario-matched C run")
+        if most:
+            with_points += 1
+            fronts += most >= 3
+            panels.append((f"{s} (front)" if most >= 3 else s,
+                           ch.xy_chart(series, "distance [m]", "bus energy [kJ]", f"Verified {s}",
+                                       w=340, h=280) + notes))  # fmt: skip
+        else:
+            panels.append((s, absent("no verified solution") + notes))
+    if not panels:
+        return None
+    title = ("Pareto front by scenario" if with_points and fronts == with_points
+             else "Verified solutions by scenario")
+    return panelbox(
+        title,
+        "Least energy against the distance cap per wing-limit variant, verified points only; "
+        "a panel with three or more verified points of a variant draws them as a front. The C "
+        "point is C's run of the same scenario at the register parameters with q = 2, drawn "
+        "where B1_gap has one.",
+        ch.multiples(panels), _legend(*leg.values()))
+
+
 def gap_items(gap: Sequence[Row]) -> list[Item]:
     """The tiles of the B1-C gap: the `attached` figures first (every verified scenario), then
     `c_envelope` beside them with its warning when its schedule fails a late command.
@@ -1407,45 +1492,10 @@ def build_b1(c: Ctx) -> Out:
                 f"{n_fragile} verified point(s) fail when the commands are 10 ms late "
                 "(replay_late_command_ok = no): the optimum sits on the lift peak, a fraction of a "
                 "degree below the stall cliff")
-        panels, leg = [], {}
-        for s in uniq([r["scenario"] for r in front]):
-            series = []
-            for v in uniq([r.get("variant") for r in front]):
-                rs = sorted([r for r in front if r["scenario"] == s and r.get("variant") == v
-                             and r.get("replay_verified") is True and ok(num(r.get("energy_kJ")))],
-                            key=lambda r: r["distance_m"])  # fmt: skip
-                if rs:
-                    cls = {"attached": "s2", "c_envelope": "s3"}.get(v, "ink")
-                    series.append(ch.Series(f"B1 {v}", cls, [(r["distance_m"], r["energy_kJ"]) for r in rs],
-                                            [tip(r, ["eps_x_m", "energy_kJ", "distance_m", "excursion_m", "t_f_s"],
-                                                 f"B1 {v}") for r in rs]))  # fmt: skip
-                    leg[v] = (cls, "line", f"B1 {v}")
-            cp = c.rows("C_params")
-            ci = next((i for i, r in enumerate(cp) if r.get("case") == "optimum"), None)
-            if ci is not None and ok(num(cp[ci].get("p95_distance_m"))):
-                series.append(ch.Series("C optimum", "s1", [(cp[ci]["p95_distance_m"], cp[ci]["mean_energy_kJ"])],
-                                        [tip(cp[ci], ["mean_energy_kJ", "p95_distance_m"], "C optimum (ensemble)")],
-                                        line=False, marker="dia"))  # fmt: skip
-                leg["C"] = ("s1", "dia", "C optimum (ensemble mean, p95 distance)")
-            if series:
-                panels.append(
-                    (
-                        s,
-                        ch.xy_chart(
-                            series, "distance [m]", "bus energy [kJ]", f"Front {s}", w=340, h=280
-                        ),
-                    )
-                )
-        if panels:
-            o.figures.append(
-                panelbox(
-                    "Pareto front",
-                    "Least energy against the distance cap, per wing-limit "
-                    "variant; the C optimum is overlaid for scale.",
-                    ch.multiples(panels),
-                    _legend(*leg.values()),
-                )
-            )
+        o.figures.append(reasons_fold(front))
+        fig = verified_figure(front, gap)
+        if fig:
+            o.figures.append(fig)
     if gap:
         items = []
         for r in gap:
