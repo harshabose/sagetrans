@@ -603,6 +603,47 @@ def scenarios_panel(rows: Sequence[Row]) -> str:
     return panelbox("Scenarios at the recommended settings", head, body)
 
 
+# What each analysis is, in words (B1 is not listed: it is being removed). The questions are the
+# chapters' own (registry.py); "gives" and "read by" say what the analysis writes and who uses it.
+ANALYSES_GUIDE = (
+    ("A", "Which entry speeds and decelerations keep the altitude, and what closes the window?",
+     "The zero-altitude-loss feasibility map and the wing-angle window of the back transition.",
+     "D's optional wing-angle cap"),
+    ("D", "Which Q_TRANS_DECEL can the aircraft hold across the ensemble?",
+     "The braking deceleration of 32 members from the AIRBRAKE exit and the recommended "
+     "Q_TRANS_DECEL (a_rec).", "E (the planned deceleration), the settings sheet"),
+    ("F", "How fast can the landing descent go before the vortex-ring state?",
+     "The descent rate, time and hover energy of the last 30 m.", "E (the landing segment)"),
+    ("Q2", "Does the pusher give the forward acceleration the energy budget assumes?",
+     "The pusher's acceleration up to AIRSPEED_MIN at TKOFF_THR_MAX, by altitude, mass and "
+     "state of charge.", "E (the forward transition)"),
+    ("E", "Does the energy budget close for the missions, with the reserves?",
+     "Energy by segment, the reserve and the maximum range per site and mission against the "
+     "100 and 120 km requirements.", "the settings sheet (at the recommended settings)"),
+    ("FT", "Which AIRSPEED_MIN, Q_TRANSITION_MS, TKOFF_THR_MAX and Q_TRAN_PIT_MAX make the "
+     "forward transition without losing altitude or stalling?",
+     "The searched settings, the register and the ArduPilot default side by side.",
+     "E and Q2 re-run at the recommended settings, the settings sheet"),
+    ("C", "Which four ArduPilot settings brake the aircraft from the AIRBRAKE exit at least energy?",
+     "Q_BACKTRANS_MS, Q_A_ANGLE_MAX, Q_M_SPIN_MIN and Q_TRANS_DECEL, with the wing held to the "
+     "margin, and the unconstrained search as a reference.", "the settings sheet"),
+    ("Sensitivity", "Which inputs move the headline outputs, and how well are they known?",
+     "One-at-a-time swings and a Morris screening of the inputs, with each input's evidence "
+     "grade.", "the reading of every other chapter"),
+)
+
+
+def analyses_panel() -> str:
+    """"What each analysis is": one row per analysis (a small reader's guide)."""
+    rows = [{"analysis": n, "asks": q, "gives": g, "read by": u} for n, q, g, u in ANALYSES_GUIDE]
+    return panelbox(
+        "What each analysis is",
+        "The analyses of this study, each with the question its chapter answers, what it writes "
+        "and who reads it.",
+        table_html("analyses_guide", list(rows[0]), rows).replace(
+            '<div class="tbl">', '<div class="tbl full">', 1))
+
+
 def energy_cases_figure(bud: Sequence[Row]) -> str | None:
     """Energy by segment at the maximum range, with the required distances behind it.
 
@@ -893,6 +934,7 @@ def build_e(c: Ctx) -> Out:
         scen = c.rows("E_scenarios")
         if scen:
             o.figures.append(scenarios_panel(scen))
+            o.figures.append(analyses_panel())
             o.tables.append(("E_scenarios", None))
         o.tables += [("E_summary_recommended", None), ("E_segments_recommended", None),
                      ("E_budget_recommended", None), ("E_hover_check_recommended", None),
