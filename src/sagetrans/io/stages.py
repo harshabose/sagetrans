@@ -1502,7 +1502,10 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
         sc = forward.ft_scenario(inp.scenarios[name], inp.mission.clearance_agl_m)
         for c, prm in cases.items():
             rr = forward.run_ft(vp, sc, prm, fev)
-            hist += forward.history_rows(sc.vehicle_for(vp), rr, fev.template, name, c)
+            # the case's own parameters (as run_ft flew them), not the template's: the template
+            # has the register's Q_TRAN_PIT_MAX, which gave every case the register's pitch cap
+            hist += forward.history_rows(sc.vehicle_for(vp), rr,
+                                         forward.case_params(fev, sc, prm), name, c)
     progress.note(f"FT reports: {time.time() - t1:.0f} s")
     return {
         "optimum": best, "J_start": j_start, "scens": core, "E_ref": w.E_ref,

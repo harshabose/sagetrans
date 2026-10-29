@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from sagetrans import atmosphere
+from sagetrans.analysis import forward
 from sagetrans.analysis.common import Scenario
 from sagetrans.control.ardupilot_like import BackTransitionParams, LiftFF, Position1Controller
 from sagetrans.io import stages
@@ -311,3 +312,48 @@ def test_the_range_within_two_percent_of_the_best_cost():
                          (20.0, 0.80))]
     assert grid_near_best(rows) == [12.0, 14.0, 16.0]  # <= 0.770 * 1.02 = 0.7854
     assert grid_near_best(rows, 0.0) == [14.0]
+
+
+# ---- F1: the pitch cap written to FT_history is the case's own -------------------------------
+def test_each_case_has_its_own_pitch_cap_by_mode(tmp_path):
+    from sagetrans.control.forward import pitch_cap_deg
+
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY)
+    inp = load_inputs(cfg, only={"FT"})
+    fev, start = stages.ft_settings(inp)
+    sc = inp.scenarios["S-01"]
+    opt = {**start, "tran_pit_max": 6.0}
+    fp_opt, fp_reg = forward.case_params(fev, sc, opt), forward.case_params(fev, sc, start)
+    assert fp_opt.tran_pit_max_deg == 6.0 and fp_reg.tran_pit_max_deg == start["tran_pit_max"]
+    assert fev.template.tran_pit_max_deg == start["tran_pit_max"]  # the template is the register's
+    # WAIT cap = Q_TRAN_PIT_MAX, FADE cap = (Q_TRAN_PIT_MAX + 1) x 2, DONE has none
+    assert pitch_cap_deg(fp_opt, "fwd_wait", 5.0) == 6.0
+    assert pitch_cap_deg(fp_opt, "fwd_fade", 5.0) == 14.0
+    assert pitch_cap_deg(fp_reg, "fwd_wait", 5.0) == start["tran_pit_max"]
+    assert pitch_cap_deg(fp_reg, "fwd_fade", 5.0) == (start["tran_pit_max"] + 1.0) * 2.0
+
+
+def test_the_ft_report_writes_each_cases_own_cap_and_the_run_flew_with_it(tmp_path):
+    cfg = tmp_path / "configs"
+    shutil.copytree(CONFIGS, cfg)
+    with (cfg / "study.yaml").open("a", encoding="utf-8") as fh:
+        fh.write(FT_TINY)
+    inp = load_inputs(cfg, only={"FT"})
+    out = stages.run_task(inp, "FT:18:5000:100:6")  # an optimum with Q_TRAN_PIT_MAX 6, register 3
+    reg_pit = round(float(stages.ft_settings(inp)[1]["tran_pit_max"]), 6)
+    hist = out["tables"]["FT_history"]
+    caps = {}
+    for r in hist:
+        caps.setdefault((r["case"], r["mode"]), set()).add(round(r["theta_cap"], 6))
+    wait_o, wait_r = caps[("optimum", "fwd_wait")], caps[("register", "fwd_wait")]
+    assert 6.0 in wait_o and 6.0 not in wait_r  # a wait-mode cap of 6 is the optimum's alone
+    assert reg_pit in wait_r and reg_pit not in wait_o - {0.0}
+    fade_o, fade_r = caps[("optimum", "fwd_fade")], caps[("register", "fwd_fade")]
+    assert fade_o == {14.0} and fade_r == {round((reg_pit + 1.0) * 2.0, 6)}  # 14 against 8
+    assert fade_o != fade_r
+    # t_pitch_cap_s in FT_runs is computed in _evaluate from the run's own `fp`, so it already used
+    # each run's parameters; the defect was the history rows only
+    assert all("t_pitch_cap_s" in r for r in out["tables"]["FT_runs"])

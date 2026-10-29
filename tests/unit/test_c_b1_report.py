@@ -722,3 +722,36 @@ def test_the_b1_chapter_has_the_nominal_markers(tmp_path):
     b1 = section(build_html(load(tmp_path)), "b1")
     assert "nominal: the same scenario and cap, setting unchanged" in b1
     assert "[nominal unverified]" in b1
+
+
+# ---- F (the FT chapter) -----------------------------------------------------------------
+def ft_hist_rows(case, wait_cap, fade_cap, scenario="S-07", v=17.0):
+    rows = []
+    for i in range(8):
+        mode = "fwd_wait" if i < 3 else ("fwd_fade" if i < 6 else "fwd_done")
+        cap = wait_cap if mode == "fwd_wait" else (fade_cap if mode == "fwd_fade" else 15.0)
+        rows.append({"scenario": scenario, "case": case, "t": float(i), "mode": mode,
+                     "V_eas": 3.0 * i, "h_rel": 0.1 * i, "theta": 2.0 * i, "theta_cap": cap,
+                     "delta_r": 0.5 - 0.05 * i, "delta_p": 0.1 * i})
+    return rows
+
+
+def ft_run(tmp_path, with_runs=True):
+    write_table(tmp_path, "FT_params", [
+        {"case": "optimum", "airspeed_min_eas_ms": v, "q_transition_s": 17.0, "tkoff_thr_max": 1.0,
+         "tran_pit_max_deg": 6.0, "J": 0.759, "n_flags": 0.0, "worst_stall_margin": 1.246}
+        for v in (18.0,)] + [
+        {"case": "register", "airspeed_min_eas_ms": 17.0, "q_transition_s": 5.0,
+         "tkoff_thr_max": 0.8, "tran_pit_max_deg": 3.0, "J": 51.3, "n_flags": 5.0}])
+    write_table(tmp_path, "FT_history", [
+        *ft_hist_rows("optimum", 6.0, 14.0), *ft_hist_rows("register", 3.0, 8.0),
+        *ft_hist_rows("ardupilot_default", 3.0, 8.0)])
+    write_record(tmp_path)
+
+
+def test_the_ft_history_draws_every_cases_own_cap_line(tmp_path):
+    ft_run(tmp_path)
+    ft = section(build_html(load(tmp_path)), "ft")
+    for case in ("optimum", "register", "ArduPilot default"):
+        assert f"pitch cap ({case})" in ft, case
+    assert "pitch cap (optimum)" in ft and "pitch cap</" not in ft.replace("pitch cap (", "")

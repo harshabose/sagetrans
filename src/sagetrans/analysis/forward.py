@@ -136,18 +136,28 @@ def _interp(t: np.ndarray, y: np.ndarray, t0: float) -> float:
     return float(np.interp(t0, t, y))
 
 
+def case_params(cfg: FTEval, scen: Scenario, prm: dict[str, float]) -> ForwardParams:
+    """The `ForwardParams` of ONE run: the template with that run's four values and start height.
+
+    `run_ft` flies with exactly this, and so must anything that describes the run afterwards (the
+    pitch cap written to `FT_history`): the template alone carries the register's `Q_TRAN_PIT_MAX`.
+    """
+    h0 = scen.altitude_amsl_m
+    tpl = cfg.template
+    return replace(
+        tpl, airspeed_min_eas=prm["airspeed_min"], q_transition_s=prm["q_transition"],
+        tkoff_thr_max=prm["tkoff_thr_max"], tran_pit_max_deg=prm["tran_pit_max"], h_start=h0,
+        back=replace(tpl.back, h_tgt=h0),
+    )  # fmt: skip
+
+
 def run_ft(vp: VehicleParams, scen: Scenario, prm: dict[str, float], cfg: FTEval) -> FTRun:
     """Fly one forward transition. `prm` has the four searched values (see `FT_NAMES`)."""
     vps = scen.vehicle_for(vp)
     rho = scen.rho
     ff, _ = restricted._scenario_tables(vps, rho, scen.soc)  # noqa: SLF001
     h0 = scen.altitude_amsl_m
-    tpl = cfg.template
-    fp = replace(
-        tpl, airspeed_min_eas=prm["airspeed_min"], q_transition_s=prm["q_transition"],
-        tkoff_thr_max=prm["tkoff_thr_max"], tran_pit_max_deg=prm["tran_pit_max"], h_start=h0,
-        back=replace(tpl.back, h_tgt=h0),
-    )  # fmt: skip
+    fp = case_params(cfg, scen, prm)
     ctl = ForwardController(fp, ff, z_i0=ff.weight / ff.thrust_for_delta(fp.back.delta_max))
     x0 = np.array([0.0, h0, 0.0, 0.0, 0.0, 0.0, trim.hover_omega(vps, rho), 0.0, 0.0])
 
@@ -518,7 +528,7 @@ def mean_energy(
 
 __all__ = [
     "FT_FLAGS", "FT_NAMES", "LATTICE_NAMES", "LATTICE_STEP", "FTEval", "FTRun", "LatticeResult",
-    "evaluate_ft", "ft_bounds", "ft_cost", "ft_ensemble", "ft_scenario", "history_rows",
-    "lattice_descent", "lattice_neighbours", "mean_energy", "on_lattice", "optimise_ft",
-    "projected_loss", "recovery_accel", "run_ft", "snap_ft", "summarise_ft",
+    "case_params", "evaluate_ft", "ft_bounds", "ft_cost", "ft_ensemble", "ft_scenario",
+    "history_rows", "lattice_descent", "lattice_neighbours", "mean_energy", "on_lattice",
+    "optimise_ft", "projected_loss", "recovery_accel", "run_ft", "snap_ft", "summarise_ft",
 ]  # fmt: skip

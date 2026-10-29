@@ -1784,19 +1784,14 @@ def build_ft(c: Ctx) -> Out:
             {k: v for k, v in FT_CASES.items()},
             ["V_eas", "h_rel", "theta", "delta_r", "delta_p"],
         )
-        capped = [r for r in hs if r.get("case") == "optimum" and ok(num(r.get("theta_cap")))]
-        if capped:
-            ts.append(
-                ch.TSeries(
-                    "pitch cap (optimum)",
-                    "ink",
-                    "pitch cap",
-                    [r["t"] for r in capped],
-                    {"theta": [r["theta_cap"] for r in capped]},
-                    False,
-                    True,
-                )
-            )
+        cap_leg = []
+        for cs, (cls, short, _, _) in FT_CASES.items():  # each case's own cap, in its own colour
+            capped = [r for r in hs if r.get("case") == cs and ok(num(r.get("theta_cap")))]
+            if capped:
+                ts.append(ch.TSeries(
+                    f"pitch cap ({short})", cls, f"pitch cap ({short})", [r["t"] for r in capped],
+                    {"theta": [r["theta_cap"] for r in capped]}, True, True, False))
+                cap_leg.append((cls, "dash", f"pitch cap ({short})"))
         modes: list[tuple[float, str]] = []
         last = None
         for r in hs:
@@ -1828,7 +1823,7 @@ def build_ft(c: Ctx) -> Out:
                     "Optimum, register start and ArduPilot default through the wait, "
                     "fade and done modes. The shaded band is the accepted altitude change.",
                     ch.panel_figure(f"ft_hist_{s}", panels, ts),
-                    _legend(*case_leg, ("ink", "line", "pitch cap (optimum)")),
+                    _legend(*case_leg, *cap_leg),
                 )
             )
     if not hist:
