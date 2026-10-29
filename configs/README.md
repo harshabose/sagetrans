@@ -260,6 +260,23 @@ Results are cached per task, keyed by the hash of every result-relevant input. R
 unchanged inputs and only the report is rebuilt; change one value and only the affected tasks
 re-run. `python run.py --force` ignores the cache.
 
+## Publishing a report
+
+`python scripts/publish_results.py [RESULTS_FOLDER]` turns a finished run (`python run.py`, then
+`python run.py --view`) into an orphan branch `results/draft-<commit>` (the commit the run was made
+at, read from `run_record.json`; `release-` for a RELEASE record). The folder defaults to
+`<output_dir>/<run_name>` of `study.yaml`. The branch has one commit with, at the root:
+`index.html` and `report.html` (identical, so GitHub Pages can serve the page and the page's own
+links still resolve), every file the run record lists (the tables as CSV, the tornado figures,
+`report.md`, ...), `run_record.json`, `tables.xlsx`, `.nojekyll` and a generated `README.md`.
+
+Before it commits it checks that every file the record lists exists and still matches its sha256,
+and that every relative link in the page points at a file on the branch (a page that would 404 is
+not published). It refuses a run made on a dirty tree (`--allow-dirty` overrides; the README says
+so) and a branch name that already exists. Your checkout is not touched. Nothing is pushed unless
+`--push` is given, and `--dry-run` runs every check and creates nothing. GitHub Pages is switched on
+by hand: Settings, Pages, the branch, folder `/`.
+
 ## Command line
 
 ```text
