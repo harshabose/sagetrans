@@ -186,7 +186,8 @@ def q2_cells(inp: StudyInputs, conventions: list[str]) -> list[Q2Cell]:
                 for soc in c.soc:
                     f = pusher.forward_accel(vps, sc.rho, v_end, soc, inp.tkoff_thr_max, c.n_speed)
                     row = {
-                        "convention": conv, "altitude_m": alt, "rho_kg_m3": sc.rho,
+                        "convention": conv, "feeds_e": conv == c.feed_convention,
+                        "altitude_m": alt, "rho_kg_m3": sc.rho,
                         "mass_factor": mf, "mass_kg": vps.m, "soc": soc,
                         "tkoff_thr_max": inp.tkoff_thr_max, "tkoff_status": status,
                         "v_end_tas_ms": v_end, "a_min_ms2": _num(f.a_min),

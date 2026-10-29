@@ -147,10 +147,14 @@ today unless marked NEW.
 
 ### Q2 · pusher acceleration
 - Tables: `Q2_pusher_margin`, `Q2_worst` (optional).
-- Figures: (1) acceleration against speed, one line per site and mass, E's assumed `a_fwd` drawn as
-  a horizontal rule with label; (2) worst acceleration by altitude and state of charge (heat strip,
-  sequential single hue, values printed in cells); (3) true against equivalent airspeed reading
-  (two lines, same axis, the gap labelled).
+- Figures: **Pusher acceleration by altitude, mass and state of charge**: one heat grid of the
+  rows that feed E (`feeds_e` = yes, the convention `Q2.feed_convention`, `eas`): a row per altitude,
+  a column per mass factor and state of charge (`mass/SoC in %`), the value printed in each cell,
+  a cross where the end speed is not reached, and a last column `E` with the acceleration E assumes
+  for the site at that altitude (`E_summary.a_fwd_out_ms2`). It replaces the scatter against
+  altitude, the heat strip by state of charge and the true-against-equivalent chart. A folder
+  without `feeds_e` uses `eas` (or the only convention present). The tiles use the same rows. Both
+  conventions stay in the `Q2_pusher_margin` table.
 - Result box: worst margin and its case; whether E's assumption holds everywhere (yes/no + number).
 
 ### D · braking

@@ -208,7 +208,8 @@ class Q2Cfg(_Strict):
     mass_factors: list[float] = [0.85, 1.0, 1.15]
     soc: list[float] = [0.8, 0.6, 0.3]
     conventions: list[Literal["tas", "eas"]] = ["tas", "eas"]  # AIRSPEED_MIN read as TAS or EAS
-    feed_convention: Literal["tas", "eas"] = "tas"  # the one E reads
+    # the one E reads: AIRSPEED_MIN is an equivalent airspeed (O-14, O-23), as in D, C, B1 and FT
+    feed_convention: Literal["tas", "eas"] = "eas"
     isa_offset_k: float = 0.0
     n_speed: int = Field(41, ge=11)
     write_profile: bool = False

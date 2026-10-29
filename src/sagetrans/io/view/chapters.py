@@ -251,12 +251,75 @@ def build_a(c: Ctx) -> Out:
 
 
 # ------------------------------------------------------------------------------------------ Q2
+def q2_rows_fed_to_e(rows: Sequence[Row]) -> tuple[list[Row], str]:
+    """The rows of the airspeed convention E reads, and its name.
+
+    `feeds_e` marks them; a folder from before it uses `eas` (E reads AIRSPEED_MIN as an
+    equivalent airspeed since 2026-10-27) or, if only `tas` is there, that one."""
+    if any("feeds_e" in r for r in rows):
+        sub = [r for r in rows if r.get("feeds_e") is True]
+    else:
+        names = [v for v in uniq([r.get("convention") for r in rows]) if v]
+        pick = "eas" if "eas" in names else (names[0] if names else None)
+        sub = [r for r in rows if r.get("convention") == pick] if pick else list(rows)
+    conv = next((str(r["convention"]) for r in sub if r.get("convention")), "")
+    return sub, conv
+
+
+def pusher_grid(sub: Sequence[Row], conv: str, e_rows: Sequence[Row]) -> str | None:
+    """Every altitude x mass factor x state of charge as one heat grid, with what E assumes.
+
+    The columns are the mass factor and the state of charge in %; the last column is E's
+    forward-transition acceleration (the out leg) at the site of that altitude, where E ran
+    there. A cross marks a case that does not reach the end speed."""
+    alts = sorted({r["altitude_m"] for r in sub if ok(num(r.get("altitude_m")))})
+    masses = sorted({r["mass_factor"] for r in sub if r.get("mass_factor") is not None})
+    socs = sorted({r["soc"] for r in sub if r.get("soc") is not None}, reverse=True)
+    if not (alts and masses and socs):
+        return None
+    cols = [(m, s) for m in masses for s in socs]
+    e_by_site: dict[float, float] = {}
+    for r in e_rows:
+        if ok(num(r.get("a_fwd_out_ms2"))):
+            e_by_site.setdefault(float(r["site_amsl_m"]), num(r["a_fwd_out_ms2"]))
+    has_e = any(a in e_by_site for a in alts)
+    vals: list[list[float | None]] = []
+    flags: list[list[bool]] = []
+    for a in alts:
+        v: list[float | None] = []
+        f: list[bool] = []
+        for m, s in cols:
+            cell = [r for r in sub if r["altitude_m"] == a and r["mass_factor"] == m
+                    and r["soc"] == s and ok(num(r.get("a_min_ms2")))]
+            v.append(min((num(r["a_min_ms2"]) for r in cell), default=None))
+            f.append(any(r.get("reachable") is False for r in cell))
+        if has_e:
+            v.append(e_by_site.get(float(a)))
+            f.append(False)
+        vals.append(v)
+        flags.append(f)
+    labels = [f"{m:g}/{round(100 * s)}" for m, s in cols] + (["E"] if has_e else [])
+    note = (" The last column (E) is the acceleration E assumes for the site at that altitude: "
+            "one way, the register mass and the state of charge at the start of the leg."
+            if has_e else "")
+    return panelbox(
+        "Pusher acceleration by altitude, mass and state of charge",
+        f"Lowest acceleration the pusher gives on the way up to AIRSPEED_MIN, read as "
+        f"{'an equivalent' if conv == 'eas' else 'a true'} airspeed ({conv or 'all'}: the "
+        "convention E reads), for every altitude, mass factor and state of charge in %. A cross "
+        "marks a case that does not reach the end speed." + note,
+        ch.heat_chart(labels, [f"{a:g} m" for a in alts], vals, "Pusher acceleration",
+                      "mass factor / state of charge in %", "m/s^2", 2, flags,
+                      w=max(720.0, 70.0 * len(labels) + 130.0)))
+
+
 def build_q2(c: Ctx) -> Out:
     o = Out()
     rows = c.rows("Q2_pusher_margin")
     if not rows:
         return o
-    i = c.extreme("Q2_pusher_margin", "a_min_ms2", min)
+    sub, conv = q2_rows_fed_to_e(rows)
+    i = c.extreme("Q2_pusher_margin", "a_min_ms2", min, lambda r: any(r is x for x in sub))
     if i is not None:
         it = c.item(
             "Worst pusher acceleration",
@@ -267,14 +330,14 @@ def build_q2(c: Ctx) -> Out:
         )
         if it:
             o.items.append(it)
-    reach = [r.get("reachable") for r in rows if "reachable" in r]
+    reach = [r.get("reachable") for r in sub if "reachable" in r]
     if reach:
         n_ok = sum(1 for v in reach if v is True)
         o.items.append(
             Item(
                 "Every case reaches the end speed",
                 "yes" if n_ok == len(reach) else "NO",
-                expr=f"{n_ok} of {len(reach)} rows have reachable = yes",
+                expr=f"{n_ok} of {len(reach)} rows have reachable = yes ({conv or 'all'} reading)",
             )
         )
         if n_ok != len(reach):
@@ -285,97 +348,9 @@ def build_q2(c: Ctx) -> Out:
         it = c.item("Acceleration E assumes (lowest, out leg)", "E_summary", "a_fwd_out_ms2", e_i)
         if it:
             o.items.append(it)
-    conv = [v for v in uniq([r.get("convention") for r in rows]) if v]
-    first = conv[0] if conv else None
-    sub = [r for r in rows if r.get("convention") == first] if first else rows
-    series = []
-    masses = sorted({r["mass_factor"] for r in sub if r.get("mass_factor") is not None})
-    for k, m in enumerate(masses[:3]):
-        rs = [r for r in sub if r.get("mass_factor") == m]
-        series.append(ch.Series(f"mass x {m:g}", f"s{k + 1}", [(r["altitude_m"], r["a_min_ms2"]) for r in rs],
-                                [tip(r, ["altitude_m", "soc", "a_min_ms2", "v_at_min_ms", "mass_kg"], f"mass x {m:g}")
-                                 for r in rs], hollow=[r.get("reachable") is False for r in rs],
-                                line=False))  # fmt: skip
-    if e_rows and any("a_fwd_out_ms2" in r for r in e_rows):
-        pts = [
-            (r["site_amsl_m"], r["a_fwd_out_ms2"])
-            for r in e_rows
-            if ok(num(r.get("a_fwd_out_ms2")))
-        ]
-        series.append(ch.Series("E assumes (out leg)", "ink", pts,
-                                [tip(r, ["site_amsl_m", "mission", "a_fwd_out_ms2"], "E_summary")
-                                 for r in e_rows if ok(num(r.get("a_fwd_out_ms2")))],
-                                line=False, marker="dia"))  # fmt: skip
-    if series:
-        o.figures.append(
-            panelbox(
-                "Pusher acceleration by altitude",
-                f"Lowest acceleration the pusher gives up to the end speed ({first or 'all'} convention), "
-                "one mark per mass factor and state of charge; E's assumed value as a diamond.",
-                ch.xy_chart(
-                    series, "altitude [m]", "a_min [m/s^2]", "Pusher acceleration", y_from_zero=True
-                ),
-                _legend(*[(s.cls, "dot" if s.cls != "ink" else "dia", s.name) for s in series]),
-            )
-        )
-    alts = sorted({r["altitude_m"] for r in sub})
-    socs = sorted({r["soc"] for r in sub})
-    if alts and socs:
-        vals, flg = [], []
-        for a in alts:
-            row_v, row_f = [], []
-            for s in socs:
-                cell = [r for r in sub if r["altitude_m"] == a and r["soc"] == s]
-                row_v.append(min((r["a_min_ms2"] for r in cell), default=None))
-                row_f.append(any(r.get("reachable") is False for r in cell))
-            vals.append(row_v)
-            flg.append(row_f)
-        o.figures.append(
-            panelbox(
-                "Worst acceleration by altitude and state of charge",
-                "Lowest a_min over the mass factors; the value is printed in each cell.",
-                ch.heat_chart(
-                    [f"SoC {s:g}" for s in socs],
-                    [f"{a:g} m" for a in alts],
-                    vals,
-                    "Worst acceleration",
-                    "state of charge",
-                    "m/s^2",
-                    2,
-                    flg,
-                ),
-            )
-        )
-    if len(conv) >= 2:
-        series = []
-        for k, cv in enumerate(conv[:2]):
-            by = {
-                a: min(
-                    r["a_min_ms2"]
-                    for r in rows
-                    if r.get("convention") == cv and r["altitude_m"] == a
-                )
-                for a in alts
-            }
-            pts = sorted(by.items())
-            series.append(ch.Series(f"AIRSPEED_MIN read as {cv}", f"s{k + 1}", pts,
-                                    [f"{cv}: altitude {a:g} m, a_min {v:.2f} m/s^2" for a, v in pts],
-                                    labels={len(pts) - 1: cv}))  # fmt: skip
-        o.figures.append(
-            panelbox(
-                "True against equivalent airspeed reading",
-                "Lowest a_min at each altitude when the controller's AIRSPEED_MIN is read as true (tas) or as "
-                "equivalent (eas) airspeed. The gap is the effect of the convention.",
-                ch.xy_chart(
-                    series,
-                    "altitude [m]",
-                    "worst a_min [m/s^2]",
-                    "Convention effect",
-                    y_from_zero=True,
-                ),
-                _legend(*[(s.cls, "line", s.name) for s in series]),
-            )
-        )
+    grid = pusher_grid(sub, conv, e_rows)
+    if grid:
+        o.figures.append(grid)
     o.tables = [("Q2_worst", None), ("Q2_pusher_margin", None)]
     return o
 
