@@ -261,6 +261,23 @@ def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any
     return rows
 
 
+def ft_scenarios_context(inp: StudyInputs) -> dict[str, Any]:
+    """What the FT chapter says about its history scenarios: each one's axes and note, and the
+    ensemble's ranges on the same axes (the viewer compares them; it cannot read the inputs)."""
+    ax = inp.ensemble_axes
+    scen = {}
+    for n in inp.study.FT.history_scenarios:
+        s = inp.scenarios.get(n)
+        if s is not None:
+            scen[n] = {"altitude_m": s.altitude_amsl_m, "isa_offset_k": s.isa_offset_k,
+                       "mass_factor": (s.mass_kg or inp.vehicle.m) / inp.vehicle.m, "soc": s.soc,
+                       "headwind_ms": s.headwind_ms, "note": inp.scenario_notes.get(n, "")}
+    return {"scenarios": scen,
+            "axes": {"altitude_m": list(ax.altitude_m), "isa_offset_k": list(ax.isa_offset_k),
+                     "mass_factor": list(ax.mass_factor), "headwind_ms": list(ax.headwind_ms),
+                     "soc": list(ax.soc)}}  # fmt: skip
+
+
 def assemble(
     inp: StudyInputs,
     task_results: Mapping[str, dict[str, Any]],
@@ -676,6 +693,7 @@ def assemble(
                   for n, t in {**task_results, **({ft_key: ft_task} if ft_key else {})}.items()
                   if t.get("notes")},
         "ft_grid": ft_grid_context,
+        "ft_scenarios": ft_scenarios_context(inp),
         "study": {a: getattr(inp.study, a).model_dump(mode="json")
                   for a in ("A", "D", "F", "E", "Q2", "C", "FT", "B1", "sensitivity")
                   if a in inp.study.analyses},

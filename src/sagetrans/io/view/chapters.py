@@ -1721,6 +1721,58 @@ FT_CASES = {
 }
 
 
+FT_AXES = (("altitude_m", "altitude", "m", ".0f"), ("isa_offset_k", "ISA offset", "K", "+.0f"),
+           ("mass_factor", "mass factor", "", ".2f"), ("soc", "SoC", "", ".2f"),
+           ("headwind_ms", "headwind", "m/s", "+.0f"))  # fmt: skip
+FT_CASE_NAMES = {"optimum": "optimum", "register": "register", "ardupilot_default": "ArduPilot default"}
+
+
+def heaviest_stall(runs: Sequence[Row], margin: float) -> tuple[float, str] | None:
+    """The stall rule: `margin` x the stall speed of the HEAVIEST member (the largest V_s_eas_ms),
+    the member that binds, not the mean of the members."""
+    vs = [num(r.get("V_s_eas_ms")) for r in runs if ok(num(r.get("V_s_eas_ms")))]
+    if not vs:
+        return None
+    return margin * max(vs), f"{margin:g} x stall speed (heaviest member)"
+
+
+def ft_scenario_caption(name: str, info: dict[str, Any] | None, axes: dict[str, Any],
+                     hist: Sequence[Row], runs: Sequence[Row]) -> str:  # fmt: skip
+    """Which scenario a time-history figure is, why, and where it lies against the ensemble's
+    range on each axis (all computed from the run record), then what the default loses there."""
+    if not info:
+        return f"Scenario {name}."
+    parts = [f"{lab} {format(info[k], f)}{' ' + u if u else ''}" for k, lab, u, f in FT_AXES
+             if isinstance(info.get(k), int | float)]  # fmt: skip
+    text = f"Scenario {name}: " + ", ".join(parts)
+    text += f" ({info['note']})." if info.get("note") else "."
+    out, edge = [], []
+    for k, lab, _, _ in FT_AXES:
+        rng, v = axes.get(k), info.get(k)
+        if not (isinstance(v, int | float) and isinstance(rng, list) and len(rng) == 2):
+            continue
+        lo, hi = float(rng[0]), float(rng[1])
+        span = (hi - lo) or 1.0
+        if v < lo - 1e-9 or v > hi + 1e-9:
+            out.append(f"{lab} ({v:g} against {lo:g} to {hi:g})")
+        elif min(v - lo, hi - v) <= 0.02 * span:
+            edge.append(lab)
+    if out:
+        text += " It lies OUTSIDE the ensemble's range on " + ", ".join(out) + "."
+    else:
+        text += " It lies inside the ensemble's range on every axis"
+        text += (", at the edge of the range on " + ", ".join(edge)) if edge else ""
+        text += "."
+    dh = [num(r.get("h_rel")) for r in hist if r.get("case") == "ardupilot_default"
+          and r.get("scenario") == name and ok(num(r.get("h_rel")))]  # fmt: skip
+    dl = [num(r.get("loss_m")) for r in runs if r.get("case") == "ardupilot_default"
+          and ok(num(r.get("loss_m")))]  # fmt: skip
+    if dh and dl:
+        text += (f" The ArduPilot default loses {max(0.0, -min(dh)):.1f} m of altitude here; "
+                 f"its ensemble members lose at most {max(dl):.1f} m.")
+    return text
+
+
 def build_ft(c: Ctx) -> Out:
     o = Out()
     params, runs, hist = c.rows("FT_params"), c.rows("FT_runs"), c.rows("FT_history")
@@ -1777,6 +1829,7 @@ def build_ft(c: Ctx) -> Out:
         if k in row
     ]
     # 1. time histories, one figure per scenario
+    ftx = c.context.get("ft_scenarios", {})
     for s in uniq([r.get("scenario") for r in hist])[:2]:
         hs = [r for r in hist if r.get("scenario") == s]
         ts = hist_series(
@@ -1792,25 +1845,35 @@ def build_ft(c: Ctx) -> Out:
                     f"pitch cap ({short})", cls, f"pitch cap ({short})", [r["t"] for r in capped],
                     {"theta": [r["theta_cap"] for r in capped]}, True, True, False))
                 cap_leg.append((cls, "dash", f"pitch cap ({short})"))
+        for sr in ts:  # each case's own fade start and done, on its airspeed curve
+            rs = [r for r in hs if r.get("case") == sr.name]
+            for mode, shape, what in (("fwd_fade", "sq", "fade starts"), ("fwd_done", "dia", "done")):
+                first = next((r for r in rs if r.get("mode") == mode), None)
+                if first is not None:
+                    sr.marks.append((first["t"], shape, f"{sr.short}: {what} at {first['t']:.1f} s"))
         modes: list[tuple[float, str]] = []
         last = None
         for r in hs:
             if r.get("case") == "optimum" and r.get("mode") and r["mode"] != last:
                 last = r["mode"]
-                modes.append((r["t"], str(last).replace("fwd_", "")))
-        vs = [num(r.get("V_s_eas_ms")) for r in runs if ok(num(r.get("V_s_eas_ms")))]
+                modes.append((r["t"], str(last).replace("fwd_", "") + " (optimum)"))
         eas_rules = []
-        if ok(num(params[opt].get("airspeed_min_eas_ms"))):
-            eas_rules.append((params[opt]["airspeed_min_eas_ms"], "AIRSPEED_MIN (optimum)"))
-        if vs:
-            eas_rules.append((stall * sum(vs) / len(vs), f"{stall:g} x stall speed"))
+        for cs, lab in FT_CASE_NAMES.items():
+            pr = next((p for p in params if p.get("case") == cs), None)
+            if pr and ok(num(pr.get("airspeed_min_eas_ms"))):
+                eas_rules.append((pr["airspeed_min_eas_ms"],
+                                  f"AIRSPEED_MIN {lab} ({pr['airspeed_min_eas_ms']:g})"))
+        sr_stall = heaviest_stall(runs, stall)
+        if sr_stall:
+            eas_rules.append(sr_stall)
         band = (
             (-float(loss), float(gain))
             if isinstance(loss, int | float) and isinstance(gain, int | float)
             else None
         )
         panels = [
-            ch.Panel("V_eas", "airspeed [m/s, EAS]", "m/s", 2, hlines=eas_rules, vticks=modes[1:]),
+            ch.Panel("V_eas", "airspeed [m/s, EAS]", "m/s", 2, hlines=eas_rules, vticks=modes[1:],
+                     ymin=0.0, marks=True),
             ch.Panel("h_rel", "altitude change [m]", "m", 2, True, band=band),
             ch.Panel("theta", "pitch [deg]", "deg", 1),
             ch.Panel("delta_r", "rotor throttle [-]", "", 2),
@@ -1820,10 +1883,15 @@ def build_ft(c: Ctx) -> Out:
             o.figures.append(
                 panelbox(
                     f"Time histories, {s}",
-                    "Optimum, register start and ArduPilot default through the wait, "
-                    "fade and done modes. The shaded band is the accepted altitude change.",
+                    ft_scenario_caption(s, ftx.get("scenarios", {}).get(s), ftx.get("axes", {}),
+                                     hs, runs)
+                    + " Optimum, register start and ArduPilot default through the wait, fade and "
+                    "done modes; the square on each airspeed curve is where that case's fade "
+                    "starts and the diamond where it is done (the vertical lines are the "
+                    "optimum's). The shaded band is the accepted altitude change.",
                     ch.panel_figure(f"ft_hist_{s}", panels, ts),
-                    _legend(*case_leg, *cap_leg),
+                    _legend(*case_leg, *cap_leg, ("ink", "sq", "fade starts (own, on the curve)"),
+                            ("ink", "dia", "done (own, on the curve)")),
                 )
             )
     if not hist:
@@ -1922,7 +1990,6 @@ def build_ft(c: Ctx) -> Out:
     # 4. scan
     scan = c.rows("FT_scan")
     if scan:
-        vs = [num(r.get("V_s_eas_ms")) for r in runs if ok(num(r.get("V_s_eas_ms")))]
         pts = sorted((r["airspeed_min_eas_ms"], r["J"]) for r in scan if ok(num(r.get("J"))))
         rs = sorted(
             (r for r in scan if ok(num(r.get("J")))), key=lambda r: r["airspeed_min_eas_ms"]
@@ -1931,7 +1998,8 @@ def build_ft(c: Ctx) -> Out:
                             [tip(r, ["airspeed_min_eas_ms", "J", "q_transition_s", "tkoff_thr_max",
                                      "tran_pit_max_deg", "n_flags", "seed_spread", "at_bound"]) for r in rs],
                             hollow=[bool(num(r.get("n_flags"))) for r in rs])]  # fmt: skip
-        vl = [(stall * sum(vs) / len(vs), f"{stall:g} x stall speed")] if vs else []
+        hv = heaviest_stall(runs, stall)
+        vl = [hv] if hv else []
         o.figures.append(
             panelbox(
                 "Cost against AIRSPEED_MIN",

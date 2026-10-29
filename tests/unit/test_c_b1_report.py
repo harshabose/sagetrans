@@ -755,3 +755,84 @@ def test_the_ft_history_draws_every_cases_own_cap_line(tmp_path):
     for case in ("optimum", "register", "ArduPilot default"):
         assert f"pitch cap ({case})" in ft, case
     assert "pitch cap (optimum)" in ft and "pitch cap</" not in ft.replace("pitch cap (", "")
+
+
+# ---- F2 -------------------------------------------------------------------------------------
+def test_rule_labels_are_stacked_with_a_minimum_gap():
+    rows = ch.stack_labels([100.0, 101.0, 102.5, 180.0], 11.0, 22.0, 200.0)
+    assert rows[3] == 180.0  # a lone label stays on its rule
+    near = sorted(rows[:3])
+    assert all(b - a >= 11.0 - 1e-9 for a, b in zip(near, near[1:], strict=False))
+    low = ch.stack_labels([196.0, 197.0, 198.0], 11.0, 22.0, 200.0)  # pushed back up at the bottom
+    assert max(low) <= 200.0 and sorted(low)[1] - sorted(low)[0] >= 11.0 - 1e-9
+    assert ch.stack_labels([], 11.0, 0.0, 10.0) == []
+
+
+def test_the_airspeed_panel_starts_at_zero_with_labels_at_the_right_and_case_marks():
+    t = [float(i) for i in range(10)]
+    s = ch.TSeries("optimum", "s1", "optimum", t, {"V": [10.0 + i for i in range(10)]},
+                   marks=[(3.0, "sq", "optimum: fade starts at 3.0 s"),
+                          (6.0, "dia", "optimum: done at 6.0 s")])
+    p = ch.Panel("V", "airspeed", "m/s", 2, hlines=[(17.0, "A"), (17.2, "B"), (17.4, "C")],
+                 ymin=0.0, marks=True)
+    svg = ch.panel_figure("f", [p], [s])
+    assert "optimum: fade starts at 3.0 s" in svg and "optimum: done at 6.0 s" in svg
+    ticks = [float(v) for v in re.findall(r'class="tick"[^>]*>([-0-9.]+)<', svg)]
+    assert min(ticks) == 0.0
+    ys = [float(m) for m in re.findall(r'<text class="dl" x="[0-9.]+" y="([0-9.]+)" '
+                                       r'text-anchor="end">[ABC]<', svg)]
+    assert len(ys) == 3 and all(b - a >= 11.0 - 0.2 for a, b in zip(sorted(ys), sorted(ys)[1:],
+                                                                    strict=False))
+    plain = ch.panel_figure("f", [ch.Panel("V", "airspeed", "m/s")], [s])
+    assert "fade starts" not in plain  # marks only where the panel asks
+
+
+def test_the_stall_rule_is_the_heaviest_members_not_the_mean():
+    from sagetrans.io.view.chapters import heaviest_stall
+
+    runs = [{"V_s_eas_ms": 12.0}, {"V_s_eas_ms": 14.0}, {"V_s_eas_ms": 13.0}, {"V_s_eas_ms": ""}]
+    v, lab = heaviest_stall(runs, 1.2)
+    assert abs(v - 16.8) < 1e-9 and lab == "1.2 x stall speed (heaviest member)"
+    assert heaviest_stall([{}], 1.2) is None
+
+
+AXES = {"altitude_m": [0, 5000], "isa_offset_k": [-10, 20], "mass_factor": [0.8, 1.15],
+        "headwind_ms": [-5, 5], "soc": [0.2, 1.0]}
+
+
+def test_the_scenario_caption_says_where_it_lies_against_the_ensemble():
+    from sagetrans.io.view.chapters import ft_scenario_caption
+
+    mid = {"altitude_m": 1500, "isa_offset_k": 0, "mass_factor": 1.0, "soc": 0.8,
+           "headwind_ms": 0, "note": "reference altitude"}
+    s = ft_scenario_caption("S-07", mid, AXES, [], [])
+    assert "altitude 1500 m" in s and "ISA offset +0 K" in s and "(reference altitude)" in s
+    assert "inside the ensemble's range on every axis." in s and "OUTSIDE" not in s
+    corner = {**mid, "altitude_m": 5000, "mass_factor": 1.15, "isa_offset_k": 10, "soc": 0.5}
+    s = ft_scenario_caption("S-03", corner, AXES, [], [])
+    assert "inside the ensemble's range on every axis, at the edge of the range on altitude, " \
+        "mass factor." in s
+    out = ft_scenario_caption("X", {**mid, "isa_offset_k": 30, "headwind_ms": -8}, AXES, [], [])
+    assert "OUTSIDE the ensemble's range on ISA offset (30 against -10 to 20), headwind (-8" in out
+    hist = [{"scenario": "S-03", "case": "ardupilot_default", "h_rel": h}
+            for h in (0.0, -13.2, -4.0)]
+    runs = [{"case": "ardupilot_default", "loss_m": m} for m in (1.0, 3.9, 2.0)]
+    s = ft_scenario_caption("S-03", corner, AXES, hist, runs)
+    assert "default loses 13.2 m of altitude here" in s and "at most 3.9 m" in s
+    assert ft_scenario_caption("S-09", None, AXES, [], []) == "Scenario S-09."
+
+
+def test_the_ft_chapter_has_the_airspeed_rules_marks_and_scenario_caption(tmp_path):
+    ft_run(tmp_path)
+    write_table(tmp_path, "FT_runs", [
+        {"case": "optimum", "set": "ensemble", "member": float(i), "V_s_eas_ms": 12.0 + i,
+         "loss_m": 1.0, "flags": ""} for i in range(3)])
+    write_record(tmp_path, context={"ft_scenarios": {
+        "scenarios": {"S-07": {"altitude_m": 1500, "isa_offset_k": 0, "mass_factor": 1.0,
+                               "soc": 0.8, "headwind_ms": 0, "note": "reference"}},
+        "axes": AXES}})
+    ft = section(build_html(load(tmp_path)), "ft")
+    assert "1.2 x stall speed (heaviest member)" in ft and "stall speed</" not in ft
+    assert "AIRSPEED_MIN optimum (18)" in ft and "AIRSPEED_MIN register (17)" in ft
+    assert "Scenario S-07: altitude 1500 m" in ft and "inside the ensemble" in ft
+    assert "fade starts at 3.0 s" in ft and "done at 6.0 s" in ft and "fade (optimum)" in ft

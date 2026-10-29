@@ -236,6 +236,7 @@ class Panel:
     band: tuple[float, float] | None = None  # a shaded band, e.g. the altitude limits
     vticks: list[tuple[float, str]] = field(default_factory=list)  # instants, e.g. mode changes
     ymin: float | None = None  # the axis starts here (airspeed: 0), not at the data minimum
+    marks: bool = False  # draw each series' `marks` on its curve in this panel
 
 
 @dataclass
@@ -252,6 +253,26 @@ class TSeries:
     thick: bool = False
     direct: str = ""  # a direct label at the end of the line (the reference series)
     end_mark: bool = False  # a marker at the last sample: where the run stopped
+    # (time, shape, tip) markers on the curve of a panel with `marks`, e.g. where the fade starts
+    marks: list[tuple[float, str, str]] = field(default_factory=list)
+
+
+def stack_labels(ys: Sequence[float], gap: float, lo: float, hi: float) -> list[float]:
+    """Pixel rows for labels wanted at `ys`, at least `gap` apart and inside [lo, hi], in the
+    order given (a label is moved up or down from its rule, never reordered)."""
+    order = sorted(range(len(ys)), key=lambda i: ys[i])
+    out = [0.0] * len(ys)
+    prev = lo - gap
+    for i in order:  # push down from the top
+        out[i] = max(ys[i], prev + gap)
+        prev = out[i]
+    over = out[order[-1]] - hi if order else 0.0
+    if over > 0:  # push back up from the bottom
+        nxt = hi + gap
+        for i in reversed(order):
+            out[i] = min(out[i], nxt - gap)
+            nxt = out[i]
+    return out
 
 
 def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries],
@@ -286,10 +307,12 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
             y0, y1 = fr.sy(p.band[1]), fr.sy(p.band[0])
             o.append(el("rect", "band", x=pl, y=f1(y0), width=f1(w - pl - pr), height=f1(y1 - y0)))
         o += axes(fr, tlabel, "", xt, yt)
-        for v, lab in p.hlines:
+        # the rule labels sit at the right edge, stacked with a minimum gap so none overprints
+        rows = stack_labels([fr.sy(v) - 4 for v, _ in p.hlines], 11.0, 22.0, fr.bottom - 4)
+        for (v, lab), ly in zip(p.hlines, rows, strict=True):
             y = fr.sy(v)
             o.append(el("line", "rule", x1=pl, x2=f1(w - pr), y1=f1(y), y2=f1(y)))
-            o.append(text(pl + 4, y - 4, lab, "dl"))
+            o.append(text(w - pr - 3, ly, lab, "dl", "end"))
         for tv, lab in p.vticks:
             x = f1(fr.sx(tv))
             o.append(el("line", "rule", x1=x, x2=x, y1=12, y2=f1(fr.bottom)))
@@ -301,6 +324,11 @@ def panel_figure(fig_id: str, panels: Sequence[Panel], series: Sequence[TSeries]
                 o.append(el("path", cls, d=_path(list(zip(s.t, ys, strict=True)), fr, s.steps)))
                 if s.direct and pi == first:
                     o.append(text(fr.sx(s.t[-1]) - 4, fr.sy(ys[-1]) + 16, s.direct, "dl", "end"))
+                if p.marks:
+                    for mt, shape, mtip in s.marks:
+                        k = nearest(s.t, mt)
+                        if k is not None and math.isfinite(ys[k]):
+                            o.append(marker(shape, fr.sx(s.t[k]), fr.sy(ys[k]), s.cls, mtip))
                 if s.end_mark and math.isfinite(ys[-1]):
                     o.append(marker("dot", fr.sx(s.t[-1]), fr.sy(ys[-1]), s.cls,
                                     f"{s.short}: stops at {s.t[-1]:.2f} s ({p.label} {ys[-1]:.2f})"))
