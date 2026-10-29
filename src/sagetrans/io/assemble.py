@@ -526,7 +526,31 @@ def assemble(
             )
         ) if a_cap else ""
         flagged = c_res.at_bound
+        # the unconstrained reference and the other points of the alpha curve: their own tasks;
+        # every reader of "C" above (recommended settings, E, the viewer's C chapter) takes the
+        # headline task only
+        ref = task_results.get("C:unconstrained")
+        if ref is not None:
+            tables.update({k: v for k, v in ref["tables"].items() if k != "C_alpha_curve_ref"})
+        curve_rows = list(tables.get("C_alpha_curve", []))
+        curve_rows += [row for k, res in sorted(task_results.items()) if k.startswith("C:alpha:")
+                       for row in res["tables"]["C_alpha_curve"]]  # fmt: skip
+        if ref is not None:
+            curve_rows += ref["tables"]["C_alpha_curve_ref"]
+        if curve_rows:
+            tables["C_alpha_curve"] = sorted(
+                curve_rows, key=lambda r: (r["alpha_frac"] != "", -float(r["alpha_frac"] or 0.0)))
+        held_txt = (
+            f"**Configuration: enforced.** The wing angle is held to |alpha_w| <= "
+            f"{tables['C_params'][0].get('alpha_limit_deg', float('nan')):.2f} deg "
+            f"({inp.study.margin_alpha_frac:g} x alpha_s, `margin_alpha_frac`); this is the "
+            "headline and the one written to `settings_recommended`."
+            if inp.study.C.enforce_alpha else
+            "**Configuration: unconstrained.** The wing angle is not held: the model ignores the "
+            "stall (`C.enforce_alpha` is off)."
+        )
         sections["C — ArduPilot parameters from the AIRBRAKE exit"] = "\n".join([
+            held_txt, "",
             f"Cost {c_res.cost_default:.3f} (register values, q = 2) → **{c_res.cost:.3f}**; "
             f"{len(c_res.search.seeds)}-seed spread **{c_res.search.spread:.2%}** (T-12 limit "
             f"{gate.T12_SPREAD_MAX:.0%}). Entry is the AIRBRAKE exit like D; four variables are "
@@ -558,7 +582,12 @@ def assemble(
             md_table(runs_c, ["member", "altitude_m", "mass_kg", "soc", "headwind_ms",
                               "V0_ground_ms", "x_tgt_m", "x_end_m", "overshoot_m", "energy_kJ",
                               "excursion_m", "end_sink_ms", "flags", "a_cap_ms2", "q_over_a_cap",
-                              "alpha_max_gated_deg", "vrs_min"]),
+                              "alpha_max_gated_deg", "vrs_min", "stall_alpha_peak_deg",
+                              "stall_t_above_peak_s", "stall_t_above_limit_s",
+                              "stall_wing_share_min"]),
+            *(["", "The price of the margin (one C search per wing limit; `unconstrained` ignores "
+               "the stall and is a reference only, never a recommendation):", "",
+               md_table(tables["C_alpha_curve"])] if tables.get("C_alpha_curve") else []),
         ])  # fmt: skip
 
     # B1 from the AIRBRAKE exit: one table per kind over every scenario that ran

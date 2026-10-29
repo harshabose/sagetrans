@@ -864,6 +864,7 @@ C_HIST_STYLE = {  # case -> (class, dashed, thick)
     "C ardupilot_default": ("ref", True, False),
     "B1 attached": ("s2", False, False),
     "B1 c_envelope": ("s3", False, False),
+    "C unconstrained (reference)": ("ink", True, False),
 }
 
 
@@ -916,6 +917,9 @@ def build_c_histories(c: Ctx, o: Out) -> None:
     band = band_vals[0] if band_vals else None
 
     series, (_, name) = select_history(hist, b1h, "core", headline)
+    ref_h = [r for r in c.rows("C_ref_history") if r.get("scenario") == name]
+    if series and ref_h:
+        series["C unconstrained (reference)"] = ref_h
     if series and name is not None:
         first = next(rows[0] for case, rows in series.items() if case.startswith("C"))
         entry = {case: num(first.get("V0_tas_ms")) for case in series}
@@ -940,7 +944,9 @@ def build_c_histories(c: Ctx, o: Out) -> None:
             f"Same scenario as B1 ({name})",
             f"Scenario {name}: {scenario_caption(first)}. C's optimum and the ArduPilot default "
             "run on the scenario that B1's headline replay uses; each curve ends with a marker "
-            f"where the run stopped.{note}",
+            + ("where the run stopped. The dashed curve is C without the wing-angle cap (the "
+               "model ignores the stall; reference only)." if ref_h else "where the run stopped.")
+            + note,
             "c_hist_core", series, band, entry))
     series, (_, mem) = select_history(hist, [], "default_fails")
     if series and mem is not None:
@@ -1149,6 +1155,120 @@ def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int,
         ch.multiples(panels, 2) + f'<p class="cap">{ch.esc(sentence)}</p>', leg)
 
 
+CONFIG_COLS = ("Q_TRANS_DECEL_ms2", "T_bt_s", "theta_A_deg", "spin_min", "mean_energy_kJ",
+               "p95_distance_m", "p95_stop_time_s", "n_fail_total", "max_overshoot_m",
+               "max_end_sink_ms")
+EXPOSURE_COLS = ("stall_alpha_peak_deg_max", "stall_members_above_peak", "stall_t_above_peak_s_max",
+                 "stall_t_above_limit_s_max", "stall_wing_share_min")
+LIMIT_NOTE = ("the limit caps the pitch command, so the angle can sit about a degree above it; "
+              "the C_L peak is the stall")
+UNCONSTRAINED = ("unconstrained: the model ignores the stall; reference only; never a "
+                 "recommendation")
+
+
+def exposure_cells(r: Row) -> Row:
+    """The stall-exposure cells of a C_params row, with "k of n" for the members above the peak."""
+    k, n = num(r.get("stall_members_above_peak")), num(r.get("stall_members"))
+    return {**{c: r.get(c) for c in EXPOSURE_COLS},
+            "stall_members_above_peak": f"{k:g} of {n:g}" if ok(k) and ok(n) else ""}
+
+
+def configurations_figure(params: Sequence[Row], opt: int, ref: Sequence[Row]) -> str | None:
+    """The enforced headline and the unconstrained reference side by side, with a sentence of
+    ratios computed from the rows (energy, distance, stop time, time above the lift peak)."""
+    head = params[opt]
+    refo = next((r for r in ref if r.get("case") == "optimum"), None)
+    if refo is None or head.get("alpha_enforced") is not True:
+        return None
+    lim = num(head.get("alpha_limit_deg"))
+    rows = [
+        {"configuration": f"enforced, |alpha_w| <= {lim:.2f} deg (headline)",
+         **{c: head.get(c) for c in CONFIG_COLS}, **exposure_cells(head)},
+        {"configuration": UNCONSTRAINED, **{c: refo.get(c) for c in CONFIG_COLS},
+         **exposure_cells(refo)},
+    ]  # fmt: skip
+    sent = ""
+    e1, e2 = num(head.get("mean_energy_kJ")), num(refo.get("mean_energy_kJ"))
+    d1, d2 = num(head.get("p95_distance_m")), num(refo.get("p95_distance_m"))
+    t1, t2 = num(head.get("p95_stop_time_s")), num(refo.get("p95_stop_time_s"))
+    if all(ok(v) and v > 0 for v in (e1, e2, d1, d2, t1, t2)):
+        sent = (f"Holding the wing below the limit costs {e1 / e2:.2f} x the energy, "
+                f"{d1 / d2:.2f} x the stopping distance and {t1 / t2:.2f} x the stopping time of "
+                "the unconstrained search; q is "
+                f"{num(head.get('Q_TRANS_DECEL_ms2')):.2f} against "
+                f"{num(refo.get('Q_TRANS_DECEL_ms2')):.2f} m/s^2.")
+    cols = ["configuration", *CONFIG_COLS, *EXPOSURE_COLS]
+    return panelbox(
+        "The enforced configuration and the unconstrained reference",
+        "C twice: the wing held to the limit (the headline, written to the recommended settings) "
+        "and not held (the model's lift falls from its peak to about a third within a few "
+        "degrees, so the unconstrained optimum flies through the stall). The exposure columns "
+        "are the worst member (the least wing share is the lowest over members); they are not "
+        "penalised and not failure flags. " + sent,
+        table_html("C_configurations", cols, rows))
+
+
+def exposure_figure(params: Sequence[Row], ref: Sequence[Row]) -> str | None:
+    """Stall exposure of every case in both configurations (report only)."""
+    rows = []
+    for cfg, ps in (("enforced", params), ("unconstrained", ref)):
+        for r in ps:
+            if r.get("case") in ("optimum", "ardupilot_default") and ok(
+                    num(r.get("stall_alpha_peak_deg_max"))):
+                rows.append({"configuration": cfg, "case": r["case"], **exposure_cells(r)})
+    if not rows:
+        return None
+    return panelbox(
+        "Stall exposure",
+        "Per case, over the ensemble members, airspeed at least D.alpha_gate_ms and t > 0: the "
+        "peak |alpha_w|, how many members go above the C_L peak angle, the longest time above "
+        "the peak and above the limit, and the least wing share of the weight. " + LIMIT_NOTE
+        + ".",
+        table_html("C_stall_exposure", ["configuration", "case", *EXPOSURE_COLS], rows))
+
+
+def alpha_curve_figure(curve: Sequence[Row]) -> str | None:
+    """What the margin costs: one C search per wing limit, and the unconstrained one."""
+    if not curve:
+        return None
+    rows = []
+    for r in curve:
+        kind = str(r.get("kind", ""))
+        label = {"headline": "headline (margin_alpha_frac)", "unconstrained": UNCONSTRAINED,
+                 }.get(kind, "curve point")
+        rows.append({"limit": label, **r})
+    cols = ["limit", "alpha_frac", "limit_deg", "Q_TRANS_DECEL_ms2", "T_bt_s", "theta_A_deg",
+            "spin_min", "p95_distance_m", "p95_stop_time_s", "mean_energy_kJ", "n_fail_total",
+            "max_overshoot_m", "max_end_sink_ms"]
+    return panelbox(
+        "The price of the margin",
+        "One C search per wing limit (a fraction of alpha_s; the limit in degrees follows). "
+        "The distance and the stop time are 95th percentiles over the ensemble, the energy the "
+        "mean, the failures the total count.",
+        table_html("C_alpha_curve", cols, rows))
+
+
+def caveats_panel(p: Row) -> str:
+    """What the C result rests on, computed from the values the run used."""
+    bits = []
+    a_s, m_blend, clmax = num(p.get("alpha_s_deg")), num(p.get("blend_M")), num(p.get("cl_max"))
+    pk = num(p.get("alpha_peak_deg"))
+    if ok(a_s):
+        bits.append(
+            f"alpha_s = {a_s:.2f} deg is a placeholder (the CFD shows no lift peak up to 15 deg), "
+            + (f"and the blend sharpness M = {m_blend:g} 1/rad is a numerical parameter that also "
+               f"sets C_L,max ({clmax:.3f}, at alpha_w = {pk:.2f} deg)" if ok(m_blend) and ok(clmax)
+               and ok(pk) else "")
+            + ": the size of the stall effect, and so the enforced result, is provisional.")
+    if p.get("rotor_constant_coeffs") is True:
+        bits.append("The rotor model has constant thrust and torque coefficients and no in-plane "
+                    "force (CT1, CT2, CQ1, CQ2, CH1 and k_mu are zero in the register): thrust "
+                    "does not change with airspeed and the rotors add no drag in forward flight.")
+    if not bits:
+        return ""
+    return panelbox("What this result rests on", " ".join(bits), "")
+
+
 def build_c(c: Ctx) -> Out:
     o = Out()
     params, runs, curve = c.rows("C_params"), c.rows("C_runs"), c.rows("C_q_curve")
@@ -1210,6 +1330,29 @@ def build_c(c: Ctx) -> Out:
     bound = str(params[opt].get("at_bound") or "")
     if bound:
         o.flags.append("at a search bound: " + bound + bound_reason(params[opt], bound))
+    held = params[opt].get("alpha_enforced")
+    lim_deg = num(params[opt].get("alpha_limit_deg"))
+    if held is True and ok(lim_deg):
+        o.items.insert(0, Item("Configuration", f"enforced: |alpha_w| <= {lim_deg:.2f} deg", "",
+                               f"C_params.alpha_limit_deg[{opt}]"))
+    elif held is False:
+        o.items.insert(0, Item("Configuration", "unconstrained", "",
+                               f"C_params.alpha_enforced[{opt}]",
+                               note="the model ignores the stall"))
+        o.flags.append("C ignores the stall: " + UNCONSTRAINED)
+    for idx, tag in ((opt, "optimum"), (dfl, "ArduPilot default")):
+        if idx is None:
+            continue
+        for lab, col, unit in (
+            ("Peak |alpha_w|, worst member", "stall_alpha_peak_deg_max", "deg"),
+            ("Time above the C_L peak angle, worst member", "stall_t_above_peak_s_max", "s"),
+            ("Time above the wing limit, worst member", "stall_t_above_limit_s_max", "s"),
+            ("Least wing share of the weight", "stall_wing_share_min", ""),
+        ):
+            it = c.item(f"{lab} ({tag})", "C_params", col, idx, unit,
+                        note=LIMIT_NOTE if col == "stall_t_above_limit_s_max" else "")
+            if it:
+                o.items.append(it)
 
     # 1. energy against distance: C only (B1's points are single scenarios; its chapter has them)
     series, labels = [], []
@@ -1261,6 +1404,12 @@ def build_c(c: Ctx) -> Out:
     else:
         o.absent.append("not in this run: C_q_curve")
 
+    ref_params = c.rows("C_ref_params")
+    for fig in (caveats_panel(params[opt]), configurations_figure(params, opt, ref_params),
+                exposure_figure(params, ref_params), alpha_curve_figure(c.rows("C_alpha_curve"))):
+        if fig:
+            o.figures.append(fig)
+
     # 2. time histories
     build_c_histories(c, o)
 
@@ -1300,6 +1449,8 @@ def build_c(c: Ctx) -> Out:
             ("excursion_m", "excursion [m]"),
             ("end_sink_ms", "end sink [m/s]"),
             ("overshoot_m", "overshoot [m]"),
+            ("stall_t_above_peak_s", "time above the C_L peak [s]"),
+            ("stall_wing_share_min", "least wing share of the weight"),
         ]
         dmem = [r for r in runs if r.get("case") == "ardupilot_default"]
         rows: list[ch.Strip] = []
@@ -1358,6 +1509,10 @@ def build_c(c: Ctx) -> Out:
         ("C_sens", None),
         ("C_search", None),
         ("C_history", None),
+        ("C_alpha_curve", None),
+        ("C_ref_params", None),
+        ("C_ref_runs", None),
+        ("C_ref_history", None),
     ]
     return o
 

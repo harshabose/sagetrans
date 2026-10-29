@@ -782,19 +782,34 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
 
 
 # ---- tasks: C, FT, B1, sensitivity -------------------------------------------------------------
-def c_settings(inp: StudyInputs) -> tuple[restricted.CEval, BackTransitionParams, CostWeights]:
+def c_wing_limit_rad(inp: StudyInputs, frac: float | None = None) -> float:
+    """The wing-angle limit [rad] of the enforced configuration: `margin_alpha_frac` x alpha_s
+    (or `frac` x alpha_s for one point of the alpha curve)."""
+    f = inp.study.margin_alpha_frac if frac is None else frac
+    return f * inp.vehicle.wing.alpha_s
+
+
+def c_settings(
+    inp: StudyInputs, *, enforce: bool | None = None, frac: float | None = None
+) -> tuple[restricted.CEval, BackTransitionParams, CostWeights]:
     """C's evaluation settings, base controller parameters and cost normalisers from the config.
 
     The entry (`theta_fw0_deg`, `pit_lim_mode`, `entry_convention`) is read
-    from the D block: it describes the AIRBRAKE exit, not C.
+    from the D block: it describes the AIRBRAKE exit, not C. `enforce` (default `C.enforce_alpha`)
+    holds the wing angle to `frac` (default `margin_alpha_frac`) x alpha_s by limiting the pitch
+    command to the limit plus the flight-path angle: the ENFORCED configuration. Without it C
+    ignores the stall. Every reader of C's settings (B1's gap, the sensitivity) gets the
+    configuration the study is set to, so it follows the headline.
     """
     c, d = inp.study.C, inp.study.D
     if d.pit_lim_mode == "airspeed" and inp.controller.theta_B is None:
         raise ValueError("D.pit_lim_mode 'airspeed' needs controller.ardupilot.Q_BCK_PIT_LIM")
     z = c.z
+    held = c.enforce_alpha if enforce is None else enforce
+    cap = c_wing_limit_rad(inp, frac) - inp.vehicle.wing.i_w if held else None  # body angle
     base = exit_params(
         inp, rotor_lag_s=c.rotor_lag_s, z_mode="ardupilot", z_pos_p=z.pos_p, z_vel_p=z.vel_p,
-        z_acc_p=z.acc_p, z_acc_i=z.acc_i, z_acc_imax=z.acc_imax, z_vmax=z.vmax,
+        alpha_cap=cap, z_acc_p=z.acc_p, z_acc_i=z.acc_i, z_acc_imax=z.acc_imax, z_vmax=z.vmax,
         z_vel_flt_hz=z.vel_flt_hz, z_acc_flt_hz=z.acc_flt_hz,
     )  # fmt: skip
     cev = restricted.CEval(
@@ -976,8 +991,63 @@ def _c_trace(
             for i in _sample_indices(len(sim.t), every)]  # fmt: skip
 
 
-def task_c(inp: StudyInputs) -> dict[str, Any]:
+def stop_times(results: list[restricted.CRun]) -> list[float]:
+    """The time from the AIRBRAKE exit to the stop of each run that stopped."""
+    return [float(r.sim.t[-1]) for r in results if r.stopped]
+
+
+def p95(values: list[float]) -> float:
+    return float(np.percentile(values, 95)) if values else math.nan
+
+
+def exposure_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The stall-exposure columns of one case over its members (report only): the worst member's
+    peak angle and times, the least wing share, and how many members go above the lift peak."""
+    def col(k: str) -> list[float]:
+        return [float(r[k]) for r in rows if _is_num(r.get(k))]
+
+    peak, t_pk, t_lim, share = (col(k) for k in ("stall_alpha_peak_deg", "stall_t_above_peak_s",
+                                                  "stall_t_above_limit_s", "stall_wing_share_min"))
+    if not rows or not peak:
+        return {}
+    return {
+        "stall_alpha_peak_deg_max": max(peak), "stall_t_above_peak_s_max": max(t_pk),
+        "stall_t_above_peak_s_mean": sum(t_pk) / len(t_pk), "stall_t_above_limit_s_max": max(t_lim),
+        "stall_wing_share_min": min(share) if share else math.nan,
+        "stall_members_above_peak": float(sum(1 for t in t_pk if t > 0.0)),
+        "stall_members": float(len(rows)),
+    }
+
+
+def alpha_curve_row(
+    kind: str, frac: float | None, limit_deg: float | None, prm: dict[str, float],
+    results: list[restricted.CRun], w: CostWeights, c: Any, at_bound: str = "",
+) -> dict[str, Any]:  # fmt: skip
+    """One row of `C_alpha_curve`: the optimum of one wing limit and what it costs."""
+    s = restricted.summarise_c(results, w)
+    cnt = failure_counts(results)
+    return {
+        "kind": kind, "alpha_frac": "" if frac is None else frac,
+        "limit_deg": "" if limit_deg is None else limit_deg,
+        "Q_TRANS_DECEL_ms2": prm["q"], "T_bt_s": prm["T_bt"],
+        "theta_A_deg": math.degrees(prm["theta_A"]), "spin_min": prm["spin_min"],
+        "p95_distance_m": _num(s["p95_distance_m"]),
+        "p95_stop_time_s": _num(p95(stop_times(results))),
+        "mean_energy_kJ": _num(s["mean_energy_kJ"]), "n_fail_total": cnt["n_fail_total"],
+        "n_failing_members": cnt["n_failing_members"],
+        "max_overshoot_m": _num(s["max_overshoot_m"]),
+        "max_end_sink_ms": _num(worst_end_sink(results)), "J": _num(s["J"]), "at_bound": at_bound,
+    }  # fmt: skip
+
+
+def task_c(inp: StudyInputs, variant: str = "") -> dict[str, Any]:
     """Analysis C: search the four ArduPilot variables from the AIRBRAKE exit, then report.
+
+    `variant` picks what runs. "" is the headline: C in the configuration the study is set to
+    (`C.enforce_alpha`: the wing angle held to `margin_alpha_frac` x alpha_s, or not), with every
+    table below. "unconstrained" is the same search without the cap, for comparison only: its
+    tables are `C_ref_params`, `C_ref_runs` and `C_ref_history`. "alpha:<f>" is the search with
+    the wing held to f x alpha_s and one row of `C_alpha_curve`. Each has its own cache entry.
 
     Tables: `C_params` (the optimum, the register at q = 2 and the ArduPilot default), `C_search`,
     `C_runs` (one row per ensemble member and case, with the capability ceiling and D's alpha and
@@ -988,8 +1058,15 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     transition starts from the same state in all three cases; it is a reference only.
     """
     c, d, vp = inp.study.C, inp.study.D, inp.vehicle
+    mode = "full" if not variant else "reference" if variant == "unconstrained" else "curve"
+    if mode == "curve" and not variant.startswith("alpha:"):
+        raise ValueError(f"unknown C variant {variant!r}")
+    frac = float(variant.split(":", 1)[1]) if mode == "curve" else None
     scens = _ensemble(inp, c.ensemble_n, c.ensemble_seed)
-    cev, base, w = c_settings(inp)
+    cev, base, w = c_settings(inp, enforce=False if mode == "reference" else None, frac=frac)
+    held = base.alpha_cap is not None
+    limit_rad = c_wing_limit_rad(inp, frac)
+    peak_rad = wing_lift_peak(vp.wing)[0]
     bounds = c_bounds(inp)
     start = {k: inp.start_params[k] for k in ("T_bt", "theta_A", "spin_min")}
     theta_hi = c_theta_a_hi_deg(inp)
@@ -1028,6 +1105,11 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
     t0 = time.time()
     progress.phase("C: final ensemble (optimum, register, default)")
     opt = run_all(best)
+    if mode == "curve":  # one point of the alpha curve: the search and its ensemble, nothing else
+        row = alpha_curve_row("curve", frac, math.degrees(limit_rad), best, opt, w, c,
+                              ";".join(f"{k}:{v}" for k, v in r.at_bound.items()))
+        return {"result": r, "scens": scens, "notes": [theta_note],
+                "tables": {"C_alpha_curve": [row]}}  # fmt: skip
     reg_runs = run_all(reg)
     s_opt, s_reg = restricted.summarise_c(opt, w), restricted.summarise_c(reg_runs, w)
     dflt_runs = run_all(dflt) if dflt is not None else None
@@ -1075,6 +1157,8 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                 kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
             )  # fmt: skip
             a_cap = restricted.capability_ceiling(vp, s, prm, cev, base)
+            exposure = braking.stall_exposure(
+                cr.sim, vp, s, alpha_peak=peak_rad, alpha_limit=limit_rad, gate=d.alpha_gate_ms)
             progress.step(f"C tables, {case}: member {i}", i + 1, len(scens))
             run_rows.append({
                 "case": case, "member": i, "altitude_m": s.altitude_amsl_m,
@@ -1086,11 +1170,28 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                 "end_sink_ms": _num(-cr.vh_end), "flags": ",".join(cr.metrics.failures),
                 "a_cap_ms2": _num(a_cap), "q_over_a_cap": _num(prm["q"] / a_cap),
                 **{k: v if isinstance(v, bool) else _num(v) for k, v in fl.items()},
+                **{k: _num(v) for k, v in exposure.items()},
             })  # fmt: skip
 
     member_rows("optimum", best, opt)
     if dflt is not None and dflt_runs is not None:
         member_rows("ardupilot_default", dflt, dflt_runs)
+    # what each case does to the wing and how long it takes (report only: not in the cost)
+    runs_of = {"optimum": opt, str(params[1]["case"]): reg_runs}
+    if dflt_runs is not None:
+        runs_of["ardupilot_default"] = dflt_runs
+    for prow in params:
+        prow["p95_stop_time_s"] = _num(p95(stop_times(runs_of[prow["case"]])))
+        prow.update({k: _num(v) for k, v in exposure_summary(
+            [x for x in run_rows if x["case"] == prow["case"]]).items()})  # fmt: skip
+    params[0].update({
+        "alpha_enforced": held, "alpha_limit_deg": math.degrees(limit_rad),
+        "alpha_frac": limit_rad / vp.wing.alpha_s, "alpha_peak_deg": math.degrees(peak_rad),
+        "alpha_s_deg": math.degrees(vp.wing.alpha_s), "blend_M": vp.wing.M,
+        "cl_max": wing_lift_peak(vp.wing)[1],
+        "rotor_constant_coeffs": all(getattr(vp.rotor, k) == 0.0
+                                     for k in ("CT1", "CT2", "CQ1", "CQ2", "CH1", "k_mu")),
+    })  # fmt: skip
 
     progress.phase("C: histories and the q curve")
     # Two views (member = -1 is "not an ensemble member"): the B1 headline scenario with C's
@@ -1120,6 +1221,19 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                 runs_i[worst].sim, vp.wing.i_w, case, worst,
                 meta=_hist_meta("default_fails", "ensemble member", scens[worst], vp,
                                 runs_i[worst], band, default_fails=bool(fails)))
+
+    if mode == "reference":  # compared with the headline, never used as one
+        history = [{**x, "case": "C unconstrained (reference)"} for x in history
+                   if x.get("view") == "core" and x.get("case") == "C optimum"]
+        return {
+            "result": r, "scens": scens,
+            "notes": ["C without the wing-angle cap: the model ignores the stall. Reference only; "
+                      "never a recommendation.", theta_note],
+            "tables": {"C_ref_params": params, "C_ref_runs": run_rows, "C_ref_history": history,
+                       "C_alpha_curve_ref": [alpha_curve_row(
+                           "unconstrained", None, None, best, opt, w, c,
+                           ";".join(f"{k}:{v}" for k, v in r.at_bound.items()))]},
+        }  # fmt: skip
 
     q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q, "grid": "coarse"}
                for q in c.q_curve]  # fmt: skip
@@ -1181,7 +1295,10 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
         "result": r, "scens": scens,
         "notes": [theta_note, *([dflt_note] if dflt_note else []), *hist_notes],
         "tables": {"C_params": params, "C_search": search, "C_runs": run_rows,
-                   "C_q_curve": q_curve, "C_sens": sens_rows, "C_history": history},
+                   "C_q_curve": q_curve, "C_sens": sens_rows, "C_history": history,
+                   **({"C_alpha_curve": [alpha_curve_row(
+                       "headline", limit_rad / vp.wing.alpha_s, math.degrees(limit_rad), best, opt,
+                       w, c, params[0]["at_bound"])]} if held else {})},
     }  # fmt: skip
 
 
@@ -1979,6 +2096,12 @@ def plan_tasks(inp: StudyInputs) -> list[str]:
         tasks.append("basics")
     if "C" in wanted:
         tasks.append("C")
+        cc = inp.study.C
+        if cc.enforce_alpha and cc.unconstrained_reference:
+            tasks.append("C:unconstrained")
+        if cc.enforce_alpha:
+            tasks += [f"C:alpha:{f:g}" for f in cc.alpha_curve_fracs
+                      if abs(f - inp.study.margin_alpha_frac) > 1e-12]
     if "FT" in wanted:
         tasks += grid_coarse_ids(inp)  # the report of the winner follows (`follow_up_tasks`)
         tasks += [f"FT_scan:{v:g}" for v in inp.study.FT.scan.airspeed_min_eas_ms]
@@ -2001,7 +2124,7 @@ def run_task(inp: StudyInputs, task: str) -> dict[str, Any]:
     if kind == "basics":
         return task_basics(inp)
     if kind == "C":
-        return task_c(inp)
+        return task_c(inp, arg)
     if kind == "basics_rec":
         return task_basics_rec(inp, arg)
     if kind == "FT":

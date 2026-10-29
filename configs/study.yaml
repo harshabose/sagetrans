@@ -144,6 +144,9 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
   maxiter: 20
   rotor_lag_s: 0.25        # D's lumped actuator lag (D spec section 14); C's own value
   rotor_start: idle        # idle | carry: rotors at the AIRBRAKE exit; idle is O-13, UNVERIFIED (SITL or log)
+  enforce_alpha: true      # ON (the headline, written to settings_recommended): C holds |alpha_w| <= margin_alpha_frac x alpha_s. OFF: C ignores the stall (C_L falls from 1.44 to about 0.5 within 4 deg), reference only
+  unconstrained_reference: true   # also run C without the cap (task C:unconstrained): "model ignores the stall; reference only; never a recommendation"
+  alpha_curve_fracs: [1.0, 0.85]  # ASSUMED: more limits as fractions of alpha_s, one C search each (tasks C:alpha:<f>), for the table of what the margin costs; the headline fraction (margin_alpha_frac) is added
   os_tol_m: 2.0            # overshoot past x_tgt that counts as a failure (PROPOSED; decides the answer)
   sink_tol_ms: 1.76        # end sink rate that counts as sinking (PROPOSED: low end of F's descent cap)
   weights: {h_ref: 2.0, E_ref: 15000.0, x_ref: 100.0}   # normalisers; weights 1, 0.3, 0.5 and penalty 10 stay

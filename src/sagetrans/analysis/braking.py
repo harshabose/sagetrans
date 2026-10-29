@@ -227,6 +227,32 @@ def braking_flags(
     }
 
 
+def stall_exposure(
+    res: Result, vp: VehicleParams, scen: Scenario, *, alpha_peak: float, alpha_limit: float,
+    gate: float = 5.0,
+) -> dict[str, float]:
+    """How far a run goes into the stall: report-only, never a cost term or a failure flag.
+
+    `alpha_peak` is the wing angle of the C_L peak and `alpha_limit` the wing-angle limit (both
+    rad, alpha_w = angle of attack + wing incidence). Samples with airspeed below `gate` are left
+    out (the wing carries almost nothing there and alpha means nothing), as in `braking_flags`.
+    Returns the peak |alpha_w| [deg], the time above the peak angle and above the limit [s], and
+    the least wing share of the weight (L / W) over the samples after t = 0.
+    """
+    vps = scen.vehicle_for(vp)
+    t = res.t
+    dt = np.diff(t, append=t[-1])
+    alpha_w = np.abs(res["alpha"] + vps.wing.i_w)
+    use = (res["V"] >= gate) & (t > 0.0)
+    nan = math.nan
+    return {
+        "stall_alpha_peak_deg": math.degrees(float(alpha_w[use].max())) if use.any() else nan,
+        "stall_t_above_peak_s": float(np.sum(dt[use & (alpha_w > alpha_peak)])),
+        "stall_t_above_limit_s": float(np.sum(dt[use & (alpha_w > alpha_limit)])),
+        "stall_wing_share_min": float(np.min(res["L"][use] / (vps.m * G))) if use.any() else nan,
+    }
+
+
 def run_braking(
     vp: VehicleParams,
     scen: Scenario,

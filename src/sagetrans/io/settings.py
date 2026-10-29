@@ -271,6 +271,19 @@ class CCfg(_Strict):
     maxiter: int = Field(20, ge=1)
     rotor_lag_s: float = Field(0.25, ge=0.0)  # D's lumped actuator lag; C's own value
     rotor_start: Literal["idle", "carry"] = "idle"  # rotors at the AIRBRAKE exit (O-13, unverified)
+    # Hold the wing angle: |alpha_w| <= margin_alpha_frac x alpha_s (the study's one definition of
+    # the margin), by limiting the pitch command to the limit plus the flight-path angle above
+    # D.alpha_gate_ms. On, C is the "enforced" configuration and the headline; off, C ignores the
+    # stall (the model's lift falls from C_L,max 1.44 to about 0.5 within 4 deg), which is the
+    # reference only (docs/time_histories.md).
+    enforce_alpha: bool = False
+    # also run C without the cap (task `C:unconstrained`): "model ignores the stall; reference
+    # only; never a recommendation". Needs enforce_alpha.
+    unconstrained_reference: bool = False
+    # ASSUMED: more fractions of alpha_s, each a C search at that limit (tasks `C:alpha:<f>`), for
+    # the table of what the margin costs. Needs enforce_alpha; the headline fraction is not
+    # repeated.
+    alpha_curve_fracs: list[float] = []
     os_tol_m: float = Field(2.0, ge=0.0)  # overshoot past x_tgt that counts as a failure (PROPOSED)
     sink_tol_ms: float = Field(1.76, ge=0.0)  # end sink rate that counts as sinking (PROPOSED)
     weights: CWeightsCfg = CWeightsCfg()
@@ -285,6 +298,19 @@ class CCfg(_Strict):
     margin_frac: float = Field(0.75, gt=0.0, le=1.0)
     q_fine_offsets_ms2: list[float] = [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2]
     sens: CSensCfg = CSensCfg()
+
+    @model_validator(mode="after")
+    def _alpha_options(self) -> CCfg:
+        if any(not 0.0 < f <= 1.0 for f in self.alpha_curve_fracs):
+            raise ValueError("C.alpha_curve_fracs: every fraction of alpha_s in (0, 1]")
+        if len(set(self.alpha_curve_fracs)) != len(self.alpha_curve_fracs):
+            raise ValueError("C.alpha_curve_fracs has a fraction twice")
+        if (self.alpha_curve_fracs or self.unconstrained_reference) and not self.enforce_alpha:
+            raise ValueError(
+                "C.unconstrained_reference and C.alpha_curve_fracs compare with the enforced "
+                "configuration: set C.enforce_alpha"
+            )
+        return self
 
     @model_validator(mode="after")
     def _fine_grid(self) -> CCfg:
