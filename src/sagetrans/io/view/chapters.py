@@ -474,6 +474,54 @@ def build_d(c: Ctx) -> Out:
 
 
 # ------------------------------------------------------------------------------------------- F
+F_CLASSES = ("s1", "s2", "s3", "s4", "ink")  # a sixth scenario repeats them dashed
+
+
+def descent_figures(desc: Sequence[Row], prof: Sequence[Row]) -> list[str]:
+    """Descent rate and energy to go against time to go, one line per scenario in each chart.
+
+    The time axis counts down to touchdown, so the flight reads right to left. Each point's
+    tooltip names the scenario (with its altitude from F_descent), the height and the values.
+    """
+    alt = {r.get("scenario"): num(r.get("altitude_m")) for r in desc}
+    names = uniq([r["scenario"] for r in prof])
+    plan = {n: (F_CLASSES[i % len(F_CLASSES)], i >= len(F_CLASSES)) for i, n in enumerate(names)}
+
+    def head(n: str) -> str:
+        return f"{n}, {alt[n]:g} m" if n in alt and ok(alt[n]) else str(n)
+
+    def chart(col: str, scale: float, ylab: str, aria: str) -> tuple[str, list[ch.Series]]:
+        series = []
+        for n in names:
+            rs = [r for r in prof if r["scenario"] == n and ok(num(r.get(col)))]
+            cls, dash = plan[n]
+            # a marker (the tooltip's anchor) on every third sample and on the last one
+            kinds = ["dot" if k % 3 == 0 or k == len(rs) - 1 else "none" for k in range(len(rs))]
+            series.append(ch.Series(
+                head(n), cls, [(r["time_to_go_s"], num(r[col]) / scale) for r in rs],
+                [tip(r, ["h_m", "time_to_go_s", col], head(n)) for r in rs],
+                kinds=kinds, dash=dash))  # fmt: skip
+        svg = ch.xy_chart(series, "time to go [s]", ylab, aria, y_from_zero=True)
+        return svg, series
+
+    out = []
+    for title, cap, col, scale, ylab in (
+        ("Descent rate against time to go",
+         "The commanded descent rate along the profile, one line per scenario: the vortex-ring "
+         "limit (kappa x the hover induced velocity) until the last few metres, then a ramp to "
+         "the final rate. The time counts down to touchdown, so the flight reads right to left.",
+         "descent_rate_ms", 1.0, "descent rate [m/s]"),
+        ("Energy to go against time to go",
+         "Hover energy still to be spent, one line per scenario: the hover power times the time "
+         "to go, so each line is straight and its slope is the scenario's hover power.",
+         "energy_to_go_J", 1e3, "energy to go [kJ]"),
+    ):
+        svg, series = chart(col, scale, ylab, title)
+        leg = _legend(*[(s.cls, "dash" if s.dash else "line", s.name) for s in series])
+        out.append(panelbox(title, cap, svg, leg))
+    return out
+
+
 def build_f(c: Ctx) -> Out:
     o = Out()
     desc, prof = c.rows("F_descent"), c.rows("F_profile")
@@ -493,63 +541,8 @@ def build_f(c: Ctx) -> Out:
         if it:
             o.items.append(it)
     if prof:
-        panels_r, panels_e = [], []
-        for s in uniq([r["scenario"] for r in prof]):
-            rs = [r for r in prof if r["scenario"] == s]
-            panels_r.append(
-                (
-                    s,
-                    ch.xy_chart(
-                        [
-                            ch.Series(
-                                "descent rate",
-                                "s1",
-                                [(r["time_to_go_s"], r["descent_rate_ms"]) for r in rs],
-                                [tip(r, ["h_m", "time_to_go_s", "descent_rate_ms"]) for r in rs],
-                            )
-                        ],
-                        "time to go [s]",
-                        "descent rate [m/s]",
-                        f"Descent rate {s}",
-                        w=340,
-                        h=240,
-                    ),
-                )
-            )
-            panels_e.append(
-                (
-                    s,
-                    ch.xy_chart(
-                        [
-                            ch.Series(
-                                "energy to go",
-                                "s2",
-                                [(r["time_to_go_s"], r["energy_to_go_J"] / 1e3) for r in rs],
-                                [tip(r, ["h_m", "time_to_go_s", "energy_to_go_J"]) for r in rs],
-                            )
-                        ],
-                        "time to go [s]",
-                        "energy to go [kJ]",
-                        f"Energy to go {s}",
-                        w=340,
-                        h=240,
-                    ),
-                )
-            )
-        o.figures.append(
-            panelbox(
-                "Descent rate against time to go",
-                "The commanded descent rate along the profile, one panel per scenario.",
-                ch.multiples(panels_r, 3),
-            )
-        )
-        o.figures.append(
-            panelbox(
-                "Energy to go against time to go",
-                "Hover energy still to be spent, one panel per scenario.",
-                ch.multiples(panels_e, 3),
-            )
-        )
+        for fig in descent_figures(desc, prof):
+            o.figures.append(fig)
     o.absent.append(
         "not in this run: the margin to the vortex-ring onset against time (not written)"
     )
