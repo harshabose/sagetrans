@@ -1032,7 +1032,8 @@ def sensitivity_figure(sens: Sequence[Row], js0: float) -> str:
                        "s1"))
     body = ch.multiples(
         [("Members that fail (by type in the tooltip)",
-          ch.dot_chart(fails, "failing members of the ensemble", "C sensitivity: failing members")),
+          ch.dot_chart(fails, "failing members of the ensemble", "C sensitivity: failing members",
+                       integer=True)),
          ("Change of J without the failure penalty",
           ch.dot_chart(smooth, "change of J without the penalty [%]", "C sensitivity: smooth J"))],
         1)
@@ -1070,7 +1071,35 @@ def spread_statement(mine: Sequence[Row], opt_row: Row) -> str:
     return head + cause
 
 
-def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str | None:
+def flat_tail_statement(curve: Sequence[Row], runs: Sequence[Row]) -> str:
+    """Why the curves go flat at high q, computed from the rows: past the capability of the pitch
+    ramp the run no longer depends on q (the pitch sits at its ceiling), so the energy, the
+    distance and the end sink repeat; only the overshoot, which is read against v^2 / (2 q), grows.
+    Empty when no two of the highest-q rows repeat."""
+    rs = sorted((r for r in curve if (r.get("grid") or "coarse") == "coarse"
+                 and ok(num(r.get("q"))) and ok(num(r.get("p95_distance_m")))
+                 and ok(num(r.get("max_end_sink_ms")))), key=lambda r: num(r["q"]))  # fmt: skip
+    flat: list[Row] = []
+    for r in reversed(rs):
+        if flat and (abs(num(r["p95_distance_m"]) - num(flat[0]["p95_distance_m"])) > 1e-6
+                     or abs(num(r["max_end_sink_ms"]) - num(flat[0]["max_end_sink_ms"])) > 1e-6):
+            break
+        flat.append(r)
+    if len(flat) < 2:
+        return ""
+    q_lo = num(flat[-1]["q"])
+    caps = [num(r.get("a_cap_ms2")) for r in runs if r.get("case", "optimum") == "optimum"
+            and ok(num(r.get("a_cap_ms2")))]  # fmt: skip
+    cap = (f" The pitch ramp can deliver {min(caps):.2f} m/s^2 for the weakest member and "
+           f"{max(caps):.2f} for the strongest (`a_cap_ms2`)." if caps else "")
+    return (f"From q = {q_lo:g} the energy, the distance and the end sink do not change with q "
+            f"({num(flat[0]['max_end_sink_ms']):.2f} m/s): the pitch is at its ceiling for the "
+            "whole run, so the run is the same whatever q is; only the overshoot, which is read "
+            "against the target v^2 / (2 q), keeps growing." + cap)
+
+
+def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int,
+                  runs: Sequence[Row] = ()) -> str | None:
     """Worst overshoot and worst end sink against q: the coarse curve, the fine grid, the optimum,
     the margin row and each tolerance as a line (two small charts, the sink one as important as
     the overshoot one). None if the curve has neither column."""
@@ -1101,7 +1130,7 @@ def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str 
         if series and ok(tol):
             panels.append((lab, ch.xy_chart(
                 series, "Q_TRANS_DECEL q [m/s^2]", ylab, f"{lab} against q", w=340, h=280,
-                hlines=[(tol, f"tolerance {tol:g} (PROPOSED)")])))
+                y_from_zero=True, hlines=[(tol, f"tolerance {tol:g} (PROPOSED)")])))
     if not panels:
         return None
     os_m, sk_m = num(params[opt].get("os_margin_m")), num(params[opt].get("sink_margin_ms"))
@@ -1109,6 +1138,9 @@ def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str 
                if ok(os_m) and ok(sk_m) else "")
     sentence = ("The optimum relies on the overshoot and end-sink tolerances, which are PROPOSED, "
                 "not on a measured limit." + margins)
+    flat = flat_tail_statement(curve, runs)
+    if flat:
+        sentence += " " + flat
     leg = _legend(("s1", "line", "coarse curve (hollow: a member fails)"), ("s1", "sq", "fine grid"),
                   ("s1", "dia", "optimum"), ("s3", "dia", "margin row (reported, not recommended)"))
     return panelbox(
@@ -1232,7 +1264,7 @@ def build_c(c: Ctx) -> Out:
     # 2. time histories
     build_c_histories(c, o)
 
-    mf = margin_figure(curve, params, opt)
+    mf = margin_figure(curve, params, opt, runs)
     if mf:
         o.figures.append(mf)
     # 3. convergence
