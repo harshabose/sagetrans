@@ -187,3 +187,17 @@ def test_the_scenario_panel_follows_the_register_against_recommended_table(tmp_p
         "Scenarios at the recommended settings")
     assert "S-07" in e and "recommended one (18 m/s)" in e
     assert "AIRSPEED_MIN (17 m/s)" in e
+
+
+def test_the_descent_profile_table_ends_at_touchdown():
+    inp = load_inputs(ROOT / "configs", only={"F"})
+    inp = dataclasses.replace(inp, study=inp.study.model_copy(update={"analyses": ["F"]}))
+    prof = stages.task_basics(inp)["tables"]["F_profile"]
+    for name in inp.study.F.scenarios:
+        rows = [r for r in prof if r["scenario"] == name]
+        first, last = rows[0], rows[-1]
+        assert first["h_m"] == pytest.approx(inp.mission.h_bt_agl_m)
+        assert last["h_m"] == 0.0 and last["time_to_go_s"] == 0.0  # touchdown, not 1.6 s short
+        assert last["energy_to_go_J"] == pytest.approx(0.0, abs=1e-6)
+        assert last["descent_rate_ms"] == pytest.approx(inp.descent.v_final)
+        assert len(rows) == 31  # 30 strided samples and the last

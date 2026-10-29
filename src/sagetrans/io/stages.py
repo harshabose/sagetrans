@@ -640,11 +640,12 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                          "v_cap_ms": p.v_cap, "binding_limit": p.binding,
                          "descent_time_s": p.time, "hover_power_W": p.hover_power,
                          "hover_energy_J": p.energy_J, "kappa_source": p.kappa_source})  # fmt: skip
+            # every 20th sample and the last one (touchdown): a plain stride stops short of it
+            keep = sorted({*range(0, len(p.h), 20), len(p.h) - 1})
             out["tables"].setdefault("F_profile", []).extend(
-                {"scenario": name, "h_m": float(h), "descent_rate_ms": float(v),
-                 "time_to_go_s": float(t), "energy_to_go_J": float(e)}
-                for h, v, t, e in zip(p.h[::20], p.v[::20], p.t_to_go[::20], p.e_to_go[::20],
-                                      strict=True)
+                {"scenario": name, "h_m": float(p.h[i]), "descent_rate_ms": float(p.v[i]),
+                 "time_to_go_s": float(p.t_to_go[i]), "energy_to_go_J": float(p.e_to_go[i])}
+                for i in keep
             )  # fmt: skip
         out["tables"]["F_descent"] = rows
 
