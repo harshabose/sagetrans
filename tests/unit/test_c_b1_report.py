@@ -400,3 +400,34 @@ def test_the_sensitivity_shows_the_failing_members_apart_from_the_smooth_change(
     write_table(tmp_path, "C_params", params)
     old = section(build_html(load(tmp_path)), "c")
     assert "Members that fail" not in old and "One-at-a-time sensitivity" in old
+
+
+# ---- C5 ---------------------------------------------------------------------------------------
+def energy_figure(c_html: str) -> str:
+    return c_html.split("Energy against stopping distance")[1].split("</svg>")[0]
+
+
+def test_the_energy_figure_labels_every_q_draws_the_optimum_last_and_drops_b1(tmp_path):
+    c2_run(tmp_path)
+    curve = list(csv.DictReader((tmp_path / "C_q_curve.csv").open(encoding="utf-8")))
+    for r, (d, e) in zip(curve[:4], ((80, 10), (95, 14), (119, 20), (150, 26)), strict=False):
+        r["p95_distance_m"], r["mean_energy_kJ"] = d, e
+    write_table(tmp_path, "C_q_curve", curve)
+    params = list(csv.DictReader((tmp_path / "C_params.csv").open(encoding="utf-8")))
+    for r in params:  # the optimum and the default almost on top of each other
+        near = (119.5, 20.1) if r["case"] == "optimum" else (121, 20.3)
+        r["p95_distance_m"], r["mean_energy_kJ"] = near
+    write_table(tmp_path, "C_params", params)
+    synthetic_b1 = [{"scenario": "S-01", "variant": "attached", "eps_x_m": 60.0, "converged": True,
+                     "replay_verified": True, "energy_kJ": 11.3, "distance_m": 60.0}]
+    write_table(tmp_path, "B1_front", synthetic_b1)
+    fig = energy_figure(section(build_html(load(tmp_path)), "c"))
+    for q in ("q = 1", "q = 1.5", "q = 2", "q = 2.5"):  # every point of the coarse curve
+        assert f">{q}<" in fig, q
+    assert "q = 1.98" not in fig and "fine" not in fig  # the fine grid has its own chart
+    assert "B1 attached" not in fig  # the B1 points are not in this figure
+    assert fig.index("C optimum") > fig.index("ArduPilot default")  # the optimum is drawn last
+    # the two labels near each other are nudged apart, not stacked
+    found = re.findall(r'class="dl" x="[0-9.]+" y="([0-9.]+)"[^>]*>([^<]*)<', fig)
+    ys = {text: float(y) for y, text in found}
+    assert abs(ys["C optimum"] - ys["ArduPilot default"]) >= 20.0

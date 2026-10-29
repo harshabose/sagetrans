@@ -1133,57 +1133,47 @@ def build_c(c: Ctx) -> Out:
     if bound:
         o.flags.append("at a search bound: " + bound)
 
-    # 1. energy against distance
+    # 1. energy against distance: C only (B1's points are single scenarios; its chapter has them)
     series, labels = [], []
-    pts = [
-        (r["p95_distance_m"], r["mean_energy_kJ"])
-        for r in curve
-        if ok(num(r.get("p95_distance_m")))
-    ]
-    if pts:
-        cr = [r for r in curve if ok(num(r.get("p95_distance_m")))]
-        series.append(ch.Series("searched ramp, q varied", "s1", pts,
-                                [tip(r, ["q", "mean_energy_kJ", "p95_distance_m", "p95_excursion_m", "J"],
-                                     str(r.get("case", ""))) for r in cr],
-                                hollow=[bool(num(r.get("n_overshoot")) or num(r.get("n_sinking"))
-                                             or num(r.get("n_other_flags"))) for r in cr],
-                                labels={len(pts) - 1: f"q = {cr[-1].get('q'):g}"}))  # fmt: skip
+    cr = sorted((r for r in curve if (r.get("grid") or "coarse") == "coarse"
+                 and ok(num(r.get("p95_distance_m"))) and ok(num(r.get("mean_energy_kJ")))
+                 and ok(num(r.get("q")))), key=lambda r: num(r["q"]))  # fmt: skip
+    if cr:
+        series.append(ch.Series(
+            "searched ramp, q varied", "s1",
+            [(r["p95_distance_m"], r["mean_energy_kJ"]) for r in cr],
+            [tip(r, ["q", "mean_energy_kJ", "p95_distance_m", "p95_excursion_m", "J"],
+                 str(r.get("case", ""))) for r in cr],
+            hollow=[bool(num(r.get("n_overshoot")) or num(r.get("n_sinking"))
+                         or num(r.get("n_other_flags"))) for r in cr],
+            labels={i: f"q = {r['q']:g}" for i, r in enumerate(cr)},
+            label_pos={i: (-9.0, 17.0) for i in range(len(cr))}))  # fmt: skip
         labels.append(
             ("s1", "line", "C: the optimum's ramp, q varied (hollow = a member is flagged)")
         )
-    for idx, name, cls, kind in (
-        (opt, "C optimum", "s1", "dia"),
-        (reg, "C register (q = 2)", "s1", "sq"),
-    ):
+    cols = ["T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2", "mean_energy_kJ",
+            "p95_distance_m", "J"]
+    # drawn in this order, so the optimum (last) is never hidden under the default
+    marks: list[tuple[int | None, str, str, str, bool, str, tuple[float, float]]] = [
+        (reg, "C register (q = 2)", "s1", "sq", True, "", (0.0, 0.0)),
+        (dfl, "ArduPilot default", "ref", "sq", False, "ArduPilot default", (12.0, 20.0)),
+        (opt, "C optimum", "s1", "dia", False, "C optimum", (12.0, -10.0)),
+    ]
+    for idx, name, cls, kind, hol, lab, pos in marks:
         if idx is not None and ok(num(params[idx].get("p95_distance_m"))):
             r = params[idx]
-            series.append(ch.Series(name, cls, [(r["p95_distance_m"], r["mean_energy_kJ"])],
-                                    [tip(r, ["T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2",
-                                             "mean_energy_kJ", "p95_distance_m", "J"], name)],
-                                    line=False, marker=kind, hollow=[idx == reg]))  # fmt: skip
-            labels.append((cls, kind if idx != reg else "hollow", name))
-    if dfl is not None and ok(num(params[dfl].get("p95_distance_m"))):
-        r = params[dfl]
-        series.append(ch.Series("ArduPilot default", "ref", [(r["p95_distance_m"], r["mean_energy_kJ"])],
-                                [tip(r, ["T_bt_s", "theta_A_deg", "spin_min", "Q_TRANS_DECEL_ms2",
-                                         "mean_energy_kJ", "p95_distance_m", "J"], "ArduPilot default")],
-                                line=False, marker="sq", labels={0: "ArduPilot default"}))  # fmt: skip
-        labels.append(("ref", "sq", "ArduPilot default"))
-    b1 = c.rows("B1_front")
-    for v in uniq([r.get("variant") for r in b1 if r.get("replay_verified") is True]):
-        rs = [r for r in b1 if r.get("variant") == v and r.get("replay_verified") is True
-              and ok(num(r.get("energy_kJ")))]  # fmt: skip
-        series.append(ch.Series(f"B1 {v}", {"attached": "s2", "c_envelope": "s3"}.get(v, "ink"),
-                                [(r["distance_m"], r["energy_kJ"]) for r in rs],
-                                [tip(r, ["scenario", "eps_x_m", "energy_kJ", "distance_m"], f"B1 {v}")
-                                 for r in rs], line=False, marker="dia"))  # fmt: skip
-        labels.append((series[-1].cls, "dia", f"B1 {v} (verified points)"))
+            series.append(ch.Series(
+                name, cls, [(r["p95_distance_m"], r["mean_energy_kJ"])], [tip(r, cols, name)],
+                line=False, marker=kind, hollow=[hol],
+                labels={0: lab} if lab else {}, label_pos={0: pos} if pos else {}))  # fmt: skip
+            labels.append((cls, "hollow" if hol else kind, name))
     if series:
         o.figures.append(
             panelbox(
                 "Energy against stopping distance",
-                "C: ensemble mean energy against the 95th-percentile distance. B1 points are single "
-                "scenarios, shown for scale only.",
+                "C: ensemble mean energy against the 95th-percentile distance, the optimum's "
+                "ramp with q varied (each point is labelled with its q). B1's scenario points "
+                "are in the B1 chapter.",
                 ch.xy_chart(
                     series, "stopping distance [m]", "bus energy [kJ]", "Energy against distance"
                 ),

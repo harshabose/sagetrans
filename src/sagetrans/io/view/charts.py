@@ -166,6 +166,9 @@ class Series:
     dash: bool = False
     marker: str = "dot"  # dot | sq | dia | none
     labels: dict[int, str] = field(default_factory=dict)  # point index -> direct label
+    # point index -> (dx, dy) pixels of that label from its point (default 8, -8); a label placed
+    # to the left (dx < 0) ends at the offset, so crowded points can be nudged apart
+    label_pos: dict[int, tuple[float, float]] = field(default_factory=dict)
     thick: bool = False
 
 
@@ -202,7 +205,9 @@ def xy_chart(
                                   bool(s.hollow[i]) if i < len(s.hollow) else False))  # fmt: skip
     for s in series:
         for i, lab in s.labels.items():
-            out.append(text(fr.sx(s.pts[i][0]) + 8, fr.sy(s.pts[i][1]) - 8, lab, "dl"))
+            dx, dy = s.label_pos.get(i, (8.0, -8.0))
+            out.append(text(fr.sx(s.pts[i][0]) + dx, fr.sy(s.pts[i][1]) + dy, lab, "dl",
+                            "end" if dx < 0 else "start"))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
 
 
