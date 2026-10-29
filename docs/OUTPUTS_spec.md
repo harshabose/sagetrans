@@ -168,10 +168,21 @@ today unless marked NEW.
 
 ### E · energy budget
 - Tables: `E_summary`, `E_budget`, `E_segments`, `E_cruise_sweep`, `E_hover_check`, `E_reserve`.
-- Figures: (1) whole-mission waterfall in Wh per segment (one per site and mission, small
-  multiples); (2) range margin by site and mission against the requirement lines
-  (`requirements_km`); (3) state-of-charge trace with the reserve band; (4) cruise sweep
-  (range against cruise speed, optimum marked).
+- Figures: (1) **Maximum range and the required ranges: energy by segment**, one panel per site
+  and mission (one way left, round trip right), from the `case` rows of `E_budget`: `plausible`
+  (the maximum range the usable energy allows, solid bars; the total ends on the usable-energy
+  rule) and one `required_<km>` row per requirement of `mission.yaml` (100 and 120 km), faint and
+  outlined (dashed, dotted), drawn behind the plausible bars when a pure-CSS checkbox is on. A
+  requirement is the distance flown: a round trip of 100 km is a 50 km radius (`range_km` is the
+  one-way distance or the radius, `flown_km` the distance flown in all). The verdict line of each
+  panel is computed from the rows ("short of 100 km by 8.0 km"); a column of panels shares one
+  energy axis, so the checkbox does not move anything. A folder without a `case` column keeps the
+  older two figures (whole-mission waterfall, maximum range against the requirement). (2)
+  state-of-charge trace with the reserve band; (3) cruise sweep (range against cruise speed,
+  optimum marked).
+- `E_summary` columns: `max_range_km` (one-way distance or radius), `flown_total_km`, and per
+  requirement `margin_Wh_at_<km>km`, `conflict_<km>km` and `radius_at_<km>km` (the radius that
+  flies the required distance).
 - Result box: min range margin and where; limiting reserve; hover check pass/fail.
 
 ### C · restricted back-transition search (reference mock)

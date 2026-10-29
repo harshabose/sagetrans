@@ -32,7 +32,7 @@ D:
   recommendation: {ensemble_n: 2, ensemble_seed: 1, percentile: 5}
   trade: {a_plan_ms2: [2.5], headwinds_ms: [0]}
 F: {scenarios: [S-01]}
-E: {sites_amsl_m: [0], missions: [one_way], ranges_km: [100]}
+E: {sites_amsl_m: [0], missions: [one_way]}
 Q2: {altitudes_m: [0], mass_factors: [1.0]}
 """
 

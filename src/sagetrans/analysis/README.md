@@ -472,8 +472,13 @@ E_total = E_to + E_ft + E_climb + E_cruise + E_desc + E_bt + E_land + E_reserve
 * **The range is an output.** Whatever energy is left after the fixed segments and the reserve goes
   to cruise (`max_range_m`, in closed form: the energy is linear in the distance). It is the
   one-way distance, or the radius of a round trip (which flies twice that). The 100 and 120 km
-  requirements are comparison columns (`margin_Wh_at_<R>km`, `conflict_<R>km`); they never enter the
-  solve.
+  requirements of `mission.yaml` are **distances flown**: a round trip of 100 km is a 50 km
+  radius (`MissionBudget.radius_for_flown`). They are comparison columns (`margin_Wh_at_<R>km`,
+  `conflict_<R>km`, `radius_at_<R>km`); they never enter the solve. `E_budget` has one row per
+  case from `MissionBudget.cases`: `plausible` (the maximum range) and `required_<R>`
+  (`range_km` the one-way distance or radius, `flown_km` the distance flown, `required_km`).
+  Before this change the round trip compared the radius with the requirement, so a 100 km
+  requirement asked a round trip for a 200 km flight.
 * **Site and climb height.** The swept quantity is the airfield elevation (`E.sites_amsl_m`);
   take-off and landing are at the same elevation and the cruise altitude is the site plus
   `mission.profile.climb_height_m` (200 m, so the climb is 170 m above the 30 m clearance). The

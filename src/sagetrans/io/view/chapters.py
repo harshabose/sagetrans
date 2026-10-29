@@ -558,6 +558,129 @@ def build_f(c: Ctx) -> Out:
 
 
 # ------------------------------------------------------------------------------------------- E
+# ------------------------------------------------------------------------------------------- E
+E_SEGS = ("takeoff", "fwd_transition", "climb", "descent", "back_transition", "landing")
+E_LABEL = {"takeoff": "take-off", "fwd_transition": "fwd transition", "climb": "climb",
+           "descent": "descent", "back_transition": "back transition", "landing": "landing",
+           "cruise": "cruise", "drop": "payload drop", "reserve": "reserve", "total": "total"}
+E_MISSION = {"one_way": "one way", "round_trip": "round trip (radius)"}
+
+
+def e_case_parts(row: Row) -> dict[str, float]:
+    """Wh per category of one E_budget row, the legs added (the leg is `out`, `ret` or `leg`)."""
+    parts: dict[str, float] = {}
+    for seg in E_SEGS:
+        parts[seg] = sum(num(row.get(f"{d}_{seg}_Wh")) for d in ("out", "ret", "leg")
+                         if ok(num(row.get(f"{d}_{seg}_Wh"))))
+    parts["cruise"] = num(row.get("cruise_Wh"))
+    if ok(num(row.get("drop_Wh"))) and num(row.get("drop_Wh")) > 0.0:
+        parts["drop"] = num(row["drop_Wh"])
+    parts["reserve"] = num(row.get("reserve_Wh"))
+    return parts
+
+
+def e_verdict(rows: Sequence[Row]) -> str:
+    """The maximum range against each requirement, as distance flown (a computed sentence)."""
+    plaus = next((r for r in rows if r.get("case") == "plausible"), None)
+    if plaus is None:
+        return ""
+    flown = num(plaus.get("flown_km"))
+    text = f"max range {flown:.1f} km flown"
+    if abs(num(plaus.get("range_km")) - flown) > 1e-9:
+        text += f" (radius {num(plaus['range_km']):.1f} km)"
+    bits = []
+    for r in rows:
+        if r.get("case") == "plausible" or not ok(num(r.get("required_km"))):
+            continue
+        need = num(r["required_km"])
+        bits.append(f"meets {need:g} km" if flown >= need
+                    else f"short of {need:g} km by {need - flown:.1f} km")
+    return f"<b>{ch.esc(text)}</b>" + (": " + ch.esc("; ".join(bits)) if bits else "")
+
+
+def energy_cases_figure(bud: Sequence[Row]) -> str | None:
+    """Energy by segment at the maximum range, with the required distances behind it.
+
+    One panel per site and mission, from the `case` rows of E_budget (`plausible` and one per
+    requirement). The required cases are faint and outlined and appear when the checkbox is on;
+    they differ from the plausible case in cruise, reserve and total only. Each mission column
+    shares one energy axis, so the sites compare. A requirement is the distance flown.
+    """
+    if not any(r.get("case") for r in bud):
+        return None
+    keys = uniq([(r["site_amsl_m"], r["mission"]) for r in bud])
+    missions = [m for m in E_MISSION if any(k[1] == m for k in keys)]
+    sites = sorted({k[0] for k in keys})
+    xmax: dict[str, float] = {}
+    for m in missions:
+        xmax[m] = 1.03 * max([num(r.get("total_Wh")) for r in bud if r["mission"] == m
+                              and ok(num(r.get("total_Wh")))]
+                             + [num(r.get("usable_Wh")) for r in bud if r["mission"] == m
+                                and ok(num(r.get("usable_Wh")))] + [1.0])  # fmt: skip
+    panels = []
+    for site in sites:
+        for m in missions:
+            rows = [r for r in bud if r["site_amsl_m"] == site and r["mission"] == m]
+            title = f"site {site:g} m, {E_MISSION[m]}"
+            plaus = next((r for r in rows if r.get("case") == "plausible"), None)
+            if plaus is None:
+                panels.append((title, absent("the usable energy does not cover the fixed segments: "
+                                              "no maximum range")))
+                continue
+            order = [r for r in rows if r.get("case") != "plausible"]
+            parts = {r["case"]: e_case_parts(r) for r in rows}
+            usable = num(plaus.get("usable_Wh"))
+            cats = [k for k in E_LABEL if k in parts["plausible"] and k != "total"]
+            spans: dict[str, dict[str, tuple[float, float]]] = {}
+            for r in rows:
+                run, sp = 0.0, {}
+                for k in cats:
+                    v = parts[r["case"]].get(k, 0.0)
+                    sp[k] = (run, run + (v if ok(v) else 0.0))
+                    run = sp[k][1]
+                sp["total"] = (0.0, num(r.get("total_Wh")))
+                spans[r["case"]] = sp
+            crow = []
+            for k in [*cats, "total"]:
+                a, b = spans["plausible"][k]
+                what = f"{E_LABEL[k]} at the maximum range ({num(plaus['flown_km']):.1f} km): "
+                main_cls = "s2" if k == "reserve" else ("ink" if k == "total" else "s1")
+                ghosts = []
+                for gi, r in enumerate(order):
+                    ga, gb = spans[r["case"]][k]
+                    extra = ""
+                    if k == "total":
+                        over = -num(r.get("margin_Wh"))
+                        extra = (f", {over:.0f} Wh over the usable energy" if over > 0
+                                 else f", {-over:.0f} Wh to spare")
+                    ghosts.append((gi, ga, gb, f"{E_LABEL[k]} at the required "
+                                   f"{num(r.get('required_km')):g} km: {gb - ga:.1f} Wh{extra}"))
+                crow.append(ch.CaseRow(E_LABEL[k], (a, b, main_cls, f"{what}{b - a:.1f} Wh"),
+                                       ghosts))
+            svg = ch.case_bars(crow, "energy [Wh]", f"Energy by segment, {title}", xmax[m],
+                               rule=(usable, f"usable {usable:.0f}"))
+            panels.append((title, f'<p class="cap sub">{e_verdict(rows)}</p>{svg}'))
+    reqs = sorted({num(r["required_km"]) for r in bud if ok(num(r.get("required_km")))})
+    names = " and ".join(f"{q:g}" for q in reqs)
+    legend = ('<div class="legend" role="list" aria-label="Legend">'
+              '<span><i class="sw s1"></i>plausible: the maximum range the energy allows</span>'
+              + "".join(f'<span class="gl"><i class="sw s1 gh g{i}"></i>required {q:g} km</span>'
+                        for i, q in enumerate(reqs))
+              + '<span><i class="sw ink"></i>total (ends on the usable-energy rule at the '
+              "maximum range)</span></div>")
+    control = ('<input type="checkbox" id="e-req" class="etoggle"><label for="e-req" '
+               f'class="elabel">Show the required ranges ({names} km) on top of the plausible '
+               "range</label>")
+    return panelbox(
+        "Maximum range and the required ranges: energy by segment",
+        "Energy of each segment (out and return added) at the maximum range the usable energy "
+        f"allows. The checkbox adds the same budget at the required distances ({names} km flown; "
+        "a round trip of 100 km is a 50 km radius), faint and outlined: they differ only in "
+        "cruise, reserve and total, and they pass the usable-energy rule wherever the aircraft "
+        "cannot fly them. Each column shares one axis.",
+        control + legend + ch.multiples(panels, 2))
+
+
 def build_e(c: Ctx) -> Out:
     o = Out()
     summ, bud, seg = c.rows("E_summary"), c.rows("E_budget"), c.rows("E_segments")
@@ -600,9 +723,13 @@ def build_e(c: Ctx) -> Out:
         )
         if n_ok != len(hv):
             o.flags.append("hover check fails")
-    # whole-mission waterfall: one per site and mission, at the longest range in E_budget
+    # energy by segment at the maximum range with the required distances behind it (E_budget has
+    # a `case` column); a folder from before it keeps the two older figures below
+    cases_fig = energy_cases_figure(bud)
+    if cases_fig:
+        o.figures.append(cases_fig)
     segs = ["takeoff", "fwd_transition", "climb", "descent", "back_transition", "landing"]
-    if bud:
+    if bud and not cases_fig:
         panels = []
         for key in uniq([(r["site_amsl_m"], r["mission"]) for r in bud]):
             rs = [r for r in bud if (r["site_amsl_m"], r["mission"]) == key]
@@ -611,7 +738,7 @@ def build_e(c: Ctx) -> Out:
             for sg in segs:
                 v = sum(
                     num(r.get(f"{d}_{sg}_Wh"))
-                    for d in ("out", "ret")
+                    for d in ("out", "ret", "leg")
                     if ok(num(r.get(f"{d}_{sg}_Wh")))
                 )
                 items.append((sg.replace("_", " "), v, f"{sg}: {v:.1f} Wh", "s1"))
@@ -637,7 +764,7 @@ def build_e(c: Ctx) -> Out:
                 _legend(("s1", "line", "mission segments"), ("s2", "line", "reserve")),
             )
         )
-    if summ:
+    if summ and not cases_fig:
         req = sorted({int(k.split("_at_")[1][:-2]) for r in summ for k in r if k.startswith("margin_Wh_at_")
                       and k.endswith("km")})  # fmt: skip
         items = [(f"site {r['site_amsl_m']:g} m, {r['mission']}", r["max_range_km"],

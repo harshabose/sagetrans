@@ -69,7 +69,7 @@ Rule: **`mission.yaml` holds facts about the mission and the aircraft's operatio
 E:
   sites_amsl_m: [0, 1500, 2500, 5000]    # airfield elevations; cruise = site + climb_height_m
   missions: [round_trip, one_way]
-  ranges_km: [50, 100, 150]              # report points (one-way distance, or radius for round_trip)
+  # (ranges_km was removed: E reports the maximum range and the mission.yaml requirements)
   a_fwd_mode: case                       # case | worst | mission   (Q2 spec)
   a_fwd_metric: min                      # min | equiv
   a_plan_fallback_ms2: 2.5               # D spec section 8

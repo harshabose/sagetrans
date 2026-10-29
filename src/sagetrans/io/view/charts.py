@@ -604,6 +604,52 @@ def bar_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
 
 
+@dataclass
+class CaseRow:
+    """One row of `case_bars`: the main bar `(start, end, cls, tip)` and the faint bars of the
+    other cases behind it, each `(index, start, end, tip)` (the index picks the outline)."""
+
+    label: str
+    main: tuple[float, float, str, str]
+    ghosts: list[tuple[int, float, float, str]] = field(default_factory=list)
+
+
+def case_bars(rows: Sequence[CaseRow], xlab: str, aria: str, xmax: float, w: float = 470,
+              rule: tuple[float, str] | None = None) -> str:
+    """Horizontal bars of one main case with the other cases faint behind them.
+
+    The faint bars sit in a `<g class="ghosts">` that the page hides until its checkbox is on
+    (`html.py`); the axis runs to `xmax` either way, so the layout does not move. `rule` is a
+    vertical line with a label (the usable energy). The values are in a column at the right.
+    """
+    rh, pl, pr, pt, pb = 24.0, 118.0, 44.0, 8.0, 40.0
+    h = pt + pb + rh * len(rows)
+    fr = Frame(w, h, (0.0, xmax), (0, 1), pl=pl, pr=pr, pt=pt, pb=pb)
+    out: list[str] = []
+    for t in nice_ticks(0.0, xmax):
+        x = f1(fr.sx(t))
+        out.append(el("line", "grid", x1=x, x2=x, y1=pt, y2=f1(fr.bottom)))
+        out.append(text(fr.sx(t), fr.bottom + 16, tick_text(t), "tick", "middle"))
+    out.append(text((pl + w - pr) / 2, h - 6, xlab, "axlab", "middle"))
+    if rule is not None:
+        x = f1(fr.sx(rule[0]))
+        out.append(el("line", "rule", x1=x, x2=x, y1=pt, y2=f1(fr.bottom)))
+        out.append(text(fr.sx(rule[0]), pt + 8, rule[1], "dl rulelab", "end"))
+    for i, r in enumerate(rows):
+        y = pt + rh * i + 4
+        out.append(text(pl - 8, y + 13, r.label, "dl", "end"))
+        faint = [el("rect", f"bar ghost g{k} {r.main[2]}", x=f1(fr.sx(a)), y=f1(y),
+                    width=f1(max(fr.sx(b) - fr.sx(a), 1.5)), height=16, rx=3, tabindex=0,
+                    data_tip=tip) for k, a, b, tip in r.ghosts]
+        out.append(f'<g class="ghosts">{"".join(faint)}</g>')
+        a, b, cls, tip = r.main
+        out.append(el("rect", f"bar {cls}", x=f1(fr.sx(a)), y=f1(y),
+                      width=f1(max(fr.sx(b) - fr.sx(a), 1.5)), height=16, rx=3, tabindex=0,
+                      data_tip=tip))  # fmt: skip
+        out.append(text(w - 6, y + 13, f"{b - a:.0f}", "dl", "end"))
+    return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
+
+
 def heat_chart(xlabels: Sequence[str], ylabels: Sequence[str],
                values: Sequence[Sequence[float | None]], aria: str, xlab: str = "",
                unit: str = "", dec: int = 2, flags: Sequence[Sequence[bool]] | None = None,

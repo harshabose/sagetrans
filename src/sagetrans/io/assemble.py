@@ -312,12 +312,15 @@ def assemble(
         parts = [md_table(tables["E_summary"]), "",
                  "The range is an OUTPUT: what is left after the fixed segments and the reserve "
                  "goes to cruise (the radius for a round trip, which flies twice that). The "
-                 "requirements are comparison columns only. A pusher command above "
+                 "requirements are distances flown (a round trip of 100 km is a 50 km radius) "
+                 "and comparison columns only. A pusher command above "
                  "`TKOFF_THR_MAX` is reported (`over_ceiling`); a segment fails only above 1 or at "
                  "another limit (`feasible`, `limit`).", "",
-                 "Budget by range (a range shorter than the largest leg's fixed distance is "
-                 "not tabulated):", "",
-                 md_table(tables.get("E_budget", []), ["site_amsl_m", "mission", "range_km",
+                 "Budget at the maximum range (`plausible`) and at each required distance "
+                 "(`range_km` is the one-way distance or the radius, `flown_km` the distance "
+                 "flown in all; a case shorter than the fixed segments is not tabulated):", "",
+                 md_table(tables.get("E_budget", []), ["site_amsl_m", "mission", "case",
+                                                        "flown_km", "range_km",
                                                         "cruise_Wh", "reserve_Wh", "total_Wh",
                                                         "usable_Wh", "margin_Wh", "fits"]), "",
                  "Segments:", "",
