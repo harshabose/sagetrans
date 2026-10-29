@@ -844,8 +844,48 @@ def c_bounds(inp: StudyInputs) -> Bounds:
     )  # fmt: skip
 
 
+def worst_end_sink(results: list[restricted.CRun]) -> float:
+    """The largest sink rate at the stop over the members that stopped (NaN if none did)."""
+    sinks = [-r.vh_end for r in results if r.stopped and math.isfinite(r.vh_end)]
+    return max(sinks) if sinks else math.nan
+
+
 def _c_row(label: str, results: list[restricted.CRun], w: CostWeights) -> dict[str, Any]:
-    return {"case": label, **{k: _num(v) for k, v in restricted.summarise_c(results, w).items()}}
+    return {"case": label, **{k: _num(v) for k, v in restricted.summarise_c(results, w).items()},
+            "max_end_sink_ms": _num(worst_end_sink(results))}  # fmt: skip
+
+
+def _is_num(x: Any) -> bool:
+    return isinstance(x, int | float) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def margin_cols(c: Any, max_overshoot: Any, max_end_sink: Any) -> dict[str, Any]:
+    """The tolerances, the margins to them and `at_edge` for one case (reporting only).
+
+    A margin is the tolerance minus the worst value over the members; `at_edge` is set when the
+    overshoot margin is below `C.margin_flag_m` or the end-sink margin below `C.margin_flag_ms`.
+    An empty cell (no member stopped) has no margin.
+    """
+    os_m = c.os_tol_m - max_overshoot if _is_num(max_overshoot) else ""
+    sk_m = c.sink_tol_ms - max_end_sink if _is_num(max_end_sink) else ""
+    edge = (_is_num(os_m) and os_m < c.margin_flag_m) or (_is_num(sk_m) and sk_m < c.margin_flag_ms)
+    return {"os_tol_m": c.os_tol_m, "sink_tol_ms": c.sink_tol_ms,
+            "max_end_sink_ms": max_end_sink if _is_num(max_end_sink) else "",
+            "os_margin_m": os_m, "sink_margin_ms": sk_m, "at_edge": bool(edge)}  # fmt: skip
+
+
+def pick_margin_row(fine: Table, c: Any) -> dict[str, Any] | None:
+    """The `optimum_margin` q: the largest q on the fine grid whose worst overshoot is at most
+    `margin_frac` x `os_tol_m` AND whose worst end sink is at most `margin_frac` x `sink_tol_ms`.
+    None if no q on the grid does (a row with no number would only look like a result)."""
+    ok_rows = [
+        r for r in fine
+        if _is_num(r.get("q")) and _is_num(r.get("max_overshoot_m"))
+        and r["max_overshoot_m"] <= c.margin_frac * c.os_tol_m
+        and (not _is_num(r.get("max_end_sink_ms"))
+             or r["max_end_sink_ms"] <= c.margin_frac * c.sink_tol_ms)
+    ]  # fmt: skip
+    return max(ok_rows, key=lambda r: r["q"]) if ok_rows else None
 
 
 def default_case(
@@ -1043,8 +1083,35 @@ def task_c(inp: StudyInputs) -> dict[str, Any]:
                 meta=_hist_meta("default_fails", "ensemble member", scens[worst], vp,
                                 runs_i[worst], band, default_fails=bool(fails)))
 
-    q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q}
+    q_curve = [_c_row(f"q = {q:g}", run_all({**best, "q": q}), w) | {"q": q, "grid": "coarse"}
                for q in c.q_curve]  # fmt: skip
+    # a fine grid around the optimum, the other three variables fixed. q is not clipped to the
+    # search bound (it is a report, not a search); only a q that is not positive is dropped.
+    q_fine: Table = []
+    for off in c.q_fine_offsets_ms2:
+        q_f = best["q"] + off
+        if q_f <= 0.0:
+            continue
+        runs_q = opt if off == 0.0 else run_all({**best, "q": q_f})
+        q_fine.append(_c_row(f"q = {q_f:.3f}", runs_q, w) | {"q": q_f, "grid": "fine"})
+    q_curve += q_fine
+    # the tolerances and margins of every case, and the reported margin row (never the
+    # recommendation)
+    by_case = {"optimum": opt, str(params[1]["case"]): reg_runs}
+    if dflt_runs is not None:
+        by_case["ardupilot_default"] = dflt_runs
+    for prow in params:
+        sink_w = worst_end_sink(by_case[prow["case"]])
+        prow.update(margin_cols(c, prow.get("max_overshoot_m"), sink_w))
+    mrow = pick_margin_row(q_fine, c)
+    if mrow is not None:
+        prm_m = {**best, "q": mrow["q"]}
+        params.append({
+            "case": "optimum_margin", **deg(prm_m), "J": mrow["J"], "J_start": "",
+            "seed_spread": "", "at_bound": "",
+            **{k: v for k, v in mrow.items() if k not in ("case", "J", "q", "grid")},
+            **margin_cols(c, mrow["max_overshoot_m"], mrow["max_end_sink_ms"]),
+        })  # fmt: skip
 
     sens_rows: Table = []
     progress.phase("C: one-at-a-time sensitivities")

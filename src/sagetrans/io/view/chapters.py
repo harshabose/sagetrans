@@ -962,6 +962,53 @@ def build_c_histories(c: Ctx, o: Out) -> None:
             "c_hist_default", series, band, entry))
 
 
+def margin_figure(curve: Sequence[Row], params: Sequence[Row], opt: int) -> str | None:
+    """Worst overshoot and worst end sink against q: the coarse curve, the fine grid, the optimum,
+    the margin row and each tolerance as a line (two small charts, the sink one as important as
+    the overshoot one). None if the curve has neither column."""
+    panels = []
+    mrow = next((r for r in params if r.get("case") == "optimum_margin"), None)
+    for col, tcol, lab, ylab in (
+        ("max_overshoot_m", "os_tol_m", "worst overshoot", "worst overshoot [m]"),
+        ("max_end_sink_ms", "sink_tol_ms", "worst end sink", "worst end sink [m/s]"),
+    ):
+        series: list[ch.Series] = []
+        for grid, name, cls in (("coarse", "coarse curve", "s1"), ("fine", "fine grid", "s1")):
+            rs = sorted((r for r in curve if (r.get("grid") or "coarse") == grid
+                         and ok(num(r.get("q"))) and ok(num(r.get(col)))),
+                        key=lambda r: num(r["q"]))  # fmt: skip
+            if rs:
+                series.append(ch.Series(
+                    name, cls, [(num(r["q"]), num(r[col])) for r in rs],
+                    [tip(r, ["q", col, "J", "n_overshoot", "n_sinking"], name) for r in rs],
+                    hollow=[bool(num(r.get("n_overshoot")) or num(r.get("n_sinking"))) for r in rs],
+                    line=grid == "coarse", marker="dot" if grid == "coarse" else "sq"))
+        for r, name, cls, kind in ((params[opt], "optimum", "s1", "dia"),
+                                   (mrow, "margin row", "s3", "dia")):
+            if r is not None and ok(num(r.get("Q_TRANS_DECEL_ms2"))) and ok(num(r.get(col))):
+                series.append(ch.Series(
+                    name, cls, [(num(r["Q_TRANS_DECEL_ms2"]), num(r[col]))],
+                    [tip(r, ["Q_TRANS_DECEL_ms2", col], name)], line=False, marker=kind))
+        tol = num(params[opt].get(tcol))
+        if series and ok(tol):
+            panels.append((lab, ch.xy_chart(
+                series, "Q_TRANS_DECEL q [m/s^2]", ylab, f"{lab} against q", w=340, h=280,
+                hlines=[(tol, f"tolerance {tol:g} (PROPOSED)")])))
+    if not panels:
+        return None
+    os_m, sk_m = num(params[opt].get("os_margin_m")), num(params[opt].get("sink_margin_ms"))
+    margins = (f" At the optimum the margins are {os_m:.2f} m and {sk_m:.2f} m/s."
+               if ok(os_m) and ok(sk_m) else "")
+    sentence = ("The optimum relies on the overshoot and end-sink tolerances, which are PROPOSED, "
+                "not on a measured limit." + margins)
+    leg = _legend(("s1", "line", "coarse curve (hollow: a member fails)"), ("s1", "sq", "fine grid"),
+                  ("s1", "dia", "optimum"), ("s3", "dia", "margin row (reported, not recommended)"))
+    return panelbox(
+        "Worst overshoot and worst end sink against q",
+        "The optimum's other three values fixed; q varied. A hollow mark has a failing member.",
+        ch.multiples(panels, 2) + f'<p class="cap">{ch.esc(sentence)}</p>', leg)
+
+
 def build_c(c: Ctx) -> Out:
     o = Out()
     params, runs, curve = c.rows("C_params"), c.rows("C_runs"), c.rows("C_q_curve")
@@ -1006,6 +1053,20 @@ def build_c(c: Ctx) -> Out:
         )
         if nfl:
             o.flags.append(f"{nfl} member(s) flagged")
+    for lab, vcol, tcol, unit in (
+        ("Worst overshoot / tolerance", "max_overshoot_m", "os_tol_m", "m"),
+        ("Worst end sink / tolerance", "max_end_sink_ms", "sink_tol_ms", "m/s"),
+    ):
+        v, t = num(params[opt].get(vcol)), num(params[opt].get(tcol))
+        if ok(v) and ok(t):
+            o.items.append(Item(lab, f"{v:.2f} / {t:g}", unit,
+                                f"C_params.{vcol}[{opt}]; C_params.{tcol}[{opt}]",
+                                f"{v:.2f} / {t:g}"))  # fmt: skip
+    if params[opt].get("at_edge") is True:
+        o.flags.append(
+            "the optimum is at the edge of a tolerance: overshoot margin "
+            f"{num(params[opt].get('os_margin_m')):.2f} m, end-sink margin "
+            f"{num(params[opt].get('sink_margin_ms')):.2f} m/s")
     bound = str(params[opt].get("at_bound") or "")
     if bound:
         o.flags.append("at a search bound: " + bound)
@@ -1073,6 +1134,9 @@ def build_c(c: Ctx) -> Out:
     # 2. time histories
     build_c_histories(c, o)
 
+    mf = margin_figure(curve, params, opt)
+    if mf:
+        o.figures.append(mf)
     # 3. convergence
     srch = c.rows("C_search")
     if srch:

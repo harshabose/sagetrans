@@ -161,9 +161,13 @@ def test_the_c_and_ft_tables_carry_the_three_fixed_case_strings(cfgdir):
     _tiny_study(cfgdir)
     inp = load_inputs(cfgdir, only={"C", "FT"})
     c = stages.run_task(inp, "C")["tables"]
-    assert [r["case"] for r in c["C_params"]] == [
-        "optimum", "register at q = 2", "ardupilot_default"
-    ]
+    cases = [r["case"] for r in c["C_params"]]
+    # the three fixed cases, then at most the reported (never recommended) margin row
+    assert cases[:3] == ["optimum", "register at q = 2", "ardupilot_default"]
+    assert cases[3:] in ([], ["optimum_margin"])
+    assert all(k in c["C_params"][0] for k in ("os_margin_m", "sink_margin_ms", "at_edge"))
+    grids = {r["grid"] for r in c["C_q_curve"]}
+    assert grids == {"coarse", "fine"}
     assert {r["case"] for r in c["C_runs"]} == {"optimum", "ardupilot_default"}
     dflt_rows = [r for r in c["C_runs"] if r["case"] == "ardupilot_default"]
     assert len(dflt_rows) == 2 and all(r["a_cap_ms2"] != "" for r in dflt_rows)  # ceiling too

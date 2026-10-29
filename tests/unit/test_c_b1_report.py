@@ -18,6 +18,8 @@ from sagetrans.io.view.chapters import (
 from sagetrans.io.view.load import load
 from sagetrans.io.view.registry import build_html
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def write_table(folder: Path, name: str, rows: list[dict]) -> None:
     cols: list[str] = []
@@ -162,3 +164,140 @@ def test_the_history_rows_end_at_the_stop():
     rows = stages._c_trace(Sim(), 0.0, "C optimum", -1, meta={"scenario": "S-01"})
     assert [r["t"] for r in rows] == [0.0, 0.5, 0.6] and rows[-1]["scenario"] == "S-01"
     assert math.isfinite(rows[0]["V"])
+
+
+def test_a_default_with_no_failing_member_says_so(tmp_path):
+    synthetic_run(tmp_path)
+    rows = list(csv.DictReader((tmp_path / "C_history.csv").open(encoding="utf-8")))
+    for r in rows:
+        if r["view"] == "default_fails":
+            r["default_fails"] = "False"
+    write_table(tmp_path, "C_history", rows)
+    c = section(build_html(load(tmp_path)), "c")
+    assert "No member fails under the default; this is the one with the largest overshoot" in c
+
+
+# ---- C2 ---------------------------------------------------------------------------------------
+class CfgStub:
+    os_tol_m, sink_tol_ms = 2.0, 1.76
+    margin_flag_m, margin_flag_ms, margin_frac = 0.5, 0.3, 0.75
+    q_fine_offsets_ms2 = [0.0]
+
+
+def test_margins_to_both_tolerances_and_the_edge_flag():
+    m = stages.margin_cols(CfgStub, 1.59, 1.24)
+    assert m["os_margin_m"] == 2.0 - 1.59 and m["sink_margin_ms"] == 1.76 - 1.24
+    assert m["at_edge"] is True  # the overshoot margin 0.41 m is below 0.5 m
+    assert stages.margin_cols(CfgStub, 1.0, 1.0)["at_edge"] is False
+    assert stages.margin_cols(CfgStub, 0.5, 1.6)["at_edge"] is True  # the SINK margin alone: 0.16
+    assert stages.margin_cols(CfgStub, 0.5, 1.6)["sink_margin_ms"] < 0.3
+    empty = stages.margin_cols(CfgStub, "", "")  # nothing stopped: no margin, no edge
+    assert empty["os_margin_m"] == "" and empty["sink_margin_ms"] == ""
+    assert empty["at_edge"] is False
+    assert empty["os_tol_m"] == 2.0 and empty["sink_tol_ms"] == 1.76
+
+
+def fine(q, os_, sink):
+    return {"q": q, "max_overshoot_m": os_, "max_end_sink_ms": sink, "J": 1.5 + q}
+
+
+def test_the_margin_row_is_the_largest_q_within_both_fractions():
+    rows = [fine(1.93, 1.0, 1.0), fine(2.03, 1.3, 1.2), fine(2.08, 1.45, 1.3),
+            fine(2.13, 1.6, 1.0), fine(2.23, 3.0, 1.0)]  # limits: 1.5 m and 1.32 m/s
+    assert stages.pick_margin_row(rows, CfgStub)["q"] == 2.08
+    # a q that meets the overshoot margin but not the sink margin is not the margin row
+    rows2 = [fine(2.03, 1.0, 1.0), fine(2.08, 1.2, 1.5)]
+    assert stages.pick_margin_row(rows2, CfgStub)["q"] == 2.03
+
+
+def test_no_q_on_the_grid_meets_the_margin():
+    rows = [fine(2.03, 1.8, 1.0), fine(2.08, 1.9, 1.0), fine(2.13, 2.5, 1.0)]
+    assert stages.pick_margin_row(rows, CfgStub) is None
+    assert stages.pick_margin_row([], CfgStub) is None
+    assert stages.pick_margin_row([fine(2.0, "", "")], CfgStub) is None  # nothing stopped
+
+
+def test_the_new_c_settings_are_refused_when_out_of_range():
+    import pytest
+    from pydantic import ValidationError
+
+    from sagetrans.io.settings import CCfg
+
+    assert CCfg().margin_frac == 0.75 and CCfg().q_fine_offsets_ms2[2] == 0.0  # the defaults
+    for bad in ({"margin_frac": 0.0}, {"margin_frac": 1.5}, {"margin_flag_m": -0.1},
+                {"margin_flag_ms": -1.0}, {"q_fine_offsets_ms2": [0.0, float("nan")]},
+                {"q_fine_offsets_ms2": [9.0]}):
+        with pytest.raises(ValidationError):
+            CCfg(**bad)
+
+
+def test_the_q_note_is_computed_from_the_numbers():
+    from types import SimpleNamespace
+
+    from sagetrans.io.recommended import q_note
+
+    inp = SimpleNamespace(study=SimpleNamespace(C=CfgStub))
+    c_row = {"Q_TRANS_DECEL_ms2": 2.03, "max_overshoot_m": 1.59, "max_end_sink_ms": 1.24}
+    d_row = {"a_rec_min_ms2": 1.65}
+    m_row = {"Q_TRANS_DECEL_ms2": 1.98}
+    text = q_note(inp, c_row, d_row, m_row)
+    assert "C's q is 2.03 m/s^2" in text and "D's a_rec minimum is 1.65 m/s^2" in text
+    assert "C is 23 % above it" in text  # 100 * (2.03 / 1.65 - 1)
+    assert "worst overshoot is 1.59 m against the tolerance 2 m (PROPOSED)" in text
+    assert "worst end sink is 1.24 m/s against 1.76 m/s (PROPOSED)" in text
+    assert "margin row" in text and "q = 1.98 m/s^2" in text and "75%" in text
+    # D not in the run, and no q on the grid meets the margin: both stated, nothing invented
+    text2 = q_note(inp, c_row, None, None)
+    assert "D is not in this run" in text2 and "no q on the fine grid keeps both" in text2
+
+
+def c2_run(folder: Path, edge: bool = True, with_margin: bool = True) -> None:
+    opt = {"case": "optimum", "T_bt_s": 1.6, "theta_A_deg": 19.6, "spin_min": 0.11,
+           "Q_TRANS_DECEL_ms2": 2.03, "J": 1.48, "p95_distance_m": 119.0, "mean_energy_kJ": 20.0,
+           "max_overshoot_m": 1.59, "max_end_sink_ms": 1.24, "os_tol_m": 2.0, "sink_tol_ms": 1.76,
+           "os_margin_m": 0.41, "sink_margin_ms": 0.52, "at_edge": edge}
+    params = [opt, {**opt, "case": "ardupilot_default", "J": 61.5, "Q_TRANS_DECEL_ms2": 2.0,
+                    "max_overshoot_m": 3.8, "os_margin_m": -1.8, "at_edge": True}]
+    if with_margin:
+        params.append({**opt, "case": "optimum_margin", "Q_TRANS_DECEL_ms2": 1.98,
+                       "max_overshoot_m": 1.4, "os_margin_m": 0.6, "at_edge": False})
+    write_table(folder, "C_params", params)
+    curve = [{"case": f"q = {q:g}", "q": q, "grid": "coarse", "J": 1.5, "n_overshoot": 0.0,
+              "n_sinking": 0.0, "max_overshoot_m": 0.4 * q, "max_end_sink_ms": 0.6}
+             for q in (1.0, 1.5, 2.0, 2.5)]
+    curve += [{"case": f"q = {q:.3f}", "q": q, "grid": "fine", "J": 1.5,
+               "n_overshoot": 0.0 if q < 2.1 else 11.0, "n_sinking": 0.0,
+               "max_overshoot_m": 1.59 + 5 * (q - 2.03), "max_end_sink_ms": 1.2}
+              for q in (1.98, 2.03, 2.08, 2.13, 2.18)]
+    write_table(folder, "C_q_curve", curve)
+    write_record(folder)
+
+
+def test_the_c_chapter_shows_both_margins_the_chart_and_the_proposed_caveat(tmp_path):
+    c2_run(tmp_path)
+    c = section(build_html(load(tmp_path)), "c")
+    assert "Worst overshoot / tolerance" in c and "1.59 / 2" in c
+    assert "Worst end sink / tolerance" in c and "1.24 / 1.76" in c
+    assert "the optimum is at the edge of a tolerance: overshoot margin 0.41 m" in c
+    assert "Worst overshoot and worst end sink against q" in c
+    assert c.count("tolerance 2 (PROPOSED)") == 1 and "tolerance 1.76 (PROPOSED)" in c  # both lines
+    assert "relies on the overshoot and end-sink tolerances, which are PROPOSED" in c
+    assert "margin row (reported, not recommended)" in c
+
+
+def test_the_margin_row_is_never_the_recommendation(tmp_path):
+    from sagetrans.io.inputs import load_inputs
+    from sagetrans.io.recommended import settings_rows
+
+    inp = load_inputs(ROOT / "tests" / "data" / "placeholder_configs", only={"C"})
+    base = {"T_bt_s": 1.6, "theta_A_deg": 19.6, "spin_min": 0.11, "at_bound": ""}
+    tables = {"C_params": [
+        {"case": "optimum", "Q_TRANS_DECEL_ms2": 2.03, **base, "max_overshoot_m": 1.59,
+         "max_end_sink_ms": 1.24},
+        {"case": "optimum_margin", "Q_TRANS_DECEL_ms2": 1.5, **base},
+        {"case": "ardupilot_default", "Q_TRANS_DECEL_ms2": 2.0, **base}]}
+    rows = settings_rows(inp, tables)
+    q = next(r for r in rows if r["parameter"] == "Q_TRANS_DECEL" and r["analysis"] == "C")
+    assert float(q["value"]) == 2.03  # the optimum, not the margin row
+    assert "margin row" in q["note"] and "q = 1.50 m/s^2" in q["note"]  # but it is named
+    assert "D is not in this run" in q["note"]  # the tiny run has no D: said, not broken

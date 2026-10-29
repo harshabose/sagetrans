@@ -8,6 +8,7 @@ the values the shipped files contain.
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -276,7 +277,20 @@ class CCfg(_Strict):
     bounds: CBoundsCfg = CBoundsCfg()
     z: CZCfg = CZCfg()
     q_curve: list[float] = [1.0, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0]  # C_q_curve
+    # reporting only (ASSUMED): how close to a tolerance counts as "at the edge", and the fine grid
+    # of q around the optimum (added to the optimum's q, the other three variables fixed)
+    margin_flag_m: float = Field(0.5, ge=0.0)  # overshoot margin below this: at_edge
+    margin_flag_ms: float = Field(0.3, ge=0.0)  # end-sink margin below this: at_edge
+    # the margin row: worst overshoot AND worst end sink within this fraction of their tolerances
+    margin_frac: float = Field(0.75, gt=0.0, le=1.0)
+    q_fine_offsets_ms2: list[float] = [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2]
     sens: CSensCfg = CSensCfg()
+
+    @model_validator(mode="after")
+    def _fine_grid(self) -> CCfg:
+        if any(not math.isfinite(o) or abs(o) > 5.0 for o in self.q_fine_offsets_ms2):
+            raise ValueError("C.q_fine_offsets_ms2: finite offsets within 5 m/s^2 of the optimum")
+        return self
 
     @model_validator(mode="before")
     @classmethod

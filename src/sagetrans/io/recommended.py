@@ -90,6 +90,45 @@ def _default_text(inp: StudyInputs, name: str, unit: str, scale: float) -> str:
     return f"{raw * scale:g}"
 
 
+def _num(x: Any) -> float | None:
+    return float(x) if isinstance(x, int | float) and not isinstance(x, bool) and x == x else None
+
+
+def q_note(
+    inp: StudyInputs, c_row: Mapping[str, Any], d_row: Mapping[str, Any] | None,
+    m_row: Mapping[str, Any] | None,
+) -> str:
+    """The note of Q_TRANS_DECEL, computed: C's q against D's capability and against the tolerances.
+
+    C's q is above what D says the aircraft can do when `a_rec_min` is lower; only the overshoot
+    tolerance (PROPOSED) allows it, so the note says by how much and where the margin row sits.
+    """
+    c = inp.study.C
+    q = _num(c_row.get("Q_TRANS_DECEL_ms2"))
+    bits = ["searched (back transition)" + (f": C's q is {q:.2f} m/s^2" if q is not None else "")]
+    a = _num(d_row.get("a_rec_min_ms2")) if d_row else None
+    if a and q is not None:
+        bits.append(f"D's a_rec minimum is {a:.2f} m/s^2, so C is {100.0 * (q / a - 1.0):.0f} % "
+                    "above it")
+    else:
+        bits.append("D is not in this run: no capability limit to compare with")
+    os_w, sink_w = _num(c_row.get("max_overshoot_m")), _num(c_row.get("max_end_sink_ms"))
+    if os_w is not None:
+        bits.append(f"the worst overshoot is {os_w:.2f} m against the tolerance {c.os_tol_m:g} m "
+                    "(PROPOSED)")
+    if sink_w is not None:
+        bits.append(f"the worst end sink is {sink_w:.2f} m/s against {c.sink_tol_ms:g} m/s "
+                    "(PROPOSED)")
+    mq = _num(m_row.get("Q_TRANS_DECEL_ms2")) if m_row else None
+    if mq is not None:
+        bits.append(f"the margin row (worst overshoot and end sink within {c.margin_frac:.0%} of "
+                    f"the tolerances) has q = {mq:.2f} m/s^2")
+    elif c.q_fine_offsets_ms2:
+        bits.append(
+            f"no q on the fine grid keeps both within {c.margin_frac:.0%} of the tolerances")
+    return "; ".join(bits)
+
+
 def settings_rows(inp: StudyInputs, tables: Mapping[str, Table]) -> Table:
     """The rows of `settings_recommended.csv` from the tables already built.
 
@@ -133,9 +172,14 @@ def settings_rows(inp: StudyInputs, tables: Mapping[str, Table]) -> Table:
         added = False
         if c_row is not None and p.c_key is not None and c_row.get(p.c_key) not in (None, ""):
             lo, hi = getattr(inp.study.C.bounds, p.c_bound or "")
+            note = "searched (back transition)"
+            if p.name == "Q_TRANS_DECEL":
+                m_row = next((r for r in tables.get("C_params", [])
+                              if r.get("case") == "optimum_margin"), None)
+                note = q_note(inp, c_row, d_row, m_row)
             add(float(c_row[p.c_key]) * p.c_scale, "C",
                 _bound_flag(str(c_row.get("at_bound", "")), p.c_name),
-                "searched (back transition)", _range_text(lo * p.c_scale, hi * p.c_scale))
+                note, _range_text(lo * p.c_scale, hi * p.c_scale))
             added = True
         if p.name == "Q_TRANS_DECEL" and d_row is not None and d_row.get("a_rec_min_ms2") != "":
             add(float(d_row["a_rec_min_ms2"]), "D", "", "the minimum over D's ensemble (a_rec)",
