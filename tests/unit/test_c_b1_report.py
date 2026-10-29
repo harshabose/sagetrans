@@ -948,3 +948,168 @@ def test_the_ft_chapter_has_the_robust_table_the_tile_and_the_sentence(tmp_path)
     ft = section(build_html(load(tmp_path)), "ft")
     assert "Stall margin spare" in ft and "1.246 vs 1.2 (3.8%)" in ft
     assert "Stall margin robustness" in ft and "flag-free only at 1, 1.1." in ft
+
+
+# ---- F4 -------------------------------------------------------------------------------------
+def tick_labels(svg):
+    return re.findall(r'class="tick"[^>]*>([-0-9.e+]+)<', svg)
+
+
+def test_a_log_axis_separates_neighbouring_costs_and_has_no_zero():
+    s = ch.Series("J", "s1", [(17.0, 20.8), (18.0, 0.7588), (19.0, 0.7604), (20.0, 51.0)])
+    lin = ch.xy_chart([s], "v", "J", "lin")
+    log = ch.xy_chart([s], "v", "J (log)", "log", ylog=True)
+
+    def cy(svg):
+        return [float(v) for v in re.findall(r'<circle class="mk s1"[^>]* cy="([0-9.]+)"', svg)]
+
+    gap_lin = abs(cy(lin)[1] - cy(lin)[2])
+    gap_log = abs(cy(log)[1] - cy(log)[2])
+    assert gap_log > 2 * gap_lin  # 18 and 19 can be told apart on the log axis
+    labels = tick_labels(log)
+    assert "0" not in labels and "0.1" in labels and "1" in labels and "100" in labels
+    assert "0.2" in labels and "5" in labels  # decades subdivided at 2 and 5
+
+
+def test_a_symmetric_log_axis_keeps_small_rows_visible_and_labels_real_units():
+    items = [("small a", 0.002, "", "s1"), ("small b", -0.003, "", "s1"), ("big", 20.0, "", "s2")]
+    lin = ch.dot_chart(items, "dJ", "lin")
+    sym = ch.dot_chart(items, "dJ", "sym", sym=0.003)
+
+    def cx(svg):
+        return [float(v) for v in re.findall(r'<circle class="mk s[12]"[^>]* cx="([0-9.]+)"', svg)]
+
+    assert abs(cx(lin)[0] - cx(lin)[1]) < 3  # flattened
+    assert abs(cx(sym)[0] - cx(sym)[1]) > 15  # separate
+    labels = tick_labels(sym)
+    assert "0" in labels and "0.003" in labels and "-0.003" in labels and "30" in labels
+
+
+def test_the_swarm_keeps_overlapping_marks_apart():
+    xs = [100.0, 100.5, 101.0, 101.2, 150.0]
+    ys = ch.swarm(xs)
+    assert ys[0] == 0.0 and ys[-1] == 0.0  # a lone mark stays on the line
+    pts = list(zip(xs, ys, strict=True))
+    for i, (x, y) in enumerate(pts):
+        for x2, y2 in pts[:i]:
+            assert math.hypot(x - x2, y - y2) >= 10.0 - 1e-9
+
+
+def ft_sens_rows():
+    base = {"parameter": "base", "value": "", "J": 0.7588, "n_flags": 0.0}
+    rows = [base]
+    for p, v, j, n in (("rotor_lag_s", 0.5, 0.7602, 0), ("z_acc_p", 0.015, 0.7610, 0),
+                       ("TRIM_THROTTLE", 0.35, 0.7590, 0), ("CL_max_scale", 0.9, 20.8, 2)):
+        rows.append({"parameter": p, "value": v, "J": j, "n_flags": float(n)})
+    return rows
+
+
+def test_the_sensitivity_sentence_is_computed_and_can_say_no():
+    from sagetrans.io.view.chapters import sensitivity_statement
+
+    s = sensitivity_statement(ft_sens_rows(), 0.7588, 0.0039)
+    assert "seed spread is 0.39% of J, 0.0030 in J" in s
+    assert "Apart from C_L,max, no input moves J by more than that" in s
+    assert "the largest is z_acc_p = 0.015 at +0.0022" in s
+    tight = sensitivity_statement(ft_sens_rows(), 0.7588, 0.0001)  # a tiny spread: not true now
+    assert "DO move J by more than that" in tight and "rotor_lag_s = 0.5" in tight
+    assert "CL_max_scale" not in tight
+    assert sensitivity_statement(ft_sens_rows(), 0.7588, float("nan")) == ""
+
+
+def grid_rows_ft():
+    def g(q, j, **kw):
+        return {"q_transition_s": q, "J_snapped": j, "n_flags": 0.0, **kw}
+
+    return [g(2.0, 0.90, n_flags=3.0), g(5.0, 0.7700), g(10.0, 0.7620), g(17.0, 0.7588),
+            g(20.0, 0.7600)]
+
+
+def test_the_q_transition_sentence_gives_range_register_plateau_and_the_second_order_claim():
+    from sagetrans.io.view.chapters import grid_statement
+
+    params = [{"case": "optimum", "J": 0.7588, "J_start": 51.3},
+              {"case": "register", "q_transition_s": 5.0}]
+    s = grid_statement(grid_rows_ft(), params, 0.0039)
+    assert "J runs from 0.759 (Q_TRANSITION_MS 17 s) to 0.900 (2 s), 18.6% above the lowest" in s
+    assert "At the register's Q_TRANSITION_MS (5 s) J is 0.770, +1.5% against the winner's." in s
+    assert "2 of 5 points lie within the seed spread (0.39%) of the best: " \
+           "Q_TRANSITION_MS 17, 20 s." in s
+    assert "so with the other three re-tuned the fade length is a second-order choice." in s
+    wide = grid_statement(grid_rows_ft(), [{"case": "optimum", "J": 0.7588, "J_start": 0.95}],
+                          0.0039)
+    assert "not a second-order choice" in wide
+    off = grid_statement(grid_rows_ft(), [{"case": "register", "q_transition_s": 7.0}], 0.0039)
+    assert "(7 s) is not on the grid" in off
+    assert grid_statement(grid_rows_ft()[:1], params, 0.004) == ""
+
+
+def test_the_spread_sentence_counts_default_members_and_compares_energy():
+    from sagetrans.io.view.chapters import share_statement
+
+    dmem = [{"stall_margin_min": m, "energy_kJ": 30.0} for m in (0.8, 0.95, 1.1, 1.3)]
+    opt = [{"stall_margin_min": 1.25, "energy_kJ": 33.0}] * 3
+    reg = [{"stall_margin_min": 1.0, "energy_kJ": 30.0}] * 3
+    s = share_statement(dmem, opt, reg)
+    assert "2 of 4 ArduPilot-default members (50%) fly below a stall margin of 1.0 and 3 (75%) " \
+           "below 1.2." in s
+    assert "optimum's median energy is 33.00 kJ: +10.0% against the default's 30.00 kJ and " \
+           "+10.0% against the register's 30.00 kJ" in s
+    assert share_statement([], [], []) == ""
+
+
+def test_the_tkoff_thr_max_chip_says_why_it_is_on_the_bound():
+    from sagetrans.io.view.chapters import ft_bound_reason
+
+    row = {"tkoff_thr_max_hi": 1.0, "thr_max": 1.0}
+    s = ft_bound_reason(row, "tkoff_thr_max:hi")
+    assert "upper bound of TKOFF_THR_MAX is 100%" in s and "THR_MAX in the register is 100%" in s
+    assert ft_bound_reason(row, "airspeed_min:hi") == ""
+    assert ft_bound_reason({}, "tkoff_thr_max:hi") == ""
+
+
+def ft_f4_run(tmp_path):
+    ft_run(tmp_path)
+    write_table(tmp_path, "FT_runs", [
+        {"case": cs, "set": "core", "member": float(i), "V_s_eas_ms": 12.0 + i,
+         "loss_m": 1.0 + i, "gain_m": 0.5, "stall_margin_min": 1.0 + 0.1 * i + k,
+         "energy_kJ": 30.0 + k * 9, "vh_end_ms": 0.5 - 0.1 * i, "h_proj_rel_m": -2.0 - i,
+         "proj_loss_m": 0.0, "wing_share_handover": 0.4 + 0.01 * i + k * 0.01,
+         "V_handover_eas_ms": 18.0, "flags": ""}
+        for k, cs in enumerate(("optimum", "register", "ardupilot_default")) for i in range(6)])
+    write_table(tmp_path, "FT_search", [
+        {"seed": float(s), "best_cost": 0.76 + 0.001 * s, "evaluations": 100.0,
+         "airspeed_min_eas_ms": 18.0, "q_transition_s": 17.0, "tkoff_thr_max": 1.0,
+         "tran_pit_max_deg": 6.0} for s in (1, 2, 3)])
+    write_table(tmp_path, "FT_scan", [
+        {"airspeed_min_eas_ms": v, "J": j, "n_flags": float(n), "flags": f,
+         "q_transition_s": 17.0, "tkoff_thr_max": 1.0, "tran_pit_max_deg": 6.0}
+        for v, j, n, f in ((16.0, 5.0, 3, "stall_margin"), (17.0, 1.4, 2, "stall_margin,stall"),
+                           (18.0, 0.7588, 0, ""), (19.0, 0.7604, 0, ""),
+                           (20.0, 3.0, 1, "alt_loss"))])
+    write_table(tmp_path, "FT_sens", ft_sens_rows())
+    write_record(tmp_path, search_spreads={"FT": 0.0039},
+                 context={"mission": {"fwd_alt_loss_max_m": 10.0, "fwd_alt_gain_max_m": 10.0}})
+
+
+def test_the_ft_chapter_has_the_f4_figures(tmp_path):
+    ft_f4_run(tmp_path)
+    ft = section(build_html(load(tmp_path)), "ft")
+    # 5: the end of the fade
+    assert "sink rate [m/s] (negative = climbing)" in ft
+    assert "The loss limit (-10 m) is outside the range shown" in ft  # zoomed to the data
+    # 6: one strip per case, AIRSPEED_MIN in the label, every member a dot
+    assert "optimum (AIRSPEED_MIN 18)" in ft and "register (AIRSPEED_MIN 17)" in ft
+    # 7: final cost by seed, with the four settings in the tooltip
+    assert "Final cost by seed" in ft and "Search convergence" not in ft
+    assert "seed = 2; best_cost = 0.762" in ft and "tran_pit_max_deg = 6" in ft
+    # 1: the scan on a log axis, the hollow tooltip names the flags
+    assert "cost J (log scale)" in ft and "stall_margin,stall" in ft
+    assert "Flag-free: 18, 19 m/s." in ft
+    # 3: the sensitivity in absolute change with the sentence
+    assert "Absolute change of the cost J" in ft and "Apart from C_L,max, no input moves J" in ft
+    assert "[2 failing]" in ft
+    # 4: the register's members, the default's members and the limits
+    assert "member of the register start" in ft and "member of the ArduPilot default" in ft
+    assert ">limit<" in ft and "limit 1.2" in ft
+    assert "ArduPilot-default members" in ft and "median energy is 30.00 kJ" in ft

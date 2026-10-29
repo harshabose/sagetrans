@@ -1406,6 +1406,7 @@ def task_ft_grid(inp: StudyInputs, q_ms_arg: str) -> dict[str, Any]:
         "J_snapped_minus_continuous": lat.cost - r.cost,
         "descent_moves": lat.rounds, "descent_evaluations": lat.evaluations,
         "ensemble_n": len(core), **{k: _num(x) for k, x in sm.items() if k != "J"},
+        "flags": flag_names(sm),
     }  # fmt: skip
     return {"result": r, "row": row, "q_transition_s": q, "snapped": snapped}
 
@@ -1514,6 +1515,7 @@ def task_ft(inp: StudyInputs, arg: str) -> dict[str, Any]:
         params.append({
             "case": c, **{FT_PARAM_COLUMNS[k]: prm[k] for k in forward.FT_NAMES},
             "ensemble_n": len(final), "J_start": j_start if opt else "",
+            "thr_max": inp.forward.thr_max, "tkoff_thr_max_hi": f.bounds.tkoff_thr_max[1],
             **{k: _num(v) for k, v in forward.summarise_ft(core_runs[c], w).items()},
         })  # fmt: skip
     run_rows: Table = []
@@ -1658,6 +1660,7 @@ def task_ft_scan(inp: StudyInputs, v_arg: str) -> dict[str, Any]:
         "J_search": r.cost, "seed_spread": r.search.spread,
         "at_bound": ";".join(f"{k}:{x}" for k, x in r.at_bound.items()),
         "entry_eas_back_ms": v - 2.0, **{k: _num(x) for k, x in sm.items()},
+        "flags": flag_names(sm),
     }  # fmt: skip
     return {"result": r, "row": row, "airspeed_min": v}
 

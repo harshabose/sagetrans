@@ -1816,6 +1816,97 @@ def robust_figure(robust: Sequence[Row], opt: Row | None, rob: Row | None) -> st
         table_html("FT_robust", [c for c in cols if any(c in r for r in shown)], shown))
 
 
+def median(vals: Sequence[float]) -> float:
+    v = sorted(x for x in vals if ok(x))
+    return NAN if not v else (v[len(v) // 2] if len(v) % 2 else 0.5 * (v[len(v) // 2 - 1] + v[len(v) // 2]))
+
+
+def ft_bound_reason(row: Row, bound: str) -> str:
+    """Why TKOFF_THR_MAX sits on its upper bound: 100 % is the physical limit; THR_MAX from the
+    register, both computed from the FT_params columns."""
+    hi, thr = num(row.get("tkoff_thr_max_hi")), num(row.get("thr_max"))
+    if "tkoff_thr_max:hi" not in bound or not ok(hi):
+        return ""
+    text = f" (the upper bound of TKOFF_THR_MAX is {hi:.0%}, the most throttle the pusher has"
+    text += f"; THR_MAX in the register is {thr:.0%}" if ok(thr) else ""
+    return text + ", so the search asks for all of it)"
+
+
+def grid_statement(grid: Sequence[Row], params: Sequence[Row], spread: float) -> str:
+    """Cost against Q_TRANSITION_MS in words, from FT_grid: the range of J over the grid, J at the
+    register's Q_TRANSITION_MS against the winner's, the plateau within the seed spread of the
+    best, and whether the fade length is a second-order choice against re-tuning from the start."""
+    pts = [r for r in grid if ok(num(r.get("J_snapped")))]
+    if len(pts) < 2:
+        return ""
+    best = min(pts, key=lambda r: r["J_snapped"])
+    worst = max(pts, key=lambda r: r["J_snapped"])
+    jb, jw = float(best["J_snapped"]), float(worst["J_snapped"])
+    text = (f"Over the {len(pts)} grid points J runs from {jb:.3f} (Q_TRANSITION_MS "
+            f"{best['q_transition_s']:g} s) to {jw:.3f} ({worst['q_transition_s']:g} s), "
+            f"{jw / jb - 1:.1%} above the lowest.")
+    reg = next((p for p in params if p.get("case") == "register"), None)
+    qr = num(reg.get("q_transition_s")) if reg else NAN
+    at_reg = next((r for r in pts if ok(qr) and abs(r["q_transition_s"] - qr) < 1e-9), None)
+    if at_reg is not None:
+        text += (f" At the register's Q_TRANSITION_MS ({qr:g} s) J is {at_reg['J_snapped']:.3f}, "
+                 f"{at_reg['J_snapped'] / jb - 1:+.1%} against the winner's.")
+    elif ok(qr):
+        text += f" The register's Q_TRANSITION_MS ({qr:g} s) is not on the grid."
+    if ok(spread) and spread > 0:
+        near = [r["q_transition_s"] for r in pts if r["J_snapped"] <= jb * (1 + spread)]
+        text += (f" {len(near)} of {len(pts)} points lie within the seed spread ({spread:.2%}) of "
+                 "the best: Q_TRANSITION_MS " + ", ".join(f"{q:g}" for q in near) + " s.")
+    opt = next((p for p in params if p.get("case") == "optimum"), None)
+    j0, j1 = (num(opt.get("J_start")), num(opt.get("J"))) if opt else (NAN, NAN)
+    if ok(j0) and ok(j1) and j0 > j1:
+        ratio = (jw - jb) / (j0 - j1)
+        text += (f" The whole range is {ratio:.1%} of what re-tuning all four settings gains from the "
+                 f"register start (J {j0:.2f} to {j1:.3f}), so with the other three re-tuned the "
+                 "fade length is "
+                 + ("a second-order choice." if ratio < 0.1 else "not a second-order choice."))
+    return text
+
+
+def sensitivity_statement(rows: Sequence[Row], j0: float, spread: float) -> str:
+    """Does any input apart from C_L,max move J by more than the seed spread? Computed."""
+    if not (ok(j0) and j0 and ok(spread) and spread > 0):
+        return ""
+    lim = spread * j0
+    moves = [(r, float(r["J"]) - j0) for r in rows if ok(num(r.get("J")))]
+    other = [(r, d) for r, d in moves if r.get("parameter") != "CL_max_scale"]
+    if not other:
+        return ""
+    over = [(r, d) for r, d in other if abs(d) > lim]
+    head = f"The seed spread is {spread:.2%} of J, {lim:.4f} in J. "
+    big = max(other, key=lambda m: abs(m[1]))
+    if not over:
+        return (head + "Apart from C_L,max, no input moves J by more than that; the largest is "
+                f"{big[0]['parameter']} = {big[0]['value']} at {big[1]:+.4f}.")
+    names = ", ".join(f"{r['parameter']} = {r['value']} ({d:+.3f}, {int(num(r.get('n_flags')) or 0)}"
+                      " failing)" for r, d in over)
+    return head + f"Apart from C_L,max, these inputs DO move J by more than that: {names}."
+
+
+def share_statement(dmem: Sequence[Row], opt: Sequence[Row], reg: Sequence[Row]) -> str:
+    """Computed: the share of default members below stall margin 1.0 and 1.2, and the optimum's
+    energy against the default's and the register's medians (the energy cost of the optimum)."""
+    parts = []
+    marg = [num(r.get("stall_margin_min")) for r in dmem if ok(num(r.get("stall_margin_min")))]
+    if marg:
+        n1, n12 = sum(m < 1.0 for m in marg), sum(m < 1.2 for m in marg)
+        parts.append(f"{n1} of {len(marg)} ArduPilot-default members ({n1 / len(marg):.0%}) fly "
+                     f"below a stall margin of 1.0 and {n12} ({n12 / len(marg):.0%}) below 1.2.")
+    e = {k: median([num(r.get("energy_kJ")) for r in rs])
+         for k, rs in (("optimum", opt), ("default", dmem), ("register", reg))}
+    cmp = [f"{(e['optimum'] / e[k] - 1):+.1%} against the {k}'s {e[k]:.2f} kJ"
+           for k in ("default", "register") if ok(e[k]) and e[k] and ok(e["optimum"])]
+    if cmp:
+        parts.append(f"The optimum's median energy is {e['optimum']:.2f} kJ: " + " and ".join(cmp)
+                     + " (the median over members; the energy cost of the recommendation).")
+    return " ".join(parts)
+
+
 def build_ft(c: Ctx) -> Out:
     o = Out()
     params, runs, hist = c.rows("FT_params"), c.rows("FT_runs"), c.rows("FT_history")
@@ -1861,7 +1952,7 @@ def build_ft(c: Ctx) -> Out:
             o.items.append(it)
     bound = str(params[opt].get("at_bound") or "")
     if bound:
-        o.flags.append("at a search bound: " + bound)
+        o.flags.append("at a search bound: " + bound + ft_bound_reason(params[opt], bound))
 
     stall = c.study("FT", "stall_margin", 1.2)
     wsm = num(params[opt].get("worst_stall_margin"))
@@ -1956,68 +2047,80 @@ def build_ft(c: Ctx) -> Out:
                                              short) for r in rs], line=False,
                                         marker="sq" if cls == "ref" else "dot",
                                         hollow=[bool(r.get("flags")) for r in rs]))  # fmt: skip
-        vl = [(-float(loss), "loss limit")] if isinstance(loss, int | float) else []
+        xs = [p[0] for s in series for p in s.pts]
+        xl = ch.limits(xs, 0.08)
+        lim = -float(loss) if isinstance(loss, int | float) else None
+        inside = lim is not None and xl[0] <= lim <= xl[1]
+        vl = [(lim, "loss limit")] if lim is not None and inside else []
+        outside = (f" The loss limit ({lim:g} m) is outside the range shown, which runs from "
+                   f"{min(xs):.1f} to {max(xs):.1f} m." if lim is not None and not inside else "")
         o.figures.append(
             panelbox(
                 "End of the fade",
                 "Sink rate at the end of the fade against the projected minimum "
-                "altitude change, one mark per member. A hollow mark is a flagged member.",
+                "altitude change, one mark per member. A hollow mark is a flagged member."
+                + outside,
                 ch.xy_chart(
                     series,
                     "projected minimum altitude change [m]",
-                    "sink rate [m/s]",
+                    "sink rate [m/s] (negative = climbing)",
                     "End of the fade",
+                    xlim=xl,
                     vlines=vl,
                 ),
                 _legend(*case_leg, ("s1", "hollow", "flagged member")),
             )
         )
-    # 3. wing share across the hand-over
+    # 3. wing share across the hand-over: one strip per case
     hand = [
         r
         for r in runs
         if ok(num(r.get("wing_share_handover"))) and ok(num(r.get("V_handover_eas_ms")))
     ]
     if hand:
-        series = []
+        wrows: list[ch.Strip] = []
         for cs, (cls, short, _, _) in FT_CASES.items():
             rs = [r for r in hand if r.get("case") == cs]
-            if rs:
-                series.append(ch.Series(short, cls, [(r["V_handover_eas_ms"], r["wing_share_handover"]) for r in rs],
-                                        [tip(r, ["set", "member", "V_handover_eas_ms", "margin_handover",
-                                                 "wing_share_handover"], short) for r in rs], line=False,
-                                        marker="sq" if cls == "ref" else "dot"))  # fmt: skip
+            if not rs:
+                continue
+            pr = next((p for p in params if p.get("case") == cs), None)
+            av = f" (AIRSPEED_MIN {pr['airspeed_min_eas_ms']:g})" if pr and ok(
+                num(pr.get("airspeed_min_eas_ms"))) else ""
+            wrows.append((short + av, [(r["wing_share_handover"],
+                                        tip(r, ["set", "member", "V_handover_eas_ms",
+                                                "margin_handover", "wing_share_handover"], short),
+                                        bool(r.get("flags")), cls) for r in rs], None))  # fmt: skip
         o.figures.append(
             panelbox(
                 "Wing share at the hand-over",
-                "Share of the weight carried by the wing when the pusher "
-                "takes over, against the equivalent airspeed at that instant.",
-                ch.xy_chart(
-                    series,
-                    "airspeed at the hand-over [m/s, EAS]",
-                    "wing share of weight [-]",
-                    "Wing share",
-                    hlines=[(1.0, "wing carries the weight")],
-                ),
-                _legend(*case_leg),
+                "Share of the weight the wing carries when the pusher takes over (1 would be the "
+                "whole weight), one strip per case and one dot per member. Within a case the "
+                "hand-over speed is the setting, so the dots differ by the wing share only.",
+                ch.strip_chart(wrows, "FT wing share at the hand-over"),
+                _legend(*case_leg, ("s1", "hollow", "flagged member")),
             )
         )
     # 3b. the grid over Q_TRANSITION_MS: the cost of the snapped point at each value
     grid = sorted((r for r in c.rows("FT_grid") if ok(num(r.get("J_snapped")))),
                   key=lambda r: r["q_transition_s"])
+    sp = c.res.record.get("search_spreads", {}).get("FT")
+    spread = float(sp) if isinstance(sp, int | float) else NAN
     if grid:
         gtip = ["q_transition_s", "J_snapped", "J_continuous", "J_snapped_minus_continuous",
-                "airspeed_min_eas_ms", "tkoff_thr_max", "tran_pit_max_deg", "seed_spread", "n_flags"]
+                "airspeed_min_eas_ms", "tkoff_thr_max", "tran_pit_max_deg", "seed_spread", "n_flags",
+                "flags"]
         gseries = [ch.Series("best snapped J at each Q_TRANSITION_MS", "s1",
                              [(r["q_transition_s"], r["J_snapped"]) for r in grid],
                              [tip(r, gtip) for r in grid],
-                             hollow=[r.get("t12_ok") is False for r in grid])]
+                             hollow=[bool(num(r.get("n_flags"))) for r in grid],
+                             kinds=["sq" if r.get("t12_ok") is False else "dot" for r in grid])]
         wins = [r for r in grid if r.get("winner") is True]
         if wins:
             gseries.append(ch.Series("winner", "s2", [(r["q_transition_s"], r["J_snapped"])
                                                      for r in wins], [tip(r, gtip) for r in wins]))
         failed = [f"{r['q_transition_s']:g} s ({num(r.get('seed_spread')):.1%})" for r in grid
                   if r.get("t12_ok") is False]
+        flagged = [f"{r['q_transition_s']:g} s" for r in grid if num(r.get("n_flags"))]
         near = [r["q_transition_s"] for r in grid if r.get("within_2pct") is True]
         near_text = (" Within 2 % of the best cost: Q_TRANSITION_MS "
                      + ", ".join(f"{q:g}" for q in near) + " s." if near else "")
@@ -2026,12 +2129,15 @@ def build_ft(c: Ctx) -> Out:
                 "Cost against Q_TRANSITION_MS",
                 "The best snapped cost found with Q_TRANSITION_MS fixed at each value (the other "
                 "three searched, then snapped to ArduPilot's integers). The winner is marked; a "
-                "hollow mark is a point whose three-seed spread is above the T-12 limit"
-                + (": " + ", ".join(failed) if failed else ", none here") + "." + near_text,
+                "hollow mark is a point whose snapped optimum still has flagged members"
+                + (": " + ", ".join(flagged) if flagged else ", none here")
+                + "; a square is a point whose three-seed spread is above the T-12 limit"
+                + (": " + ", ".join(failed) if failed else ", none here") + ". "
+                + grid_statement(grid, params, spread) + near_text,
                 ch.xy_chart(gseries, "Q_TRANSITION_MS [s]", "cost J",
                             "Cost against Q_TRANSITION_MS"),
-                _legend(("s1", "line", "grid point"),
-                        ("s1", "hollow", "T-12 spread above limit"), ("s2", "line", "winner")),
+                _legend(("s1", "line", "grid point"), ("s1", "hollow", "flags remain"),
+                        ("s1", "sq", "T-12 spread above limit"), ("s2", "line", "winner")),
             )
         )
     # 3c. the stall margin against the C_L,max scale
@@ -2042,50 +2148,60 @@ def build_ft(c: Ctx) -> Out:
     # 4. scan
     scan = c.rows("FT_scan")
     if scan:
-        pts = sorted((r["airspeed_min_eas_ms"], r["J"]) for r in scan if ok(num(r.get("J"))))
         rs = sorted(
-            (r for r in scan if ok(num(r.get("J")))), key=lambda r: r["airspeed_min_eas_ms"]
+            (r for r in scan if ok(num(r.get("J"))) and num(r["J"]) > 0),
+            key=lambda r: r["airspeed_min_eas_ms"],
         )
+        pts = [(r["airspeed_min_eas_ms"], r["J"]) for r in rs]
         series = [ch.Series("best J at each AIRSPEED_MIN", "s1", pts,
                             [tip(r, ["airspeed_min_eas_ms", "J", "q_transition_s", "tkoff_thr_max",
-                                     "tran_pit_max_deg", "n_flags", "seed_spread", "at_bound"]) for r in rs],
+                                     "tran_pit_max_deg", "n_flags", "flags", "seed_spread",
+                                     "at_bound"]) for r in rs],
                             hollow=[bool(num(r.get("n_flags"))) for r in rs])]  # fmt: skip
         hv = heaviest_stall(runs, stall)
         vl = [hv] if hv else []
+        clean = [f"{r['airspeed_min_eas_ms']:g}" for r in rs if not num(r.get("n_flags"))]
         o.figures.append(
             panelbox(
                 "Cost against AIRSPEED_MIN",
                 "The best cost found when AIRSPEED_MIN is fixed and the other "
-                "three are searched. A hollow mark has flagged members.",
+                "three are searched, on a logarithmic axis (zero is not on it; it starts at the "
+                "decade below the smallest cost) so neighbouring values can be told apart. A hollow "
+                "mark has flagged members, named in its tooltip. Flag-free: "
+                + (", ".join(clean) + " m/s." if clean else "none."),
                 ch.xy_chart(
                     series,
                     "AIRSPEED_MIN [m/s, EAS]",
-                    "cost J",
+                    "cost J (log scale)",
                     "Cost against AIRSPEED_MIN",
                     vlines=vl,
+                    ylog=True,
                 ),
                 _legend(("s1", "line", "scan point"), ("s1", "hollow", "flags remain")),
             )
         )
-    # 5. convergence and sensitivity
+    # 5. the final cost of each seed and the sensitivity
     srch = c.rows("FT_search")
     if srch:
+        ptips = ["airspeed_min_eas_ms", "q_transition_s", "tkoff_thr_max", "tran_pit_max_deg"]
         o.figures.append(
             panelbox(
-                "Search convergence",
-                "Best cost found by each seed.",
+                "Final cost by seed",
+                "The cost each search seed ended at, with that seed's four settings in the "
+                "tooltip. It is the end point of the seed, not its path: iteration data is not "
+                "stored, so convergence itself is not shown.",
                 ch.dot_chart(
                     [
                         (
                             f"seed {r['seed']:g}",
                             r["best_cost"],
-                            tip(r, ["seed", "best_cost", "evaluations"]),
+                            tip(r, ["seed", "best_cost", "evaluations", *ptips]),
                             "s1",
                         )
                         for r in srch
                     ],
-                    "best cost J",
-                    "FT search convergence",
+                    "final cost J",
+                    "FT final cost by seed",
                     zero=False,
                 ),
             )
@@ -2096,14 +2212,26 @@ def build_ft(c: Ctx) -> Out:
     base = next((r for r in sens if r.get("parameter") == "base"), None)
     j0 = num(base.get("J")) if base else num(params[opt].get("J"))
     if sens and ok(j0) and j0:
-        items = [(f"{r['parameter']} = {r['value']}", (r["J"] / j0 - 1) * 100,
-                  f"J = {r['J']:.3f}; change = ({r['J']:.3f} / {j0:.3f} - 1) x 100", "s1")
-                 for r in sens if ok(num(r.get("J"))) and r is not base]  # fmt: skip
+        lin = spread * j0 if ok(spread) and spread > 0 else 0.01 * j0
+        items = []
+        for r in sens:
+            if r is base or not ok(num(r.get("J"))):
+                continue
+            nf = int(num(r.get("n_flags")) or 0) if ok(num(r.get("n_flags"))) else 0
+            items.append((f"{r['parameter']} = {r['value']}" + (f"  [{nf} failing]" if nf else ""),
+                          r["J"] - j0, f"J = {r['J']:.4f}; change = {r['J']:.4f} - {j0:.4f}; "
+                          f"{nf} failing member(s)", "s1" if nf else "ref"))  # fmt: skip
         o.figures.append(
             panelbox(
                 "One-at-a-time sensitivity",
-                "Change of the cost J against the optimum when one setting changes.",
-                ch.dot_chart(items, "change of J [%]", "FT sensitivity"),
+                "Absolute change of the cost J against the base evaluation (J = "
+                f"{j0:.4f}) when one setting changes; a row shows its failing-member count. The "
+                "axis is linear within the seed spread of zero and logarithmic beyond it, so "
+                "the one large row does not flatten the others. "
+                + sensitivity_statement(sens, j0, spread),
+                ch.dot_chart(items, "change of J (absolute; linear within the seed spread, then "
+                             "logarithmic)", "FT sensitivity", sym=lin),
+                _legend(("s1", "dot", "some members fail"), ("ref", "dot", "no member fails")),
             )
         )
     # the stall margin rests on a provisional C_L,max: the optimum re-evaluated with it +-10 %
@@ -2124,29 +2252,43 @@ def build_ft(c: Ctx) -> Out:
                 table_html("FT_sens", [c for c in cols if any(c in r for r in shown)], shown),
             )
         )
-    # 6. spread strips
+    # 6. spread strips: the optimum, the register start and the ArduPilot default, with the limits
     mine = [r for r in runs if r.get("case") == "optimum"]
+    regm = [r for r in runs if r.get("case") == "register"]
     dmem = [r for r in runs if r.get("case") == "ardupilot_default"]
     if mine:
         rows: list[ch.Strip] = []
+        extras: list[ch.StripExtra] = []
+        lims = {"loss_m": (float(loss), "limit") if isinstance(loss, int | float) else None,
+                "gain_m": (float(gain), "limit") if isinstance(gain, int | float) else None,
+                "stall_margin_min": (float(stall), f"limit {stall:g}") if stall else None}
         for col, lab in (
             ("loss_m", "altitude loss [m]"),
             ("gain_m", "altitude gain [m]"),
             ("stall_margin_min", "stall margin [-]"),
             ("energy_kJ", "energy [kJ]"),
         ):
-            dots = [(num(r.get(col)), tip(r, ["set", "member", col, "flags"]), bool(r.get("flags")), "s1")
-                   for r in mine if ok(num(r.get(col)))]  # fmt: skip
+            dots = [(num(r.get(col)), tip(r, ["set", "member", col, "flags"], "optimum"),
+                     bool(r.get("flags")), "s1") for r in mine if ok(num(r.get(col)))]  # fmt: skip
+            dots += [(num(r.get(col)), tip(r, ["set", "member", col, "flags"], "register"),
+                      bool(r.get("flags")), "s2") for r in regm if ok(num(r.get(col)))]  # fmt: skip
             dv = sorted(num(r.get(col)) for r in dmem if ok(num(r.get(col))))
             rows.append((lab, dots, dv[len(dv) // 2] if dv else None))
-        leg = [("s1", "dot", "member of the optimum"), ("hollow", "hollow", "flagged member")]
+            extras.append(([(num(r.get(col)), tip(r, ["set", "member", col, "flags"],
+                                                  "ArduPilot default"))
+                            for r in dmem if ok(num(r.get(col)))], lims.get(col)))  # fmt: skip
+        leg = [("s1", "dot", "member of the optimum"), ("s2", "dot", "member of the register start"),
+               ("hollow", "hollow", "flagged member")]
         if dmem:
-            leg.append(("ref", "line", "ArduPilot default: median of its members"))
+            leg += [("ref", "hollow", "member of the ArduPilot default"),
+                    ("ref", "line", "ArduPilot default: median of its members")]
         o.figures.append(
             panelbox(
                 "Ensemble spread",
-                "One strip per metric, one dot per member.",
-                ch.strip_chart(rows, "FT ensemble spread"),
+                "One strip per metric, one dot per member, spread vertically where they would "
+                "overlap; the vertical line is the limit. "
+                + share_statement(dmem, mine, regm),
+                ch.strip_chart(rows, "FT ensemble spread", extras=extras),
                 _legend(*leg),
             )
         )

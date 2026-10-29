@@ -141,7 +141,7 @@ summary{cursor:pointer;color:var(--accent);padding:4px 0}
 summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .tbl.full{max-height:none}
 .tbl{overflow:auto;max-height:520px;border:1px solid var(--rule);border-radius:8px;
- background:var(--panel);margin-top:6px}
+ background:var(--panel);margin-top:6px;scrollbar-width:auto;scrollbar-color:var(--axis) var(--panel)}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;min-width:520px}
 th,td{text-align:left;padding:7px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
 th{position:sticky;top:0;z-index:1;font-weight:600;font-size:12px;color:var(--ink2);

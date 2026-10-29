@@ -12,7 +12,7 @@ from typing import Any
 from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
-from sagetrans.io.stages import b1_ceiling_deg, grid_winner
+from sagetrans.io.stages import FT_PARAM_COLUMNS, b1_ceiling_deg, ft_bounds, grid_winner
 from sagetrans.io.view.chapters import b1_reason
 
 Table = list[dict[str, Any]]
@@ -367,6 +367,7 @@ def assemble(
         wrow = gw["row"]
         # the optimum is the snapped winner; its search is the winner's (a three-seed search
         # at the winner's fixed Q_TRANSITION_MS), its cost_default the register start's
+        q_win_search = float(gw["q_transition_s"])
         ft_res = dataclasses.replace(
             gw["result"], params=dict(gw["snapped"]), cost=float(wrow["J_snapped"]),
             cost_default=float(ft_task["J_start"]))
@@ -385,8 +386,13 @@ def assemble(
         tables["FT_grid"] = [{"point": r["point"], "winner": r["winner"],
                               **{k: v for k, v in r.items() if k not in ("point", "winner")}}
                              for r in grid_rows]
-        tables["FT_search"] = [{"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals}
-                               for sr in ft_res.search.seeds]
+        # the winner's search had Q_TRANSITION_MS fixed: each seed's best point in physical units
+        fb = ft_bounds(inp, {"q_transition": q_win_search})
+        tables["FT_search"] = [
+            {"seed": sr.seed, "best_cost": sr.f, "evaluations": sr.n_evals,
+             **{FT_PARAM_COLUMNS[k]: v for k, v in {"q_transition": q_win_search,
+                                                    **fb.to_physical(sr.x)}.items()}}
+            for sr in ft_res.search.seeds]  # fmt: skip
         # the optimum row also carries the continuous result it was snapped from
         extra = {k: wrow[k] for k in wrow if k.endswith("_continuous")}
         extra.update(J_snapped_minus_continuous=wrow["J_snapped_minus_continuous"],

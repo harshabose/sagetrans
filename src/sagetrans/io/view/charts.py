@@ -14,8 +14,8 @@ import bisect
 import html
 import json
 import math
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 
 Point = tuple[float, float]
 
@@ -135,12 +135,13 @@ def _path(pts: Sequence[Point], fr: Frame, steps: bool = False) -> str:
     return "".join(out)
 
 
-def axes(fr: Frame, xlab: str, ylab: str, xt: list[float], yt: list[float]) -> list[str]:
+def axes(fr: Frame, xlab: str, ylab: str, xt: list[float], yt: list[float],
+         yfmt: Callable[[float], str] | None = None) -> list[str]:  # fmt: skip
     out: list[str] = []
     for t in yt:
         y = fr.sy(t)
         out.append(el("line", "grid", x1=fr.pl, x2=f1(fr.right), y1=f1(y), y2=f1(y)))
-        out.append(text(fr.pl - 7, y + 4, tick_text(t), "tick", "end"))
+        out.append(text(fr.pl - 7, y + 4, (yfmt or tick_text)(t), "tick", "end"))
     for t in xt:
         out.append(text(fr.sx(t), fr.bottom + 17, tick_text(t), "tick", "middle"))
     out.append(el("line", "axis", x1=fr.pl, x2=f1(fr.right), y1=f1(fr.bottom), y2=f1(fr.bottom)))
@@ -176,14 +177,31 @@ def xy_chart(
     series: Sequence[Series], xlab: str, ylab: str, aria: str, *, w: float = 720, h: float = 360,
     xlim: Point | None = None, ylim: Point | None = None, y_from_zero: bool = False,
     hlines: Sequence[tuple[float, str]] = (), vlines: Sequence[tuple[float, str]] = (),
+    ylog: bool = False,
 ) -> str:  # fmt: skip
-    """A scatter / line chart. `hlines` and `vlines` are labelled reference rules."""
+    """A scatter / line chart. `hlines` and `vlines` are labelled reference rules.
+
+    `ylog` puts the y axis on a log scale (positive values only; zero is not on it, the axis starts
+    at the decade below the smallest value) with ticks at 1, 2 and 5 times a power of ten."""
+    yfmt: Callable[[float], str] | None = None
+    if ylog:
+        pos = [p[1] for s in series for p in s.pts if p[1] > 0] + [v for v, _ in hlines if v > 0]
+        k_lo = math.floor(math.log10(min(pos))) if pos else 0
+        k_hi = math.ceil(math.log10(max(pos))) if pos else 1
+        k_hi = max(k_hi, k_lo + 1)
+        series = [replace(s, pts=[(x, math.log10(y) if y > 0 else math.nan) for x, y in s.pts])
+                  for s in series]  # fmt: skip
+        hlines = [(math.log10(v), lab) for v, lab in hlines if v > 0]
+        ylim = (float(k_lo), float(k_hi))
+        mult = (1, 2, 5) if k_hi - k_lo <= 3 else (1,)
+        ytl = [k + math.log10(m) for k in range(k_lo, k_hi) for m in mult] + [float(k_hi)]
+        yfmt = lambda t: tick_text(10 ** t)  # noqa: E731
     xs = [p[0] for s in series for p in s.pts] + [v for v, _ in vlines]
     ys = [p[1] for s in series for p in s.pts] + [v for v, _ in hlines]
     fr = Frame(w, h, xlim or limits(xs), ylim or limits(ys, floor=0.0 if y_from_zero else None))
-    xt, yt = nice_ticks(*fr.xlim), nice_ticks(*fr.ylim)
+    xt, yt = nice_ticks(*fr.xlim), (ytl if ylog else nice_ticks(*fr.ylim))
     _fit(fr, xt, yt)
-    out = axes(fr, xlab, ylab, xt, yt)
+    out = axes(fr, xlab, ylab, xt, yt, yfmt)
     for v, lab in hlines:
         y = fr.sy(v)
         out.append(el("line", "rule", x1=fr.pl, x2=f1(fr.right), y1=f1(y), y2=f1(y)))
@@ -372,7 +390,7 @@ def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720,
     strip i, a hollow grey dot per member of a second case and a vertical rule; the axis includes
     both.
     """
-    rh, pl, pr = 46.0, 150.0, 20.0
+    rh, pl, pr = 64.0, 150.0, 20.0
     out: list[str] = []
     for i, (label, pts, ref) in enumerate(rows):
         x_dots, x_rule = extras[i] if extras and i < len(extras) else ((), None)
@@ -395,36 +413,73 @@ def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720,
             x = f1(fr.sx(x_rule[0]))
             out.append(el("line", "rule", x1=x, x2=x, y1=f1(y0 - 15), y2=f1(y0 + 15)))
             out.append(text(fr.sx(x_rule[0]) + 3, y0 - 8, x_rule[1], "dl"))
-        for v, tip, hol, cls in pts:
-            if math.isfinite(v):
-                out.append(marker("dot", fr.sx(v), y0, cls, tip, hol))
-        for v, tip in x_dots:
-            if math.isfinite(v):
-                out.append(marker("dot", fr.sx(v), y0 + 8, "ref", tip, True))
+        marks = ([(v, tip, hol, cls) for v, tip, hol, cls in pts if math.isfinite(v)]
+                 + [(v, tip, True, "ref") for v, tip in x_dots if math.isfinite(v)])  # fmt: skip
+        offs = swarm([fr.sx(m[0]) for m in marks])
+        for (v, tip, hol, cls), dy in zip(marks, offs, strict=True):
+            out.append(marker("dot", fr.sx(v), y0 + dy, cls, tip, hol))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {rh * len(rows) + 28:g}", role="img",
               aria_label=aria)  # fmt: skip
 
 
+def swarm(xs: Sequence[float], gap: float = 10.0, step: float = 10.0, reach: int = 3) -> list[float]:
+    """Vertical offsets [px] that keep marks at the pixel columns `xs` from overlapping: each mark,
+    in the order given, takes the first of 0, +step, -step, +2 step, ... that is at least `gap`
+    from every mark already placed; when none is free, the offset farthest from its neighbours."""
+    placed: list[tuple[float, float]] = []
+    out: list[float] = []
+    for x in xs:
+        cands = [0.0] + [s * k * step for k in range(1, reach + 1) for s in (1.0, -1.0)]
+
+        def room(d: float, x: float = x) -> float:
+            return min((math.hypot(x - px, d - py) for px, py in placed), default=math.inf)
+
+        pick = next((d for d in cands if room(d) >= gap), max(cands, key=room))
+        placed.append((x, pick))
+        out.append(pick)
+    return out
+
+
+def symlog(v: float, lin: float) -> float:
+    """A symmetric log: linear within `lin` of zero, logarithmic beyond (so one large value does not
+    flatten the small ones)."""
+    return math.copysign(math.log10(1.0 + abs(v) / lin), v)
+
+
 def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str, w: float = 720,
-              zero: bool = True,
-              refs: Sequence[tuple[float, str] | None] | None = None) -> str:  # fmt: skip
+              zero: bool = True, refs: Sequence[tuple[float, str] | None] | None = None,
+              sym: float | None = None) -> str:  # fmt: skip
     """A dot per row against one axis, with a zero rule: (label, value, tip, cls).
 
     `refs[i]` is an optional reference for row i, (value, tip), drawn as a hollow grey diamond on
     the row's line (e.g. the nominal value the row's setting departs from); the axis includes it.
+    `sym` puts the axis on a symmetric log scale, linear within `sym` of zero, with ticks at 0 and
+    at +-`sym` times a power of ten, labelled in the data's units.
     """
     rh, pl, pr, pt, pb = 26.0, 210.0, 24.0, 12.0, 44.0
     h = pt + pb + rh * len(items)
-    vals = [v for _, v, _, _ in items if math.isfinite(v)] + ([0.0] if zero else [])
-    vals += [r[0] for r in (refs or []) if r is not None and math.isfinite(r[0])]
+
+    def tf(v: float) -> float:
+        return v if sym is None else symlog(v, sym)
+
+    vals = [tf(v) for _, v, _, _ in items if math.isfinite(v)] + ([0.0] if zero else [])
+    vals += [tf(r[0]) for r in (refs or []) if r is not None and math.isfinite(r[0])]
     fr = Frame(w, h, limits(vals, 0.08), (0, 1), pl=pl, pr=pr, pt=pt, pb=pb)
-    xt = nice_ticks(*fr.xlim)
-    _fit(fr, xt, [0, 1])
+    lab_of: Callable[[float], str] = tick_text
+    if sym is None:
+        xt = nice_ticks(*fr.xlim)
+        _fit(fr, xt, [0, 1])
+    else:
+        top = max(abs(fr.xlim[0]), abs(fr.xlim[1]))
+        real = [0.0] + [s * sym * 10 ** k for k in range(0, 12) for s in (1.0, -1.0)]
+        xt = sorted({tf(v) for v in real if abs(tf(v)) <= top + 1e-9})
+        back = {round(t, 9): v for t, v in ((tf(v), v) for v in real)}
+        lab_of = lambda t: tick_text(back.get(round(t, 9), 0.0))  # noqa: E731
     out: list[str] = []
     for t in xt:
         x = f1(fr.sx(t))
         out.append(el("line", "grid", x1=x, x2=x, y1=pt, y2=f1(fr.bottom)))
-        out.append(text(fr.sx(t), fr.bottom + 16, tick_text(t), "tick", "middle"))
+        out.append(text(fr.sx(t), fr.bottom + 16, lab_of(t), "tick", "middle"))
     if zero:
         x0 = f1(fr.sx(0.0))
         out.append(el("line", "zero", x1=x0, x2=x0, y1=pt, y2=f1(fr.bottom)))
@@ -434,9 +489,9 @@ def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
         out.append(text(pl - 10, y + 4, label, "dl", "end"))
         ref = refs[i] if refs and i < len(refs) else None
         if ref is not None and math.isfinite(ref[0]):
-            out.append(marker("dia", fr.sx(ref[0]), y, "ref", ref[1], True))
+            out.append(marker("dia", fr.sx(tf(ref[0])), y, "ref", ref[1], True))
         if math.isfinite(v):
-            out.append(marker("dot", fr.sx(v), y, cls, tip))
+            out.append(marker("dot", fr.sx(tf(v)), y, cls, tip))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
 
 

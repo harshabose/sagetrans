@@ -152,6 +152,7 @@ def test_ft_task_writes_every_table_of_the_contract(tmp_path):
     # a lower C_L,max is a higher stall speed, so a smaller margin (the flag reads the changed wing)
     assert lo["worst_stall_margin"] < base["worst_stall_margin"] < hi["worst_stall_margin"]
     scan = stages.run_task(inp, "FT_scan:16")["row"]
+    assert "flags" in scan and bool(scan["flags"]) == bool(scan["n_flags"])
     assert scan["airspeed_min_eas_ms"] == 16.0 and scan["entry_eas_back_ms"] == 14.0
 
 
@@ -238,6 +239,7 @@ def test_grid_task_snaps_and_its_optimum_is_not_worse_than_its_lattice_neighbour
     assert row["J_snapped"] == pytest.approx(
         row["J_continuous"] + row["J_snapped_minus_continuous"])
     assert row["J_snapped"] <= row["J_snap"] + 1e-12  # the descent never makes it worse
+    assert "flags" in row and bool(row["flags"]) == bool(row["n_flags"])  # the kinds, for the chart
     assert {"airspeed_min_eas_ms_continuous", "seed_spread", "t12_ok", "at_bound"} <= set(row)
     # re-evaluate the in-bound subset of the 26 neighbours on the same ensemble and weights
     fev, start = stages.ft_settings(inp)
