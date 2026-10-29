@@ -1379,7 +1379,7 @@ def verified_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
         for v in uniq([r.get("variant") for r in front]):
             rs = sorted([r for r in front if r["scenario"] == s and r.get("variant") == v
                          and r.get("replay_verified") is True and ok(num(r.get("energy_kJ")))],
-                        key=lambda r: r["distance_m"])  # fmt: skip
+                        key=lambda r: num(r.get("distance_m")))  # fmt: skip
             most = max(most, len(rs))
             if rs:
                 cls = {"attached": "s2", "c_envelope": "s3"}.get(v, "ink")
@@ -1476,6 +1476,49 @@ def attached_statement(front: Sequence[Row]) -> str:
         text += (f". The replayed peak wing angle of the verified points is {min(peaks):.2f} to "
                  f"{max(peaks):.2f} deg")
     return text + "."
+
+
+def nominal_of(r: Row, front: Sequence[Row], head_eps: float) -> tuple[Row | None, str]:
+    """The nominal point of a sensitivity row: the same scenario, variant and distance cap with
+    the setting unchanged (the headline altitude band, the default rotor start and end band).
+    Returns (the verified B1_front row or None, why there is none: "" | "unverified" | "none")."""
+    cands = [f for f in front if f.get("scenario") == r.get("scenario")
+             and f.get("variant") == r.get("variant") and f.get("eps_x_m") == r.get("eps_x_m")
+             and f.get("eps_h_m") == head_eps]  # fmt: skip
+    for f in cands:
+        if f.get("replay_verified") is True and ok(num(f.get("energy_kJ"))):
+            return f, ""
+    return None, ("unverified" if cands else "none")
+
+
+def b1_sensitivity_figure(sens: Sequence[Row], front: Sequence[Row]) -> str | None:
+    """B1's energy when one setting changes, with the nominal energy as a hollow marker on each
+    row. The row label names the scenario and the variant (the band sweep uses `c_envelope`); a row
+    whose nominal point is not verified says so."""
+    head = next((num(f["eps_h_m"]) for f in front if ok(num(f.get("eps_h_m")))), NAN)
+    items, refs = [], []
+    for r in sens:
+        if not ok(num(r.get("energy_kJ"))):
+            continue
+        nom, why = nominal_of(r, front, head)
+        label = f"{r.get('sensitivity')} = {r.get('value')} ({r.get('scenario')}, {r.get('variant')})"
+        if why:
+            label += " [nominal unverified]" if why == "unverified" else " [no nominal point]"
+        items.append((label, num(r["energy_kJ"]), tip(r, ["energy_kJ", "distance_m", "replay_verified"]),
+                      "s2"))  # fmt: skip
+        refs.append((num(nom["energy_kJ"]), f"nominal: {num(nom['energy_kJ']):.2f} kJ (the setting "
+                     f"unchanged; {nom.get('scenario')}, {nom.get('variant')}, cap "
+                     f"{nom.get('eps_x_m'):g} m)") if nom is not None else None)  # fmt: skip
+    if not items:
+        return None
+    leg = _legend(("s2", "dot", "B1 with the setting changed"),
+                  ("ref", "hollow", "nominal: the same scenario and cap, setting unchanged"))
+    return panelbox(
+        "Sensitivity",
+        "Energy of B1 when one setting changes; the hollow marker on each row is the nominal "
+        "energy of that row's scenario, variant and distance cap. A row marked [nominal "
+        "unverified] has no verified nominal point to compare with.",
+        ch.dot_chart(items, "bus energy [kJ]", "B1 sensitivity", zero=False, refs=refs), leg)
 
 
 def gap_items(gap: Sequence[Row]) -> list[Item]:
@@ -1657,17 +1700,9 @@ def build_b1(c: Ctx) -> Out:
             )
     sens = c.rows("B1_sens")
     if sens:
-        items = [(f"{r.get('sensitivity')} = {r.get('value')} ({r.get('scenario')})", r["energy_kJ"],
-                  tip(r, ["energy_kJ", "distance_m", "replay_verified"]), "s2")
-                 for r in sens if ok(num(r.get("energy_kJ")))]  # fmt: skip
-        if items:
-            o.figures.append(
-                panelbox(
-                    "Sensitivity",
-                    "Energy of B1 when one setting changes.",
-                    ch.dot_chart(items, "bus energy [kJ]", "B1 sensitivity", zero=False),
-                )
-            )
+        sf = b1_sensitivity_figure(sens, front)
+        if sf:
+            o.figures.append(sf)
     o.tables = [
         ("B1_front", None),
         ("B1_gap", None),

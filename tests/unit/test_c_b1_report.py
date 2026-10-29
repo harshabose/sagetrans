@@ -665,3 +665,60 @@ def test_the_chapter_text_says_how_far_below_the_peak_the_attached_limit_sits():
     past = attached_statement(attached_rows(limit=14.5))
     assert "ABOVE that peak" in past
     assert attached_statement([{"variant": "attached"}]) == ""  # an older folder: no claim
+
+
+# ---- B1e ----------------------------------------------------------------------------------
+def test_a_dot_chart_draws_the_reference_and_widens_the_axis_for_it():
+    items = [("a", 10.0, "ta", "s2"), ("b", 11.0, "tb", "s2")]
+    plain = ch.dot_chart(items, "x", "x", zero=False)
+    refd = ch.dot_chart(items, "x", "x", zero=False, refs=[(25.0, "nominal a"), None])
+    assert "mk ref hollow" not in plain and refd.count("mk ref hollow") == 1
+    def top(svg):  # the largest tick label of the x axis
+        return max(float(v) for v in re.findall(r'class="tick"[^>]*>([-0-9.]+)<', svg))
+
+    assert "nominal a" in refd and top(plain) < 15 and top(refd) >= 25
+
+
+def sens_front():
+    def f(s, v, x, h, e, ver=True):
+        return {"scenario": s, "variant": v, "eps_x_m": x, "eps_h_m": h, "converged": True,
+                "replay_verified": ver, "energy_kJ": e if ver else "", "distance_m": x}
+
+    return [f("S-01", "attached", 300.0, 1.0, 8.9), f("S-01", "c_envelope", 300.0, 1.0, 8.4),
+            f("S-03", "attached", 300.0, 1.0, 25.0, ver=False)]  # S-03 has no verified nominal
+
+
+def sens_rows_b1():
+    def s(kind, value, scen, var, e):
+        return {"sensitivity": kind, "value": value, "scenario": scen, "variant": var,
+                "eps_x_m": 300.0, "energy_kJ": e, "distance_m": 290.0, "replay_verified": True}
+
+    return [s("eps_h_m", 3.0, "S-01", "c_envelope", 8.1),
+            s("eps_h_m", 10.0, "S-01", "c_envelope", 7.9),
+            s("rotor_start", "carry", "S-01", "attached", 9.2),
+            s("end_vh_band_ms", 0.5, "S-03", "attached", 26.0),
+            s("rotor_start", "carry", "S-04", "attached", 30.0)]  # S-04: no point at all
+
+
+def test_each_sensitivity_row_names_its_variant_and_carries_its_nominal():
+    from sagetrans.io.view.chapters import b1_sensitivity_figure
+
+    html = b1_sensitivity_figure(sens_rows_b1(), sens_front())
+    assert html is not None
+    assert "eps_h_m = 3.0 (S-01, c_envelope)" in html  # the band sweep names its variant
+    assert "rotor_start = carry (S-01, attached)" in html
+    # the nominal of the two band rows is the c_envelope headline point, 8.40 kJ
+    assert html.count("nominal: 8.40 kJ") == 2 and "nominal: 8.90 kJ" in html
+    assert html.count("mk ref hollow") == 3  # three rows have a verified nominal
+    assert "end_vh_band_ms = 0.5 (S-03, attached) [nominal unverified]" in html
+    assert "rotor_start = carry (S-04, attached) [no nominal point]" in html
+    assert b1_sensitivity_figure([], sens_front()) is None
+
+
+def test_the_b1_chapter_has_the_nominal_markers(tmp_path):
+    synthetic_run(tmp_path)
+    write_table(tmp_path, "B1_front", sens_front())
+    write_table(tmp_path, "B1_sens", sens_rows_b1())
+    b1 = section(build_html(load(tmp_path)), "b1")
+    assert "nominal: the same scenario and cap, setting unchanged" in b1
+    assert "[nominal unverified]" in b1

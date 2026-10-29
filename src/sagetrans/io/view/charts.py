@@ -378,11 +378,17 @@ def strip_chart(rows: Sequence[Strip], aria: str, w: float = 720,
 
 
 def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str, w: float = 720,
-              zero: bool = True) -> str:  # fmt: skip
-    """A dot per row against one axis, with a zero rule: (label, value, tip, cls)."""
+              zero: bool = True,
+              refs: Sequence[tuple[float, str] | None] | None = None) -> str:  # fmt: skip
+    """A dot per row against one axis, with a zero rule: (label, value, tip, cls).
+
+    `refs[i]` is an optional reference for row i, (value, tip), drawn as a hollow grey diamond on
+    the row's line (e.g. the nominal value the row's setting departs from); the axis includes it.
+    """
     rh, pl, pr, pt, pb = 26.0, 210.0, 24.0, 12.0, 44.0
     h = pt + pb + rh * len(items)
     vals = [v for _, v, _, _ in items if math.isfinite(v)] + ([0.0] if zero else [])
+    vals += [r[0] for r in (refs or []) if r is not None and math.isfinite(r[0])]
     fr = Frame(w, h, limits(vals, 0.08), (0, 1), pl=pl, pr=pr, pt=pt, pb=pb)
     xt = nice_ticks(*fr.xlim)
     _fit(fr, xt, [0, 1])
@@ -398,6 +404,9 @@ def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
     for i, (label, v, tip, cls) in enumerate(items):
         y = pt + rh * i + rh / 2
         out.append(text(pl - 10, y + 4, label, "dl", "end"))
+        ref = refs[i] if refs and i < len(refs) else None
+        if ref is not None and math.isfinite(ref[0]):
+            out.append(marker("dia", fr.sx(ref[0]), y, "ref", ref[1], True))
         if math.isfinite(v):
             out.append(marker("dot", fr.sx(v), y, cls, tip))
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
