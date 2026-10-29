@@ -138,3 +138,52 @@ def test_the_viewer_draws_the_new_figure_and_the_old_ones_from_an_older_folder(t
     assert "Whole-mission energy by segment" in e and "Maximum range against the requirement" in e
     # one way: the `leg` columns count (they were read as zero before)
     assert "takeoff: 20.0 Wh" in e and "takeoff: 0.0 Wh" not in e
+
+
+def test_the_scenario_table_gives_each_scenario_and_its_entry_state_at_both_settings():
+    from sagetrans.io.assemble import e_scenarios
+
+    inp = load_inputs(ROOT / "configs", only={"E", "D", "C"})
+    rows = {r["scenario"]: r for r in e_scenarios(inp, {"airspeed_min": 18.0})}
+    assert list(rows) == list(inp.scenarios)
+    s1, s2, s4, s5 = rows["S-01"], rows["S-02"], rows["S-04"], rows["S-05"]
+    # AIRSPEED_MIN - 2, read as an equivalent airspeed: sea level standard day has TAS = EAS
+    assert s1["airspeed_min_register_ms"] == inp.airspeed_min
+    assert s1["entry_eas_register_ms"] == pytest.approx(inp.airspeed_min - 2.0)
+    assert s1["entry_eas_recommended_ms"] == pytest.approx(16.0)
+    assert s1["entry_tas_recommended_ms"] == pytest.approx(16.0)
+    assert s2["entry_tas_register_ms"] > s2["entry_eas_register_ms"]  # thinner air at 5000 m
+    # the ground speed is the true airspeed less the headwind
+    assert s5["entry_ground_recommended_ms"] == pytest.approx(
+        s5["entry_tas_recommended_ms"] - 5.0)
+    assert s4["entry_ground_register_ms"] == pytest.approx(s4["entry_tas_register_ms"] + 5.0)
+    for r in rows.values():
+        assert r["entry_over_stall_recommended"] > r["entry_over_stall_register"]
+        assert r["entry_pitch_deg"] == inp.study.D.theta_fw0_deg
+        assert r["entry_rotor_start"] == inp.study.C.rotor_start
+    assert rows["S-03"]["mass_kg"] > rows["S-01"]["mass_kg"]  # 1.15 x
+    assert "sea level" in s1["note"]
+
+
+def test_the_scenario_panel_follows_the_register_against_recommended_table(tmp_path):
+    from test_c_b1_report import section, synthetic_run, write_table
+
+    from sagetrans.io.assemble import e_scenarios
+    from sagetrans.io.view.load import load
+    from sagetrans.io.view.registry import build_html
+
+    inp = load_inputs(ROOT / "configs", only={"E", "D", "C"})
+    synthetic_run(tmp_path)
+    write_table(tmp_path, "E_budget", _budget())
+    write_table(tmp_path, "E_summary", [{"site_amsl_m": 0.0, "mission": "one_way",
+                                         "max_range_km": 92.0}])
+    write_table(tmp_path, "E_cases", [{"case": "register", "site_amsl_m": 0.0,
+                                       "mission": "one_way", "max_range_km": 92.0}])
+    e = section(build_html(load(tmp_path)), "e")
+    assert "Scenarios at the recommended settings" not in e  # no table, no panel
+    write_table(tmp_path, "E_scenarios", e_scenarios(inp, {"airspeed_min": 18.0}))
+    e = section(build_html(load(tmp_path)), "e")
+    assert e.index("Register against recommended settings") < e.index(
+        "Scenarios at the recommended settings")
+    assert "S-07" in e and "recommended one (18 m/s)" in e
+    assert "AIRSPEED_MIN (17 m/s)" in e

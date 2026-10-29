@@ -180,6 +180,12 @@ today unless marked NEW.
   older two figures (whole-mission waterfall, maximum range against the requirement). (2)
   state-of-charge trace with the reserve band; (3) cruise sweep (range against cruise speed,
   optimum marked).
+- **Scenarios at the recommended settings** (after "Register against recommended settings", only
+  with `E_scenarios`, written by `assemble.e_scenarios`): one row per scenario of
+  `scenarios.yaml` with its altitude, ISA offset, mass, SoC and headwind, and the AIRBRAKE-exit
+  state D, C and B1 start from at the register's and the recommended `AIRSPEED_MIN` (entry
+  airspeed `AIRSPEED_MIN - 2` read as EAS, its TAS, the ground speed, V/Vs). The pitch and rotor
+  start are the settings of D and C.
 - `E_summary` columns: `max_range_km` (one-way distance or radius), `flown_total_km`, and per
   requirement `margin_Wh_at_<km>km`, `conflict_<km>km` and `radius_at_<km>km` (the radius that
   flies the required distance).

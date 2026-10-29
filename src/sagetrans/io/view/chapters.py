@@ -598,6 +598,43 @@ def e_verdict(rows: Sequence[Row]) -> str:
     return f"<b>{ch.esc(text)}</b>" + (": " + ch.esc("; ".join(bits)) if bits else "")
 
 
+def _pair(r: Row, key: str, fmt: str) -> str:
+    """"register -> recommended" of a pair of columns `<key>_register*` / `<key>_recommended*`."""
+    lo, hi = num(r.get(key.replace("@", "register"))), num(r.get(key.replace("@", "recommended")))
+    return f"{lo:{fmt}} -> {hi:{fmt}}" if ok(lo) and ok(hi) else ""
+
+
+def scenarios_panel(rows: Sequence[Row]) -> str:
+    """What each scenario is, and the AIRBRAKE-exit state at the register's and the recommended
+    AIRSPEED_MIN (from E_scenarios; the entry rule is AIRSPEED_MIN - 2 as an equivalent airspeed)."""
+    r0 = rows[0]
+    reg, rec = num(r0.get("airspeed_min_register_ms")), num(r0.get("airspeed_min_recommended_ms"))
+    notes = [f"{r['scenario']}: {r['note']}" for r in rows if r.get("note")]
+    head = (
+        "The scenarios of scenarios.yaml and the state each back transition starts from: the "
+        f"AIRBRAKE exit at AIRSPEED_MIN - 2, read as an equivalent airspeed, with the register's "
+        f"AIRSPEED_MIN ({reg:g} m/s) -> the recommended one ({rec:g} m/s). The columns with an "
+        "arrow are in m/s (register -> recommended): the entry true airspeed, the ground speed "
+        "(the true airspeed less the headwind) and V/Vs, the true airspeed over the 1 g stall "
+        "speed at the scenario's mass." if ok(reg) and ok(rec)
+        else "The scenarios of scenarios.yaml and the state each back transition starts from.")
+    if ok(num(r0.get("entry_pitch_deg"))):
+        head += (f" Pitch at the exit {num(r0['entry_pitch_deg']):g} deg and rotors "
+                 f"'{r0.get('entry_rotor_start')}' (D.theta_fw0_deg and C.rotor_start).")
+    show = [{
+        "scenario": r["scenario"], "altitude_m": r.get("altitude_m"),
+        "isa_offset_k": r.get("isa_offset_k"), "mass_kg": r.get("mass_kg"), "soc": r.get("soc"),
+        "headwind_ms": r.get("headwind_ms"),
+        "entry TAS": _pair(r, "entry_tas_@_ms", ".1f"),
+        "ground speed": _pair(r, "entry_ground_@_ms", ".1f"),
+        "V/Vs": _pair(r, "entry_over_stall_@", ".2f"),
+    } for r in rows]
+    body = table_html("E_scenarios", list(show[0]), show)
+    if notes:
+        body += '<p class="cap">' + ch.esc("; ".join(notes)) + "</p>"
+    return panelbox("Scenarios at the recommended settings", head, body)
+
+
 def energy_cases_figure(bud: Sequence[Row]) -> str | None:
     """Energy by segment at the maximum range, with the required distances behind it.
 
@@ -885,6 +922,10 @@ def build_e(c: Ctx) -> Out:
             "ratio is a like-for-like size check by site, not a validation.",
             table_html("E_cases", [k for k in cols if any(k in r for r in cases)], cases),
         ))
+        scen = c.rows("E_scenarios")
+        if scen:
+            o.figures.append(scenarios_panel(scen))
+            o.tables.append(("E_scenarios", None))
         o.tables += [("E_summary_recommended", None), ("E_segments_recommended", None),
                      ("E_budget_recommended", None), ("E_hover_check_recommended", None),
                      ("Q2_pusher_margin_recommended", None), ("Q2_worst_recommended", None)]
