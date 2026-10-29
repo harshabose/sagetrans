@@ -217,6 +217,24 @@ today unless marked NEW.
     `theta_A:hi` chip says the bound is `min(30, PTCH_LIM_MAX_DEG)` (`theta_A_hi_deg`,
     `theta_A_cfg_hi_deg`, `ptch_lim_deg` in the optimum row).
 
+- **Wing-angle work (branch `fix/time-history-wing-angle`).** All read from columns.
+  - *Stall exposure.* `C_runs`: `stall_alpha_peak_deg`, `stall_t_above_peak_s`,
+    `stall_t_above_limit_s`, `stall_wing_share_min` (samples with V above 5 m/s and t > 0); every case
+    row of `C_params`: `alpha_enforced`, `alpha_limit_deg`, `stall_members`,
+    `stall_alpha_peak_deg_max`, `stall_members_above_peak`, `stall_t_above_peak_s_max`,
+    `stall_t_above_limit_s_max`, `stall_wing_share_min`. Reported, never penalised, never a failure flag.
+  - *Configurations.* When `C.enforce_alpha` is on, `C_params` is the enforced headline (written to
+    `settings_recommended`) and the tables `C_ref_params`, `C_ref_runs`, `C_ref_history` are the
+    unconstrained reference ("the model ignores the stall; reference only; never a recommendation").
+    Figure: the two side by side with a computed ratio sentence; a stall-exposure table; the price of
+    the margin from `C_alpha_curve` (`kind`, `alpha_frac`, `limit_deg`, the four variables,
+    `p95_distance_m`, `p95_stop_time_s`, `mean_energy_kJ`, failures, `J`); a panel "What this result
+    rests on", computed from the run's values (alpha_s is a guess, M is numerical and sets C_L,max,
+    the rotor model has constant coefficients). The limit is a command-side cap, so the angle can sit
+    about a degree above it; the figures say so ("the C_L peak is the stall").
+  - *Settings sheet.* The `Q_TRANS_DECEL` note states the wing limit (or that it is not held), the
+    stop distance and time (p95), D's `a_rec` minimum and C's excess over it, and "provisional".
+
 ### B1 · open-loop optimal control
 - Tables: `B1_front`, `B1_gap`, `B1_sens`, `B1_schedule`, `B1_history` (NEW). Legacy:
   `B1_pareto_<scenario>` read as `B1_front`.
@@ -237,6 +255,19 @@ today unless marked NEW.
   sits below the lift peak. (e) Sensitivity chart with the nominal energy (same scenario, variant and
   distance cap, headline band) as a hollow marker per row and the variant in the row label; a row
   says "[nominal unverified]" or "[no nominal point]".
+- **Wing-angle work (branch `fix/time-history-wing-angle`).** Variants are ordered `margin`,
+  `attached`, `c_envelope` everywhere (colour series 4 for `margin`, 2 and 3 as before). (a) The gap
+  tiles come from the verified `B1_gap` rows, `margin` first with "flyable bound" (a scenario where it
+  has no verified point shows "no verified solution" and quotes nothing), then `attached` and
+  `c_envelope` with "upper bound at the lift peak" (and the late-command warning). (b) *Gap ladder*,
+  one panel per scenario: C (wing held), `margin`, `attached`, `c_envelope` at C's own distance,
+  verified points only, and C without the cap as a hatched reference, from `B1_gap` columns
+  `c_wing_held`, `c_unconstrained_energy_kJ`, `c_unconstrained_distance_m`; a scenario without a C run
+  says so. (c) "What the gap contains" is rewritten from the rows: `margin` against C (same wing limit,
+  same pitch ceiling: what is left is the rotor lag and the clairvoyance), `attached` and
+  `c_envelope` against `margin` in kJ, C without the cap as a reference. (d) "Is `margin` flyable?"
+  next to "Is `attached` attached?" (same columns, per variant). (e) The sensitivity caption names a
+  variant that is not swept. `B1_front` has `end_balance`.
 - Result box: energy at the register distance for B1 and C and the gap in % (expression shown);
   `t_rotor_on_s`, `V_over_Vs_rotor_on`, `alpha_w_peak_gated_deg`; replay-verified count.
 
