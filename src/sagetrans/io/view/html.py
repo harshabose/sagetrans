@@ -134,6 +134,7 @@ svg.viz{width:100%;height:auto;display:block;overflow:visible}
 .xh{stroke:var(--ink2);stroke-width:1}
 .pans{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 18px}
 .pan{min-width:0}
+.pan.wide{grid-column:1/-1}
 .mult{display:grid;gap:14px 18px}.mult.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .mult.c3{grid-template-columns:repeat(3,minmax(0,1fr))}.sm{min-width:0}
 details{margin-top:6px;font-size:13.5px}

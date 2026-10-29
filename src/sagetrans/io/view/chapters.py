@@ -1457,7 +1457,7 @@ def attached_statement(front: Sequence[Row]) -> str:
     lim, pk, a_s = num(r["alpha_limit_deg"]), num(r["alpha_w_clmax_deg"]), num(r.get("alpha_s_deg"))
     clmax, frac = num(r.get("cl_max")), num(r.get("cl_at_limit_over_max"))
     below = pk - lim
-    text = (f"The `attached` limit is |alpha_w| <= {lim:.2f} deg"
+    text = (f"The attached limit is |alpha_w| <= {lim:.2f} deg"
             + (f" ({lim / a_s:.2f} x alpha_s, alpha_s = {a_s:.2f} deg)" if ok(a_s) and a_s else "")
             + f". The model's C_L peaks at alpha_w = {pk:.2f} deg"
             + (f" (C_L,max {clmax:.3f})" if ok(clmax) else "") + ", in the same convention. ")
@@ -1473,8 +1473,9 @@ def attached_statement(front: Sequence[Row]) -> str:
              if x.get("variant") == "attached" and x.get("replay_verified") is True
              and ok(num(x.get("alpha_w_peak_above_vs_deg")))]  # fmt: skip
     if peaks:
-        text += (f". The replayed peak wing angle of the verified points is {min(peaks):.2f} to "
-                 f"{max(peaks):.2f} deg")
+        span = (f"{min(peaks):.2f} deg" if f"{min(peaks):.2f}" == f"{max(peaks):.2f}"
+                else f"{min(peaks):.2f} to {max(peaks):.2f} deg")
+        text += f". The replayed peak wing angle of the verified points is {span}"
     return text + "."
 
 
@@ -1556,7 +1557,7 @@ def build_b1(c: Ctx) -> Out:
         o.figures.append(gap_contents(front, c_row))
         att = attached_statement(front)
         if att:
-            o.figures.append(panelbox("Is `attached` attached?", att, ""))
+            o.figures.append(panelbox('Is "attached" attached?', att, ""))
         # the quoted gap can come from a schedule that does not survive a late command: say so
         late = [r for r in gap if r.get("b1_replay_verified") is True
                 and r.get("b1_late_command_ok") is False]  # fmt: skip
@@ -1806,7 +1807,7 @@ def robust_figure(robust: Sequence[Row], opt: Row | None, rob: Row | None) -> st
     if not robust:
         return None
     cols = ["airspeed_min_eas_ms", "cl_max_scale", "J", "worst_stall_margin", "n_flags", "flags"]
-    shown = [{**r, "flags": r.get("flags") or "none"} for r in robust]
+    shown = list(robust)
     return panelbox(
         "Stall margin robustness",
         robust_statement(robust, opt, rob)
@@ -2011,7 +2012,7 @@ def build_ft(c: Ctx) -> Out:
         )
         panels = [
             ch.Panel("V_eas", "airspeed [m/s, EAS]", "m/s", 2, hlines=eas_rules, vticks=modes[1:],
-                     ymin=0.0, marks=True),
+                     ymin=0.0, marks=True, wide=True),
             ch.Panel("h_rel", "altitude change [m]", "m", 2, True, band=band),
             ch.Panel("theta", "pitch [deg]", "deg", 1),
             ch.Panel("delta_r", "rotor throttle [-]", "", 2),

@@ -982,7 +982,9 @@ def test_a_symmetric_log_axis_keeps_small_rows_visible_and_labels_real_units():
     assert abs(cx(lin)[0] - cx(lin)[1]) < 3  # flattened
     assert abs(cx(sym)[0] - cx(sym)[1]) > 15  # separate
     labels = tick_labels(sym)
-    assert "0" in labels and "0.003" in labels and "-0.003" in labels and "30" in labels
+    assert "0" in labels and "30" in labels  # zero is always labelled, the rest in data units
+    assert all(float(v) in (0.0, 0.003, 0.03, 0.3, 3.0, 30.0, -0.003, -0.03, -0.3, -3.0, -30.0)
+               for v in labels)
 
 
 def test_the_swarm_keeps_overlapping_marks_apart():
@@ -1113,3 +1115,51 @@ def test_the_ft_chapter_has_the_f4_figures(tmp_path):
     assert "member of the register start" in ft and "member of the ArduPilot default" in ft
     assert ">limit<" in ft and "limit 1.2" in ft
     assert "ArduPilot-default members" in ft and "median energy is 30.00 kJ" in ft
+
+
+def test_direct_labels_move_off_each_other():
+    placed = []
+    first = ch.place_label(100.0, 100.0, "q = 2", (-9.0, 17.0), placed)
+    second = ch.place_label(104.0, 101.0, "q = 2.25", (-9.0, 17.0), placed)
+    third = ch.place_label(108.0, 102.0, "q = 2.5", (-9.0, 17.0), placed)
+    assert first == (-9.0, 17.0) and len({first, second, third}) == 3
+    far = ch.place_label(400.0, 300.0, "alone", (8.0, -8.0), placed)
+    assert far == (8.0, -8.0)  # a label with room keeps its preferred place
+
+
+# ---- found by looking at the figures of the tiny run ----------------------------------------
+def test_a_wide_panel_spans_both_columns_and_a_long_strip_label_has_room():
+    s = ch.TSeries("a", "s1", "a", [0.0, 1.0], {"V": [1.0, 2.0], "h": [0.0, 1.0]})
+    svg = ch.panel_figure("f", [ch.Panel("V", "v", wide=True), ch.Panel("h", "h")], [s])
+    assert svg.count('class="pan wide"') == 1 and svg.count('class="pan"') == 1
+    assert 'viewBox="0 0 720 200"' in svg and 'viewBox="0 0 350 200"' in svg
+    long = "ArduPilot default (AIRSPEED_MIN 9) and more words"
+    strip = ch.strip_chart([(long, [(1.0, "", False, "s1"), (2.0, "", False, "s1")], None)], "x")
+    pl = float(re.search(r'class="axlab" x="([0-9.]+)"', strip).group(1))
+    assert pl >= 6.0 * len(long) - 12  # the label ends at x = pl - 12 and starts inside the figure
+
+
+def test_a_strip_row_is_as_tall_as_its_swarm_and_its_rule_label_stays_inside():
+    few = ch.strip_chart([("m", [(1.0, "", False, "s1"), (9.0, "", False, "s1")], None)], "x")
+    dots = [(1.0, "", False, "s1")] * 20 + [(9.0, "", False, "s1")]
+    many = ch.strip_chart([("m", dots, None)], "x")
+
+    def height(svg):
+        return float(re.search(r'viewBox="0 0 720 ([0-9.]+)"', svg).group(1))
+
+    assert height(many) > height(few)
+    right = ch.strip_chart([("m", [(1.0, "", False, "s1")], None)], "x",
+                           extras=[([], (9.0, "tolerance 1.76"))])
+    left = ch.strip_chart([("m", [(9.0, "", False, "s1")], None)], "x",
+                          extras=[([], (1.0, "tolerance 1.76"))])
+    assert 'text-anchor="end">tolerance 1.76<' in right  # near the right edge: ends at the rule
+    assert 'text-anchor="start">tolerance 1.76<' in left
+
+
+def test_the_attached_statement_gives_one_value_when_the_replays_agree():
+    from sagetrans.io.view.chapters import attached_statement
+
+    rows = [{**attached_rows()[0], "alpha_w_peak_above_vs_deg": 13.38}] * 2
+    s = attached_statement(rows)
+    assert "verified points is 13.38 deg." in s and "13.38 to 13.38" not in s
+    assert "`" not in s  # the page does not render markdown
