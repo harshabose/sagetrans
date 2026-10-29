@@ -569,8 +569,10 @@ def dot_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
 
 
 def bar_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str, w: float = 720,
-              waterfall: bool = False) -> str:  # fmt: skip
-    """Horizontal bars (label, value, tip, cls); a waterfall chains each bar to the last."""
+              waterfall: bool = False, hatched: Sequence[int] = ()) -> str:  # fmt: skip
+    """Horizontal bars (label, value, tip, cls); a waterfall chains each bar to the last.
+
+    The bars at the indices in `hatched` are drawn hatched, a reference that is not a result."""
     rh, pl, pr, pt, pb = 26.0, 190.0, 70.0, 8.0, 40.0
     h = pt + pb + rh * len(items)
     spans, run = [], 0.0
@@ -591,9 +593,14 @@ def bar_chart(items: Sequence[tuple[str, float, str, str]], xlab: str, aria: str
         y = pt + rh * i + 4
         x0, x1 = fr.sx(min(a, b)), fr.sx(max(a, b))
         out.append(text(pl - 10, y + 13, label, "dl", "end"))
-        out.append(el("rect", f"bar {cls}", x=f1(x0), y=f1(y), width=f1(max(x1 - x0, 1.5)),
-                      height=16, rx=3, tabindex=0, data_tip=tip))  # fmt: skip
+        out.append(el("rect", f"bar {cls}{' hatched' if i in hatched else ''}", x=f1(x0),
+                      y=f1(y), width=f1(max(x1 - x0, 1.5)), height=16, rx=3, tabindex=0,
+                      data_tip=tip))  # fmt: skip
         out.append(text(x1 + 6, y + 13, f"{v:.1f}", "dl"))
+    if hatched:
+        out.insert(0, '<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" '
+                      'patternTransform="rotate(45)"><rect width="6" height="6" class="hatchbg"/>'
+                      '<line x1="0" y1="0" x2="0" y2="6" class="hatchln"/></pattern></defs>')
     return el("svg", "viz", "".join(out), viewbox=f"0 0 {w:g} {h:g}", role="img", aria_label=aria)
 
 

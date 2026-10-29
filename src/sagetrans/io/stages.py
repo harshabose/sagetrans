@@ -1858,6 +1858,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         kw: dict[str, Any] = {
             "n": b.intervals, "max_iter": b.max_iter, "vh_band": band,
             "theta_cmd_max": math.radians(first_set(theta_deg, b1_ceiling_deg(inp, v))),
+            "end_balance": b.end_balance,
         }  # fmt: skip
         if v.alpha_max_deg is not None:
             kw["alpha_max"] = math.radians(v.alpha_max_deg)
@@ -1887,7 +1888,8 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         r: dict[str, Any] = {
             "scenario": scen_name, "variant": variant, "eps_h_m": eh, "eps_x_m": ex,
             **wing_limit_cols(vp.wing, variants[variant]),
-            "end_vh_band_ms": band, "rotor_start": rs, "theta_cmd_max_deg": theta_deg,
+            "end_vh_band_ms": band, "end_balance": b.end_balance, "rotor_start": rs,
+            "theta_cmd_max_deg": theta_deg,
             "converged": s.ok, "replay_verified": ver.verified,
             "converged_attempts": sum(a.ok for a in ver.attempts), "status": s.status,
             "V0_air_ms": v_air, "V0_ground_ms": float(prob.x0[2]), "Vs_ms": v_s,
@@ -2027,6 +2029,13 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     if cm is not None and "not_stopped" in cm.failures:
         errors.append(f"C at the gap parameters did not stop ({','.join(cm.failures)}): no gap")
         cm = None
+    cm_free = None  # the same C run without the wing cap: a reference bar, never a comparison
+    if cm is not None and c_base.alpha_cap is not None and c.unconstrained_reference:
+        cev_f, base_f, _ = c_settings(inp, enforce=False)
+        cm_free = attempt("C without the wing cap at the gap parameters",
+                          lambda: restricted.evaluate_c(vp, scen, gp, cev_f, base_f))
+        if cm_free is not None and "not_stopped" in cm_free.failures:
+            cm_free = None
     if cm is not None:
         for v in b.variants:
             t0 = time.time()
@@ -2040,6 +2049,9 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
                 "scenario": scen_name, "variant": v.name, "c_source": src,
                 "c_energy_kJ": cm.energy / 1e3, "c_excursion_m": cm.excursion,
                 "c_distance_m": cm.distance, "c_flags": ",".join(cm.failures),
+                "c_wing_held": c_base.alpha_cap is not None,
+                "c_unconstrained_energy_kJ": cm_free.energy / 1e3 if cm_free else "",
+                "c_unconstrained_distance_m": cm_free.distance if cm_free else "",
             }  # fmt: skip
             if res is not None:
                 s_ = res.b1

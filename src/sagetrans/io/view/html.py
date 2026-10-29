@@ -4,6 +4,8 @@ One self-contained file: no network, no CDN, system fonts only. The colour token
 palette validator passed (docs/OUTPUTS_spec.md 7): s1 orange (C), s2 blue (B1 attached), s3 aqua (B1
 wing-to-30), checked in light and dark against the panel surface; the light aqua is below 3:1 against
 white, which the spec allows only with visible labels and a table view, and every chart here has both.
+s4 purple (B1 margin) was added with the margin variant: 5.6:1 in light and 4.8:1 in dark against
+the panel, not run through the validator.
 Grey ink (`ref`) is reserved for reference series, and reference series are dashed.
 """
 
@@ -19,13 +21,13 @@ from sagetrans.io.view.units import fmt_value, header_label, unit_of
 _LIGHT = (
     "--bg:#f3f5f8;--panel:#ffffff;--ink:#13171c;--ink2:#464f5b;--mute:#5f6a77;--rule:#dce1e8;"
     "--grid:#e8ebf0;--axis:#9aa4b0;--accent:#1f4e8c;--accent-soft:#e4edf8;--note:#fff6df;"
-    "--note-ink:#6b4a00;--warn:#b45309;--s1:#eb6834;--s2:#2a78d6;--s3:#1baf7a;--refc:#7d8794;"
+    "--note-ink:#6b4a00;--warn:#b45309;--s1:#eb6834;--s2:#2a78d6;--s3:#1baf7a;--s4:#7a4fc4;--refc:#7d8794;"
     "--seq-hi:#1f4e8c;--seq-lo:#ffffff;"
 )
 _DARK = (
     "--bg:#0f1316;--panel:#171c20;--ink:#eceff3;--ink2:#b6bec9;--mute:#8b96a3;--rule:#2a3138;"
     "--grid:#232a30;--axis:#5d6874;--accent:#86b6ef;--accent-soft:#1c2a3b;--note:#2a2412;"
-    "--note-ink:#f1d48a;--warn:#f0a35a;--s1:#d95926;--s2:#3987e5;--s3:#199e70;--refc:#8b96a3;"
+    "--note-ink:#f1d48a;--warn:#f0a35a;--s1:#d95926;--s2:#3987e5;--s3:#199e70;--s4:#9b72e0;--refc:#8b96a3;"
     "--seq-hi:#86b6ef;--seq-lo:#171c20;color-scheme:dark;"
 )
 
@@ -92,7 +94,7 @@ section.chap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width
 .legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--ink2);margin:0 0 8px}
 .legend span{display:inline-flex;align-items:center;gap:7px}
 .sw{display:inline-block;width:18px;height:0;border-top:3px solid var(--s1)}
-.sw.s2{border-color:var(--s2)}.sw.s3{border-color:var(--s3)}.sw.ink{border-color:var(--ink2)}
+.sw.s2{border-color:var(--s2)}.sw.s3{border-color:var(--s3)}.sw.s4{border-color:var(--s4)}.sw.ink{border-color:var(--ink2)}
 .sw.ref{border-color:var(--refc);border-top-style:dashed}
 .sw.dash{border-top-style:dashed}
 .sw.dot,.sw.sq,.sw.dia,.sw.hollow{width:10px;height:10px;border:0;background:var(--s1)}
@@ -100,6 +102,7 @@ section.chap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width
 .sw.dia{transform:rotate(45deg);width:9px;height:9px}
 .sw.s2.dot,.sw.s2.sq,.sw.s2.dia{background:var(--s2)}
 .sw.s3.dot,.sw.s3.sq,.sw.s3.dia{background:var(--s3)}
+.sw.s4.dot,.sw.s4.sq,.sw.s4.dia{background:var(--s4)}
 .sw.ink.dot,.sw.ink.sq,.sw.ink.dia{background:var(--ink2)}
 .sw.ref.dot,.sw.ref.sq,.sw.ref.dia{background:var(--refc)}
 .sw.hollow{background:var(--panel);border:2px solid var(--s1)}
@@ -114,17 +117,19 @@ svg.viz{width:100%;height:auto;display:block;overflow:visible}
 .tick{fill:var(--mute);font:11px var(--mono)}.axlab{fill:var(--ink2);font:12px var(--sans)}
 .ptitle{fill:var(--ink2);font:500 12px var(--sans)}.dl{fill:var(--ink2);font:12px var(--sans)}
 .ln{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round;stroke:var(--s1)}
-.ln.thick{stroke-width:3}.ln.s2{stroke:var(--s2)}.ln.s3{stroke:var(--s3)}
+.ln.thick{stroke-width:3}.ln.s2{stroke:var(--s2)}.ln.s3{stroke:var(--s3)}.ln.s4{stroke:var(--s4)}
 .ln.ink{stroke:var(--ink2);stroke-width:1.5}.ln.ref{stroke:var(--refc)}
 .ln.dash{stroke-dasharray:6 5}
 .mk{stroke:var(--panel);stroke-width:2;fill:var(--s1)}
-.mk.s2{fill:var(--s2)}.mk.s3{fill:var(--s3)}.mk.ink{fill:var(--ink2)}.mk.ref{fill:var(--refc)}
+.mk.s2{fill:var(--s2)}.mk.s3{fill:var(--s3)}.mk.s4{fill:var(--s4)}.mk.ink{fill:var(--ink2)}.mk.ref{fill:var(--refc)}
 .mk.hollow{fill:var(--panel);stroke:var(--s1);stroke-width:2.2}
-.mk.hollow.s2{stroke:var(--s2)}.mk.hollow.s3{stroke:var(--s3)}.mk.hollow.ref{stroke:var(--refc)}
+.mk.hollow.s2{stroke:var(--s2)}.mk.hollow.s3{stroke:var(--s3)}.mk.hollow.s4{stroke:var(--s4)}.mk.hollow.ref{stroke:var(--refc)}
 .mk:focus-visible,.mk:hover,.bar:hover,.bar:focus-visible,.cell:hover,.cell:focus-visible{
  outline:none;stroke:var(--ink);stroke-width:2.5}
-.bar{fill:var(--s1)}.bar.s2{fill:var(--s2)}.bar.s3{fill:var(--s3)}.bar.ink{fill:var(--ink2)}
+.bar{fill:var(--s1)}.bar.s2{fill:var(--s2)}.bar.s3{fill:var(--s3)}.bar.s4{fill:var(--s4)}.bar.ink{fill:var(--ink2)}
 .bar.ref{fill:var(--refc)}
+.bar.hatched{fill:url(#hatch);stroke:var(--refc);stroke-width:1.5;stroke-dasharray:4 3}
+.hatchbg{fill:var(--panel)}.hatchln{stroke:var(--refc);stroke-width:2.5}
 .refmk{stroke:var(--refc);stroke-width:3}
 .band{fill:var(--accent-soft);opacity:.7}
 .cell{stroke:var(--panel)}.cell.ok{fill:var(--accent-soft)}.cell.no{fill:var(--panel);
@@ -164,7 +169,7 @@ pre.verbatim{font:12px/1.5 var(--mono);background:var(--panel);border:1px solid 
 #tip .r{display:flex;gap:7px;align-items:center}#tip i{display:inline-block;width:9px;height:9px;
  border-radius:2px}
 #tip .r span.mono{font-family:var(--mono)}
-.s1bg{background:var(--s1)}.s2bg{background:var(--s2)}.s3bg{background:var(--s3)}
+.s1bg{background:var(--s1)}.s2bg{background:var(--s2)}.s3bg{background:var(--s3)}.s4bg{background:var(--s4)}
 .inkbg{background:var(--ink2)}.refbg{background:var(--refc)}
 @media (max-width:860px){.shell{grid-template-columns:minmax(0,1fr)}
  nav.side{position:static;max-height:none}nav.side ol{display:flex;flex-wrap:wrap;gap:4px}
@@ -191,7 +196,7 @@ document.querySelectorAll('script[data-hist]').forEach(s=>{HIST[s.dataset.hist]=
 function nearest(ts,t){const n=ts.length;if(!n)return -1;const dt=(ts[n-1]-ts[0])/Math.max(n-1,1);
  if(t>ts[n-1]+dt)return -1;let lo=0,hi=n-1;while(lo<hi){const m=(lo+hi)>>1;if(ts[m]<t)lo=m+1;else hi=m;}
  if(lo>0&&t-ts[lo-1]<=ts[lo]-t)lo--;return lo;}
-const SW={s1:'s1bg',s2:'s2bg',s3:'s3bg',ink:'inkbg',ref:'refbg'};
+const SW={s1:'s1bg',s2:'s2bg',s3:'s3bg',s4:'s4bg',ink:'inkbg',ref:'refbg'};
 document.querySelectorAll('svg.panel').forEach(svg=>{
  const H=HIST[svg.dataset.fig];if(!H)return;
  const pl=+svg.dataset.pl,pr=+svg.dataset.pr,w=+svg.dataset.w,P=H.panels[+svg.dataset.pi];

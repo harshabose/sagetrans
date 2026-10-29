@@ -530,6 +530,9 @@ class B1Cfg(_Strict):
     eps_h_m: list[float] = [1.0]  # headline altitude band (C holds about 0.5 to 1 m)
     eps_x_m: list[float] = [40.0, 50.0, 60.0, 75.0, 100.0, 300.0]  # distance caps: the front
     end_vh_band_ms: float | None = Field(None, gt=0.0)  # null = C.sink_tol_ms
+    # every variant ends in vertical force balance (docs/time_histories.md): without it the optimum
+    # ends falling at about 0.5 g, which understates the energy of every variant
+    end_balance: bool = False
     variants: list[B1VariantCfg] = Field(default_factory=_default_variants, min_length=1)
     band_sweep: B1BandSweepCfg = B1BandSweepCfg()
     sens: B1SensCfg = B1SensCfg()

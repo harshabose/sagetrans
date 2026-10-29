@@ -672,6 +672,34 @@ Record `result.search.spread` as `search_spreads={"C": …}` so the release gate
 | `C_runs` | per ensemble member at the optimum: inputs, `x_tgt`, `x_end`, overshoot, energy, excursion, end sink rate, flags, `a_cap_ms2`, `q_over_a_cap`, and D's `braking_flags` (alpha above the 0.8 C_L,max band, VRS ratio; reporting only, not in `J`) |
 | `C_q_curve` | the optimum's `T_bt`, `theta_A`, `spin_min` with `q` varied (`C.q_curve`): the energy-against-distance curve, from which any overshoot tolerance can be read |
 | `C_sens` | one at a time at the optimum: `rotor_lag_s`, `rotor_start`, `z_vel_p`, `z_acc_p`, `theta_fw0_deg` |
+| `C_alpha_curve` | one row per wing limit: `kind` (`unconstrained` or `enforced`), `alpha_frac`, `limit_deg`, the four variables, `p95_distance_m`, `p95_stop_time_s`, `mean_energy_kJ`, failures, `J` |
+| `C_ref_params`, `C_ref_runs`, `C_ref_history` | the unconstrained reference, same columns as `C_params`, `C_runs`, `C_history` |
+
+**The wing angle is held, and the stall is reported (`C.enforce_alpha`).** The model's C_L peaks at
+`alpha_w` 13.43 deg (C_L,max 1.444) and falls to about a third of that within 4 deg. The ramp
+(`Q_A_ANGLE_MAX`, `PTCH_LIM_MAX_DEG` 20 deg) takes the wing past the peak, so the unconstrained search
+flies through the stall. With `enforce_alpha` on (the shipped setting, the headline) the pitch command
+is capped at `limit + gamma` while `V` is above the 5 m/s gate, with `limit = margin_alpha_frac x
+alpha_s` (`stages.c_wing_limit_rad`; one study-level fraction, 0.7, ASSUMED/PROPOSED, shared with the B1
+`margin` variant). It is a command-side cap, so the angle can still sit about a degree above the limit;
+the C_L peak is the real stall. `alpha_s` (15.70 deg) is a guess (the CFD has no lift peak up to
+15 deg) and the blend sharpness `M` (70) is a numerical parameter that also sets C_L,max: **every stall
+number is provisional until the register is filled.** Reported, not penalised, in `C_runs` and
+`C_params` (`analysis.braking.stall_exposure`, samples with `V` above 5 m/s and `t` > 0): `stall_alpha_peak_deg`,
+`stall_t_above_peak_s`, `stall_t_above_limit_s`, `stall_wing_share_min` (the least share of the weight
+carried by the wing), and per case `stall_alpha_peak_deg_max`, `stall_members_above_peak`,
+`stall_t_above_peak_s_max`, `stall_t_above_limit_s_max`.
+
+Three more tasks follow from it. `C:unconstrained` (`C.unconstrained_reference`) is the old behaviour,
+the same search without the cap, kept as a reference ("the model ignores the stall; reference only;
+never a recommendation") in `C_ref_params`, `C_ref_runs`, `C_ref_history`. `C:alpha:<f>` (one task per
+fraction in `C.alpha_curve_fracs`, `[1.0, 0.85]` in the shipped file) searches with the wing held to `f x alpha_s`
+and writes one row of `C_alpha_curve` (the unconstrained row first, then the fractions from the largest
+down): the price of the margin, energy, distance and stop time against the limit. The settings sheet
+(`Q_TRANS_DECEL` note), the B1-C gap, the C sensitivity and the viewer all read the enforced optimum.
+With the cap on, q is lower, the stop longer and the energy higher than without it; by how much
+depends on `alpha_s`, which is a guess, so the first full run after the register is filled gives the
+number. `docs/time_histories.md` compares C's q with D's `a_rec`.
 
 **What is no longer optimised:** `AIRSPEED_MIN`, `Q_TRANSITION_MS` and `TKOFF_THR_MAX` (Q2 and E
 cover part of the forward side; nothing optimises `AIRSPEED_MIN` now, and if it comes back it is a
@@ -756,9 +784,12 @@ stays 0), at the entry speed of D's rule `AIRSPEED_MIN - 2`. The rotor start
 withdrawn: B2 was removed. `with_options` now keeps the
 problem's entry state (it used to rebuild a cruise problem).
 
-**The wing limit is stated, never silent.** Two variants are run and labelled in every table:
-`attached` (|alpha_w| <= 0.85 alpha_s, pitch command <= 34.4 deg: today's constraint) and `c_envelope`
-(|alpha_w| <= 30 deg, pitch command <= 30 deg: what C's ramp can reach, `theta_A` <= 30 deg).
+**The wing limit is stated, never silent.** Three variants are run and labelled in every table:
+`margin` (|alpha_w| <= `margin_alpha_frac` x alpha_s, 0.7, and the pitch command <= `PTCH_LIM_MAX_DEG`:
+the same wing limit and the same pitch ceiling as the enforced C, so it is the flyable bound),
+`attached` (|alpha_w| <= 0.85 alpha_s, pitch command <= 34.4 deg: an upper bound at the lift peak) and
+`c_envelope` (|alpha_w| <= 30 deg, pitch command <= `PTCH_LIM_MAX_DEG`: an upper bound that flies the
+stall).
 `CollocationOptions.alpha_max` replaces `stall_margin x alpha_s` when set. There is **no "no limit"
 variant**: without one the solver puts the wing at about 51 deg on the blended post-stall model
 (eqs. 6.2 to 6.5), which is not credible without validation. **The wing limit decides the number**: S-01
@@ -788,6 +819,12 @@ subject to dynamics (HS defects), |h - h_ref| <= eps_h at nodes AND midpoints,
 
 There is no equivalent of C's `rotor_lag_s`: B1's rotor state and its throttle slew limit (5 per s) play
 that role, so the gap to C includes that difference.
+
+`B1.end_balance` (default off in the class, on in the shipped study for every variant) adds one
+equality: the vertical acceleration at the last node is zero (`f(x_N, u_N)[3] = 0`). Without it only the
+climb rate is bounded at the end and the last interval buys energy by letting the aircraft fall at about
+0.6 g (the throttle and pitch dump); with it the stop is in vertical force balance, ready to hover. It
+costs a few percent of energy and is applied to all variants so they stay comparable.
 
 The second objective, `"excursion"`, minimises the maximum altitude deviation instead (the
 `epsilon_h*` of the Pareto front).
@@ -833,16 +870,24 @@ and its result must be checked via `Verified.verified`.
 
 * **Which points are quoted.** Only converged, replay-verified points; `B1_front.reason` says why any
   other point is not (not converged, replay mismatch, fails 10 ms late). The headline gap quotes the
-  `attached` rows first and the `c_envelope` rows beside them with their timing warning.
+  `margin` rows first ("flyable bound"; a scenario where `margin` has no verified point says so and
+  quotes nothing for it) and the `attached` and `c_envelope` rows after them ("upper bounds at the lift
+  peak", `c_envelope` with its timing warning).
 * **Is `attached` attached?** The `attached` limit is `alpha_margin x alpha_s` in the convention
   `alpha_w = alpha + i_w`. The columns `alpha_w_clmax_deg`, `cl_max` and `cl_at_limit_over_max` (a 0.01
   deg scan of `aero.coefficients`) show where the model's C_L peaks: with the shipped wing the peak is
   at 13.43 deg and the limit at 13.34 deg, 0.09 deg below it, where C_L is 99.98 % of C_L,max. So the
   limit leaves no stall margin in lift: "attached" means below `alpha_s`, which is 2.3 deg past the
   peak. The variant is unchanged.
-* **What the gap to C contains.** The pitch freedom (`theta_cmd_max_deg` against `PTCH_LIM_MAX_DEG`),
-  the missing rotor lag and the foreknowledge of the scenario, not what a better parameter set could
-  save.
+* **Is `margin` flyable?** The same computation for the `margin` limit: where it sits against the
+  lift peak (with the shipped wing 0.7 x 15.70 = 10.99 deg against the peak at 13.43 deg, and C_L at that angle
+  as a fraction of C_L,max, both read from the `B1_front` columns), a margin in angle before the peak, which `attached` does not have.
+* **What the gap to C contains.** `margin` flies C's wing limit and C's pitch ceiling, so the pitch
+  freedom is already out of the gap between them; what is left is the missing rotor lag and the
+  foreknowledge of the scenario (B1 is open loop for one scenario, C's four settings serve the whole
+  ensemble). `attached` and `c_envelope` add operation at the lift peak on top; the paragraph and the
+  gap ladder (C with the wing held, `margin`, `attached`, `c_envelope`, and C without the cap as a
+  hatched reference) give each step in kJ. None of it is what a better parameter set could save.
 
 ### Comparing with C
 
@@ -865,7 +910,9 @@ generate initial guesses; they are not a baseline for comparison.
 converged of 3, energy, excursion, distance, `t_f`, entry speeds, `below_vs`, replay errors, the shape
 of the replayed schedule from `schedule_summary` (when the rotors come in, `V / V_s` then, peak wing
 angle, peaks), D's VRS ratio and alpha-above-band time (reporting only), `J_point` = C's cost of the
-point with C's normalisers, and `j_best` marking the least per scenario and variant), `B1_gap`,
+point with C's normalisers, `end_balance` (whether the point ends in vertical force balance) and `j_best` marking the least per
+scenario and variant), `B1_gap` (also `c_wing_held`, and `c_unconstrained_energy_kJ` and
+`c_unconstrained_distance_m` for C without the wing cap, for the gap ladder),
 `B1_sens` (the 3 m and 10 m bands on every scenario; the other rotor start, the 0.5 m/s end band and
 the 34.4 deg pitch limit on the first) and `B1_schedule` (the replay of the `j_best` point of the first
 scenario, per variant, every fifth sample). A point that is not replay-verified has its energy blank.
