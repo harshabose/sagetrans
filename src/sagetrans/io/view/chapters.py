@@ -1446,6 +1446,38 @@ def gap_contents(front: Sequence[Row], c_row: Row | None) -> str:
     return panelbox("What the gap between B1 and C contains", pitch + lagt + know + sums, "")
 
 
+def attached_statement(front: Sequence[Row]) -> str:
+    """Is `attached` attached? Where the wing limit sits against the peak of the model's C_L, in the
+    same angle convention (alpha_w, with the wing incidence), from the B1_front columns."""
+    rows = [r for r in front if r.get("variant") == "attached" and ok(num(r.get("alpha_limit_deg")))
+            and ok(num(r.get("alpha_w_clmax_deg")))]  # fmt: skip
+    if not rows:
+        return ""
+    r = rows[0]
+    lim, pk, a_s = num(r["alpha_limit_deg"]), num(r["alpha_w_clmax_deg"]), num(r.get("alpha_s_deg"))
+    clmax, frac = num(r.get("cl_max")), num(r.get("cl_at_limit_over_max"))
+    below = pk - lim
+    text = (f"The `attached` limit is |alpha_w| <= {lim:.2f} deg"
+            + (f" ({lim / a_s:.2f} x alpha_s, alpha_s = {a_s:.2f} deg)" if ok(a_s) and a_s else "")
+            + f". The model's C_L peaks at alpha_w = {pk:.2f} deg"
+            + (f" (C_L,max {clmax:.3f})" if ok(clmax) else "") + ", in the same convention. ")
+    if below >= 0.0:
+        text += f"The limit sits {below:.2f} deg below that peak"
+        text += f", where C_L is {frac:.2%} of C_L,max" if ok(frac) else ""
+        text += (". It leaves no stall margin in lift: the wing is flown at the top of the lift "
+                 "curve, not below it" if below < 1.0 else
+                 ". That is a margin in angle before the lift peak")
+    else:
+        text += f"The limit sits {-below:.2f} deg ABOVE that peak, in the stalled region"
+    peaks = [num(x.get("alpha_w_peak_above_vs_deg")) for x in front
+             if x.get("variant") == "attached" and x.get("replay_verified") is True
+             and ok(num(x.get("alpha_w_peak_above_vs_deg")))]  # fmt: skip
+    if peaks:
+        text += (f". The replayed peak wing angle of the verified points is {min(peaks):.2f} to "
+                 f"{max(peaks):.2f} deg")
+    return text + "."
+
+
 def gap_items(gap: Sequence[Row]) -> list[Item]:
     """The tiles of the B1-C gap: the `attached` figures first (every verified scenario), then
     `c_envelope` beside them with its warning when its schedule fails a late command.
@@ -1479,6 +1511,9 @@ def build_b1(c: Ctx) -> Out:
         o.items += gap_items(gap)
         c_row = next((r for r in c.rows("C_params") if r.get("case") == "optimum"), None)
         o.figures.append(gap_contents(front, c_row))
+        att = attached_statement(front)
+        if att:
+            o.figures.append(panelbox("Is `attached` attached?", att, ""))
         # the quoted gap can come from a schedule that does not survive a late command: say so
         late = [r for r in gap if r.get("b1_replay_verified") is True
                 and r.get("b1_late_command_ok") is False]  # fmt: skip

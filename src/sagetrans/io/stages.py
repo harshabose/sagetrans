@@ -1591,6 +1591,28 @@ def task_ft_scan(inp: StudyInputs, v_arg: str) -> dict[str, Any]:
     return {"result": r, "row": row, "airspeed_min": v}
 
 
+def wing_lift_peak(wing: Any) -> tuple[float, float]:
+    """(alpha_w at the peak of the model's C_L [rad], that C_L), in the angle convention of the B1
+    wing limits (alpha_w = body angle of attack + wing incidence). A 0.01 deg scan to 40 deg."""
+    grid = np.radians(np.arange(0.0, 40.0001, 0.01))
+    cl = np.array([float(aero.coefficients(float(a), wing)[0]) for a in grid])
+    k = int(np.argmax(cl))
+    return float(grid[k]), float(cl[k])
+
+
+def wing_limit_cols(wing: Any, variant: Any) -> dict[str, float]:
+    """Where a B1 wing limit sits against the lift peak (columns of every B1_front row)."""
+    a_pk, cl_pk = wing_lift_peak(wing)
+    lim = (math.radians(variant.alpha_max_deg) if variant.alpha_max_deg is not None
+           else variant.alpha_margin * wing.alpha_s)  # fmt: skip
+    cl_lim = float(aero.coefficients(lim, wing)[0])
+    return {
+        "alpha_limit_deg": math.degrees(lim), "alpha_s_deg": math.degrees(wing.alpha_s),
+        "wing_incidence_deg": math.degrees(wing.i_w), "alpha_w_clmax_deg": math.degrees(a_pk),
+        "cl_max": cl_pk, "cl_at_limit_over_max": cl_lim / cl_pk,
+    }
+
+
 def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
     """Analysis B1 for one scenario: least-energy back-transition from the AIRBRAKE exit.
 
@@ -1654,6 +1676,7 @@ def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
         s = ver.sol
         r: dict[str, Any] = {
             "scenario": scen_name, "variant": variant, "eps_h_m": eh, "eps_x_m": ex,
+            **wing_limit_cols(vp.wing, variants[variant]),
             "end_vh_band_ms": band, "rotor_start": rs, "theta_cmd_max_deg": theta_deg,
             "converged": s.ok, "replay_verified": ver.verified,
             "converged_attempts": sum(a.ok for a in ver.attempts), "status": s.status,

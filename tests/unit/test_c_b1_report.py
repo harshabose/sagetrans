@@ -623,3 +623,45 @@ def test_the_b1_chapter_carries_the_gap_paragraph(tmp_path):
     write_table(tmp_path, "C_params", params)
     b1 = section(build_html(load(tmp_path)), "b1")
     assert "What the gap between B1 and C contains" in b1 and "C.rotor_lag_s (0.25 s)" in b1
+
+
+# ---- B1d ----------------------------------------------------------------------------------
+def test_the_lift_peak_and_where_each_wing_limit_sits_against_it():
+    from sagetrans.io.inputs import load_inputs
+    from sagetrans.io.settings import B1VariantCfg
+    from sagetrans.physics import aero
+
+    wing = load_inputs(ROOT / "configs", only={"B1"}).vehicle.wing  # the shipped register
+    a_pk, cl_pk = stages.wing_lift_peak(wing)
+    assert abs(cl_pk - aero.cl_max(wing)) < 1e-3  # the same peak the stall speed uses
+    assert math.degrees(a_pk) < math.degrees(wing.alpha_s)  # the peak comes BEFORE alpha_s
+    att = stages.wing_limit_cols(wing, B1VariantCfg(name="attached", alpha_margin=0.85))
+    assert abs(att["alpha_limit_deg"] - 0.85 * att["alpha_s_deg"]) < 1e-9
+    below = att["alpha_w_clmax_deg"] - att["alpha_limit_deg"]
+    assert 0.0 < below < 0.5 and att["cl_at_limit_over_max"] > 0.999  # at the top of the curve
+    env = stages.wing_limit_cols(wing, B1VariantCfg(name="c_envelope", alpha_max_deg=30.0))
+    assert abs(env["alpha_limit_deg"] - 30.0) < 1e-9
+    assert env["cl_at_limit_over_max"] < 0.6  # far past the peak
+
+
+def attached_rows(limit=13.34, peak=13.43):
+    return [{"variant": "attached", "alpha_limit_deg": limit, "alpha_s_deg": 15.70,
+             "alpha_w_clmax_deg": peak, "cl_max": 1.444, "cl_at_limit_over_max": 0.99977,
+             "replay_verified": True, "alpha_w_peak_above_vs_deg": pk}
+            for pk in (13.35, 13.59)]
+
+
+def test_the_chapter_text_says_how_far_below_the_peak_the_attached_limit_sits():
+    from sagetrans.io.view.chapters import attached_statement
+
+    s = attached_statement(attached_rows())
+    assert "|alpha_w| <= 13.34 deg (0.85 x alpha_s, alpha_s = 15.70 deg)" in s
+    assert "peaks at alpha_w = 13.43 deg (C_L,max 1.444)" in s
+    assert "sits 0.09 deg below that peak, where C_L is 99.98% of C_L,max" in s
+    assert "no stall margin in lift" in s and "replayed peak wing angle" in s
+    assert "13.35 to 13.59 deg" in s
+    roomy = attached_statement(attached_rows(limit=11.0))
+    assert "sits 2.43 deg below" in roomy and "no stall margin" not in roomy
+    past = attached_statement(attached_rows(limit=14.5))
+    assert "ABOVE that peak" in past
+    assert attached_statement([{"variant": "attached"}]) == ""  # an older folder: no claim
