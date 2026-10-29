@@ -448,12 +448,17 @@ class B1VariantCfg(_Strict):
     alpha_max_deg: float | None = Field(None, gt=0.0)  # |alpha_w| <= this angle
     # pitch-command limit; None = the register's PTCH_LIM_MAX_DEG (what C's ramp can reach)
     theta_cmd_max_deg: float | None = Field(34.4, gt=0.0)
+    # true: the limit is the study's `margin_alpha_frac` x alpha_s (the one definition of the wing
+    # margin, shared with C); `alpha_margin` is then filled in from it when the study is loaded
+    margin: bool = False
 
     @model_validator(mode="after")
     def _one_limit(self) -> B1VariantCfg:
-        if (self.alpha_margin is None) == (self.alpha_max_deg is None):
+        given = [self.alpha_margin is not None, self.alpha_max_deg is not None, self.margin]
+        if sum(given) != 1:
             raise ValueError(
-                f"B1 variant '{self.name}': give exactly one of alpha_margin and alpha_max_deg"
+                f"B1 variant '{self.name}': give exactly one of alpha_margin, alpha_max_deg and "
+                "margin"
             )
         return self
 
@@ -546,6 +551,10 @@ class StudyCfg(_Strict):
     parallel: ParallelCfg = ParallelCfg()
     analyses: list[AnalysisName] = list(ALL_ANALYSES)  # type: ignore[arg-type]
     switch_test: Literal["ground", "air"] = "ground"
+    # The wing-angle margin, defined once: |alpha_w| <= margin_alpha_frac x alpha_s. C holds it when
+    # C.enforce_alpha is on and the B1 variant with `margin: true` flies it. ASSUMED, PROPOSED:
+    # alpha_s is a guess (no lift peak in the CFD up to 15 deg); the C_L peak is at 13.43 deg.
+    margin_alpha_frac: float = Field(0.7, gt=0.0, le=1.0)
     A: ACfg = ACfg()
     D: DCfg = DCfg()
     F: FCfg = FCfg()
@@ -555,6 +564,15 @@ class StudyCfg(_Strict):
     FT: FTCfg = FTCfg()
     B1: B1Cfg = B1Cfg()
     sensitivity: SensCfg = SensCfg()
+
+    @model_validator(mode="after")
+    def _margin_variants(self) -> StudyCfg:
+        """Fill in the limit of the B1 variants that follow `margin_alpha_frac` (one definition)."""
+        if any(v.margin for v in self.B1.variants):
+            variants = [v.model_copy(update={"alpha_margin": self.margin_alpha_frac})
+                        if v.margin else v for v in self.B1.variants]
+            object.__setattr__(self, "B1", self.B1.model_copy(update={"variants": variants}))
+        return self
 
     def result_relevant(self) -> dict[str, object]:
         """The settings that change numbers (everything except naming, mode and parallelism)."""

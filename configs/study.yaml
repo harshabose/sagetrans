@@ -14,6 +14,8 @@ parallel:
 # Which analyses to run. Names: A D F E Q2 FT C B1 sensitivity
 analyses: [A, D, F, E, Q2, FT, C, B1, sensitivity]
 
+margin_alpha_frac: 0.7      # ASSUMED, PROPOSED: the wing-angle margin, defined once: |alpha_w| <= margin_alpha_frac x alpha_s. C (C.enforce_alpha) and the B1 `margin` variant use it. alpha_s is a guess (no lift peak in the CFD up to 15 deg); the C_L peak is at 13.43 deg.
+
 switch_test: ground        # speed used in the Position1 switch test: ground | air  (O-02)
 
 # Speed convention: cruise is 22.5 m/s TRUE airspeed at the 1500 m reference altitude (ISA),

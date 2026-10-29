@@ -1679,6 +1679,20 @@ def wing_lift_peak(wing: Any) -> tuple[float, float]:
     return float(grid[k]), float(cl[k])
 
 
+def margin_limit(inp: StudyInputs) -> dict[str, float]:
+    """The shared wing-angle margin, computed: the limit `margin_alpha_frac` x alpha_s in degrees,
+    C_L at the limit as a fraction of C_L,max, and the angle margin to the C_L peak (alpha_w)."""
+    wing = inp.vehicle.wing
+    lim = inp.study.margin_alpha_frac * wing.alpha_s
+    a_pk, cl_pk = wing_lift_peak(wing)
+    return {
+        "margin_alpha_frac": inp.study.margin_alpha_frac, "alpha_s_deg": math.degrees(wing.alpha_s),
+        "limit_deg": math.degrees(lim), "limit_rad": lim, "alpha_w_clmax_deg": math.degrees(a_pk),
+        "cl_max": cl_pk, "cl_at_limit_over_max": float(aero.coefficients(lim, wing)[0]) / cl_pk,
+        "angle_margin_to_peak_deg": math.degrees(a_pk - lim),
+    }
+
+
 def wing_limit_cols(wing: Any, variant: Any) -> dict[str, float]:
     """Where a B1 wing limit sits against the lift peak (columns of every B1_front row)."""
     a_pk, cl_pk = wing_lift_peak(wing)
