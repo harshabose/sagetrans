@@ -13,8 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-AnalysisName = Literal["A", "D", "F", "E", "Q2", "FT", "C", "B1", "sensitivity"]
-ALL_ANALYSES: tuple[str, ...] = ("A", "D", "F", "E", "Q2", "FT", "C", "B1", "sensitivity")
+AnalysisName = Literal["A", "D", "F", "E", "Q2", "FT", "C", "sensitivity"]
+ALL_ANALYSES: tuple[str, ...] = ("A", "D", "F", "E", "Q2", "FT", "C", "sensitivity")
 
 
 # the ground speed at which D's runs end (braking.measure_a_eq `v_f`); a test keeps them equal
@@ -271,6 +271,10 @@ class CCfg(_Strict):
     maxiter: int = Field(20, ge=1)
     rotor_lag_s: float = Field(0.25, ge=0.0)  # D's lumped actuator lag; C's own value
     rotor_start: Literal["idle", "carry"] = "idle"  # rotors at the AIRBRAKE exit (O-13, unverified)
+    # the scenario of the C_history figure ("C on one scenario") and the altitude band drawn on it
+    # (C holds about 0.5 to 1 m)
+    history_scenario: str = "S-01"
+    history_band_m: float = Field(1.0, gt=0.0)
     # Hold the wing angle: |alpha_w| <= margin_alpha_frac x alpha_s (the study's one definition of
     # the margin), by limiting the pitch command to the limit plus the flight-path angle above
     # D.alpha_gate_ms. On, C is the "enforced" configuration and the headline; off, C ignores the
@@ -466,100 +470,6 @@ class FTCfg(_Strict):
         return self
 
 
-class B1VariantCfg(_Strict):
-    """One stated wing limit of B1: a margin on alpha_s or an angle, and the pitch limit."""
-
-    name: str
-    alpha_margin: float | None = Field(None, gt=0.0)  # |alpha_w| <= margin x alpha_s
-    alpha_max_deg: float | None = Field(None, gt=0.0)  # |alpha_w| <= this angle
-    # pitch-command limit; None = the register's PTCH_LIM_MAX_DEG (what C's ramp can reach)
-    theta_cmd_max_deg: float | None = Field(34.4, gt=0.0)
-    # true: the limit is the study's `margin_alpha_frac` x alpha_s (the one definition of the wing
-    # margin, shared with C); `alpha_margin` is then filled in from it when the study is loaded
-    margin: bool = False
-
-    @model_validator(mode="after")
-    def _one_limit(self) -> B1VariantCfg:
-        given = [self.alpha_margin is not None, self.alpha_max_deg is not None, self.margin]
-        if sum(given) != 1:
-            raise ValueError(
-                f"B1 variant '{self.name}': give exactly one of alpha_margin, alpha_max_deg and "
-                "margin"
-            )
-        return self
-
-
-def _default_variants() -> list[B1VariantCfg]:
-    return [
-        B1VariantCfg(name="attached", alpha_margin=0.85, theta_cmd_max_deg=34.4),
-        B1VariantCfg(name="c_envelope", alpha_max_deg=30.0, theta_cmd_max_deg=None),
-    ]
-
-
-class B1BandSweepCfg(_Strict):
-    """Altitude bands run at the largest distance cap only, for one variant (a sensitivity)."""
-
-    eps_h_m: list[float] = [3.0, 10.0]
-    variant: str = "c_envelope"
-
-
-class B1SensCfg(_Strict):
-    """Sensitivity rows, first scenario only: each is skipped when false or null."""
-
-    rotor_start_flip: bool = True  # the other rotor start, first variant
-    end_vh_band_ms: float | None = 0.5  # the old end band on |v_h|, first variant
-    c_envelope_theta_cmd_deg: float | None = 34.4  # pitch limit of the first absolute-angle variant
-
-
-class B1GapCCfg(_Strict):
-    """The C parameters the same-problem gap evaluates (paste the optimum from `C_params`)."""
-
-    T_bt: float = Field(gt=0.0)  # s
-    theta_A_deg: float = Field(gt=0.0)
-    spin_min: float = Field(ge=0.0)
-    q: float = Field(gt=0.0)  # Q_TRANS_DECEL, m/s^2
-
-
-class B1Cfg(_Strict):
-    """B1 from the AIRBRAKE exit (docs/B1_fix_spec.md); the entry comes from the C and D blocks."""
-
-    scenarios: list[str] = ["S-01", "S-02", "S-03", "S-04", "S-05", "S-06"]
-    intervals: int = Field(40, ge=10)
-    refine_from: list[int] = [20]
-    max_iter: int = Field(800, ge=10)
-    eps_h_m: list[float] = [1.0]  # headline altitude band (C holds about 0.5 to 1 m)
-    eps_x_m: list[float] = [40.0, 50.0, 60.0, 75.0, 100.0, 300.0]  # distance caps: the front
-    end_vh_band_ms: float | None = Field(None, gt=0.0)  # null = C.sink_tol_ms
-    # every variant ends in vertical force balance (docs/time_histories.md): without it the optimum
-    # ends falling at about 0.5 g, which understates the energy of every variant
-    end_balance: bool = False
-    variants: list[B1VariantCfg] = Field(default_factory=_default_variants, min_length=1)
-    band_sweep: B1BandSweepCfg = B1BandSweepCfg()
-    sens: B1SensCfg = B1SensCfg()
-    gap_c: B1GapCCfg | None = None  # null = the register values at q = 2.0, said in the table
-
-    @model_validator(mode="before")
-    @classmethod
-    def _old_scalars(cls, data: object) -> object:
-        if isinstance(data, dict) and isinstance(data.get("eps_x_m"), int | float):
-            raise ValueError(
-                "B1.eps_x_m is now a list (the distance caps of the front) and B1.eps_h_m a "
-                "list holding the headline band, see docs/B1_fix_spec.md section 7"
-            )
-        return data
-
-    @model_validator(mode="after")
-    def _consistent(self) -> B1Cfg:
-        names = [v.name for v in self.variants]
-        if len(set(names)) != len(names):
-            raise ValueError("B1.variants has duplicate names")
-        if self.band_sweep.variant not in names:
-            raise ValueError(f"B1.band_sweep.variant '{self.band_sweep.variant}' is not a variant")
-        if not self.eps_h_m or not self.eps_x_m:
-            raise ValueError("B1.eps_h_m and B1.eps_x_m must not be empty")
-        return self
-
-
 class SensCfg(_Strict):
     scenario: str = "S-01"
     r_small: int = Field(6, ge=2)
@@ -581,8 +491,8 @@ class StudyCfg(_Strict):
     analyses: list[AnalysisName] = list(ALL_ANALYSES)  # type: ignore[arg-type]
     switch_test: Literal["ground", "air"] = "ground"
     # The wing-angle margin, defined once: |alpha_w| <= margin_alpha_frac x alpha_s. C holds it when
-    # C.enforce_alpha is on and the B1 variant with `margin: true` flies it. ASSUMED, PROPOSED:
-    # alpha_s is a guess (no lift peak in the CFD up to 15 deg); the C_L peak is at 13.43 deg.
+    # C.enforce_alpha is on. ASSUMED, PROPOSED: alpha_s is a guess (no lift peak in the CFD up to
+    # 15 deg); the C_L peak is at 13.43 deg.
     margin_alpha_frac: float = Field(0.7, gt=0.0, le=1.0)
     A: ACfg = ACfg()
     D: DCfg = DCfg()
@@ -591,17 +501,7 @@ class StudyCfg(_Strict):
     Q2: Q2Cfg = Q2Cfg()
     C: CCfg = CCfg()
     FT: FTCfg = FTCfg()
-    B1: B1Cfg = B1Cfg()
     sensitivity: SensCfg = SensCfg()
-
-    @model_validator(mode="after")
-    def _margin_variants(self) -> StudyCfg:
-        """Fill in the limit of the B1 variants that follow `margin_alpha_frac` (one definition)."""
-        if any(v.margin for v in self.B1.variants):
-            variants = [v.model_copy(update={"alpha_margin": self.margin_alpha_frac})
-                        if v.margin else v for v in self.B1.variants]
-            object.__setattr__(self, "B1", self.B1.model_copy(update={"variants": variants}))
-        return self
 
     def result_relevant(self) -> dict[str, object]:
         """The settings that change numbers (everything except naming, mode and parallelism)."""

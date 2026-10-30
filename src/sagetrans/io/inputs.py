@@ -486,7 +486,7 @@ def load_inputs(
         )
     # cross-references between study.yaml and scenarios.yaml
     wanted = {
-        "A": study.A.scenarios, "D": study.D.scenarios, "B1": study.B1.scenarios,
+        "A": study.A.scenarios, "D": study.D.scenarios, "C": [study.C.history_scenario],
     }
     if "FT" in (only or study.analyses):  # its history scenarios are looked up only when it runs
         wanted["FT"] = study.FT.history_scenarios
