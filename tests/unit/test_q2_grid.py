@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from test_c_b1_report import section, synthetic_run, write_table
+from test_c_report import section, synthetic_run, write_table
 
 from sagetrans.io import stages
 from sagetrans.io.inputs import load_inputs

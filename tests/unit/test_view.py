@@ -128,13 +128,10 @@ def test_a_legacy_folder_resolves_the_old_names_and_says_it_is_old(tmp_path):
     write_table(tmp_path, "C_params", [{"case": "optimum", "J": 1.0, "p95_distance_m": 90.0,
                                         "mean_energy_kJ": 18.0}])  # fmt: skip
     write_table(tmp_path, "C_ensemble_runs", [{"member": 0, "energy_kJ": 18.0, "flags": ""}])
-    front = {"variant": "attached", "eps_x_m": 300, "energy_kJ": 8.9, "distance_m": 100.0,
-             "replay_verified": True}  # fmt: skip
-    write_table(tmp_path, "B1_pareto_S-01", [front])
     write_record(tmp_path)  # no schema_version, no tables list
     res = load(tmp_path)
-    assert res.legacy and res.aliased == {"C_runs": "C_ensemble_runs", "B1_front": "B1_pareto_S-01"}
-    assert res.rows("C_runs") and res.rows("B1_front")[0]["scenario"] == "S-01"
+    assert res.legacy and res.aliased == {"C_runs": "C_ensemble_runs"}
+    assert res.rows("C_runs")
     html = build_html(res)
     assert "written by an older version" in html
     assert "not in this run: settings_recommended" in html  # the settings column degrades too
@@ -357,24 +354,6 @@ def test_the_defaults_chapter_compares_flag_counts_and_names_saving_or_increase(
     assert "60 % saving" in d
     # more energy than the default (40 against 30) is an increase, not a negative saving
     assert "33 % increase" in d and "-33" not in d
-
-
-def test_the_b1_chapter_flags_verified_points_that_fail_with_late_commands(tmp_path):
-    write_table(tmp_path, "B1_front", [
-        {"scenario": "S-01", "variant": "c_envelope", "eps_x_m": 60.0, "converged": True,
-         "replay_verified": True, "replay_late_command_ok": False, "energy_kJ": 10.5,
-         "distance_m": 60.0, "excursion_m": 1.0},
-        {"scenario": "S-01", "variant": "attached", "eps_x_m": 60.0, "converged": True,
-         "replay_verified": True, "replay_late_command_ok": True, "energy_kJ": 11.3,
-         "distance_m": 60.0, "excursion_m": 1.0}])  # fmt: skip
-    write_table(tmp_path, "B1_gap", [
-        {"scenario": "S-01", "variant": "c_envelope", "c_energy_kJ": 16.0, "b1_energy_kJ": 10.5,
-         "b1_replay_verified": True, "b1_late_command_ok": False}])  # fmt: skip
-    write_record(tmp_path, schema_version=2)
-    html = build_html(load(tmp_path))
-    b1 = html.split('id="b1"')[1].split("</section>")[0]
-    assert "1 verified point(s) fail when the commands are 10 ms late" in b1
-    assert "B1-C gap quoted (S-01, c_envelope) comes from a schedule that fails" in b1
 
 
 def test_the_e_chapter_explains_what_the_fwd_energy_ratio_means(tmp_path):

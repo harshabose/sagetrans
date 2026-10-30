@@ -34,24 +34,6 @@ def test_c_does_not_search_a_flat_region_above_the_pitch_limit():
     assert stages.c_theta_a_hi_deg(frozen) == pytest.approx(30.0)
 
 
-def test_b1_c_envelope_may_not_exceed_the_pitch_limit(tmp_path):
-    cfg = tmp_path / "configs"
-    shutil.copytree(LIVE, cfg)
-    study = cfg / "study.yaml"
-    text = study.read_text(encoding="utf-8")
-    old = "alpha_max_deg: 30.0, theta_cmd_max_deg: null}"
-    assert old in text
-    study.write_text(text.replace(old, "alpha_max_deg: 30.0, theta_cmd_max_deg: 30.0}"),
-                     encoding="utf-8")
-    inp = load_inputs(cfg)
-    with pytest.raises(ValueError, match="PTCH_LIM_MAX_DEG"):
-        stages.task_b1(inp, "S-01")
-    # the shipped value is the pitch limit itself: null, which follows the register
-    shipped = next(v for v in load_inputs(LIVE).study.B1.variants if v.name == "c_envelope")
-    assert shipped.theta_cmd_max_deg is None
-    assert stages.b1_ceiling_deg(load_inputs(LIVE), shipped) == pytest.approx(20.0)
-
-
 # ---- a changed register value reaches every path ---------------------------------------------
 def _inp_with_pitch_limit(tmp_path, deg: float):
     cfg = tmp_path / "configs"
@@ -64,9 +46,8 @@ def _inp_with_pitch_limit(tmp_path, deg: float):
     return load_inputs(cfg)
 
 
-def test_a_register_pitch_limit_of_25_deg_reaches_c_d_b1_and_sensitivity(tmp_path, monkeypatch):
+def test_a_register_pitch_limit_of_25_deg_reaches_c_d_and_sensitivity(tmp_path, monkeypatch):
     from sagetrans.analysis import braking
-    from sagetrans.analysis import collocation as coll
 
     inp = _inp_with_pitch_limit(tmp_path, 25.0)
     want = math.radians(25.0)
@@ -98,22 +79,6 @@ def test_a_register_pitch_limit_of_25_deg_reaches_c_d_b1_and_sensitivity(tmp_pat
     prm = {**{k: inp.start_params[k] for k in ("T_bt", "theta_A", "spin_min")}, "q": 2.0}
     restricted.run_c(vp, scen, prm, cev, c_base)  # a C run
     assert built == [pytest.approx(want)] * 2
-
-    # B1: the problem's pitch limit, and the c_envelope ceiling, which follows the register
-    seen: list[float] = []
-
-    def stop(vp, scen, base, v_air, opt, controller, theta_p, rotor_start="carry"):
-        seen.append(theta_p)
-        raise ValueError("stop after the first problem")
-
-    monkeypatch.setattr(coll, "make_problem_exit", stop)
-    out = stages.task_b1(inp, "S-01")
-    assert seen == [pytest.approx(want)] and out["errors"]
-    env = next(v for v in inp.study.B1.variants if v.name == "c_envelope")
-    assert stages.b1_ceiling_deg(inp, env) == pytest.approx(25.0)
-    assert stages.b1_ceiling_deg(load_inputs(LIVE), env) == pytest.approx(20.0)
-    attached = next(v for v in inp.study.B1.variants if v.name == "attached")
-    assert stages.b1_ceiling_deg(inp, attached) == pytest.approx(34.4)  # a number stays a number
 
     # the sensitivity: the model's controller and its fixed pitch limit
     model = stages.sensitivity_model(inp)

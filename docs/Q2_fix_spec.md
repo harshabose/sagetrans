@@ -1,5 +1,7 @@
 # Analysis Q2 fix specification (pusher acceleration, feed to E): hand-off for an implementing agent
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: implemented** (branch `feat/q2-pusher-accel`; section 11 checks 1 to 12 were run, tests are left to the owner) (written 26 Oct 2026). The numbers below come from scratch scripts run on the repo's real configs in draft mode (`vehicle.yaml`, `study.yaml` Q2 grid, `controller.yaml`); they are expected values for the acceptance checks, not repo changes. See section 12 for how they were made.
 
 **Hand-off order.** This spec is self-contained and goes first. It leaves E's structure as it is today (one leg, the existing cruise-altitude loop, one mean SoC). A separate redesign of E (`E_fix_spec.md`: airfield-elevation sweep, round-trip and one-way missions, two leg masses, SoC per leg) is written afterwards against the code this spec produces; it reuses `pusher.forward_accel` unchanged and only changes how often, and with which mass and SoC, `stage_e` calls it (see the scope note in section 6).

@@ -18,7 +18,7 @@ TWO_PI = 2.0 * math.pi
 
 
 def _clip(x: Num, lo: float, hi: float, eps: float = 0.0) -> Num:
-    """clip(x, lo, hi); with eps > 0 a smooth (hyperbolic) version for collocation."""
+    """clip(x, lo, hi); with eps > 0 a smooth (hyperbolic) version for the CasADi model."""
     if eps == 0.0:
         return ca.fmin(ca.fmax(x, lo), hi)
     d = x - lo

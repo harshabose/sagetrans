@@ -18,7 +18,7 @@ The history of building the toolkit is in `PROJECT_REPORT.md`.
 ```
           io                     tables, figures, report, run record, release gate
            |
-        analysis                 A, B1, C, D, E, F, sensitivity, search, ensembles
+        analysis                 A, C, D, E, F, FT, sensitivity, search, ensembles
            |
         control                  controllers (baseline), mode state
            |
@@ -73,10 +73,9 @@ Design points:
 
 * **Plain arithmetic only.** The functions accept floats, NumPy arrays and CasADi `SX`/`MX`
   expressions alike. That is what lets the single vehicle model be used both for simulation and
-  inside the collocation NLP (NFR-08).
+  inside the CasADi model (NFR-08).
 * **Validity range.** Numeric arguments outside `[-500, 11000]` m raise `ValueError`. Symbolic
-  arguments cannot be checked, so the check is skipped for them; this matters inside collocation,
-  where the altitude is a decision variable.
+  arguments cannot be checked, so the check is skipped for them; this matters inside the CasADi model.
 * **Tests** (`tests/unit/test_atmosphere.py`): T-01 (1.225 and about 0.736 kg/m^3 within 0.1 %),
   ISA table values, offset behaviour, range rejection, CasADi-versus-numeric agreement to 1e-12,
   and Hypothesis checks that density is positive and decreases with altitude.

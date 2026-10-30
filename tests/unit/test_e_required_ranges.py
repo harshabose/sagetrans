@@ -117,7 +117,7 @@ def test_an_older_folder_without_cases_keeps_the_old_figures_and_one_way_is_not_
 
 
 def test_the_viewer_draws_the_new_figure_and_the_old_ones_from_an_older_folder(tmp_path):
-    from test_c_b1_report import section, synthetic_run, write_table
+    from test_c_report import section, synthetic_run, write_table
 
     from sagetrans.io.view.load import load
     from sagetrans.io.view.registry import build_html
@@ -166,7 +166,7 @@ def test_the_scenario_table_gives_each_scenario_and_its_entry_state_at_both_sett
 
 
 def test_the_scenario_panel_follows_the_register_against_recommended_table(tmp_path):
-    from test_c_b1_report import section, synthetic_run, write_table
+    from test_c_report import section, synthetic_run, write_table
 
     from sagetrans.io.assemble import e_scenarios
     from sagetrans.io.view.load import load

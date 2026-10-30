@@ -1,7 +1,7 @@
 """International Standard Atmosphere with a temperature offset, valid to 11,000 m (eq. 6.1).
 
 Written with plain arithmetic only, so every function accepts floats, NumPy arrays and CasADi
-SX/MX expressions alike (NFR-08: one definition used by simulation and collocation). Pressure
+SX/MX expressions alike (NFR-08: one definition used by simulation and the CasADi model). Pressure
 follows the ISA profile; the offset shifts temperature, and so density, as in eq. (6.1).
 """
 

@@ -226,7 +226,7 @@ def e_scenarios(inp: StudyInputs, rec: Mapping[str, Any]) -> Table:
     """What each scenario of scenarios.yaml is, and the state the back transition starts from.
 
     One row per scenario: where it is (altitude, ISA offset, mass, SoC, headwind) and, at the
-    register's AIRSPEED_MIN and at the FT optimum's, the AIRBRAKE-exit state D, C and B1 start
+    register's AIRSPEED_MIN and at the FT optimum's, the AIRBRAKE-exit state D and C start
     from: the entry airspeed (`AIRSPEED_MIN - 2`, read as an equivalent airspeed), its true and
     ground speed, and the ratio to the 1 g stall speed. The pitch and the rotor start are the
     settings of D and C.

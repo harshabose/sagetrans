@@ -1,11 +1,10 @@
 """The page shell: tokens, CSS, the one inline script, and the table and chapter renderers.
 
 One self-contained file: no network, no CDN, system fonts only. The colour tokens are the ones the
-palette validator passed (docs/OUTPUTS_spec.md 7): s1 orange (C), s2 blue (B1 attached), s3 aqua (B1
-wing-to-30), checked in light and dark against the panel surface; the light aqua is below 3:1 against
-white, which the spec allows only with visible labels and a table view, and every chart here has both.
-s4 purple (B1 margin) was added with the margin variant: 5.6:1 in light and 4.8:1 in dark against
-the panel, not run through the validator.
+palette validator passed (docs/OUTPUTS_spec.md 7): s1 orange (C), s2 blue, s3 aqua, checked in light
+and dark against the panel surface; the light aqua is below 3:1 against white, which the spec allows
+only with visible labels and a table view, and every chart here has both. s4 purple is a fourth
+series colour (5.6:1 in light and 4.8:1 in dark against the panel), not run through the validator.
 Grey ink (`ref`) is reserved for reference series, and reference series are dashed.
 """
 
@@ -128,8 +127,6 @@ svg.viz{width:100%;height:auto;display:block;overflow:visible}
  outline:none;stroke:var(--ink);stroke-width:2.5}
 .bar{fill:var(--s1)}.bar.s2{fill:var(--s2)}.bar.s3{fill:var(--s3)}.bar.s4{fill:var(--s4)}.bar.ink{fill:var(--ink2)}
 .bar.ref{fill:var(--refc)}
-.bar.hatched{fill:url(#hatch);stroke:var(--refc);stroke-width:1.5;stroke-dasharray:4 3}
-.hatchbg{fill:var(--panel)}.hatchln{stroke:var(--refc);stroke-width:2.5}
 .etoggle{position:absolute;opacity:0}.elabel{display:inline-flex;gap:8px;align-items:center;cursor:pointer;margin:2px 0 10px}
 .elabel::before{content:"";width:16px;height:16px;border:2px solid var(--ink2);border-radius:4px;background:var(--panel)}
 .etoggle:checked+.elabel::before{background:var(--s2);border-color:var(--s2);box-shadow:inset 0 0 0 3px var(--panel)}

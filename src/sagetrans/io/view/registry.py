@@ -101,14 +101,6 @@ CHAPTERS: tuple[Chapter, ...] = (
         "C",
     ),
     Chapter(
-        "b1",
-        "B1 · open-loop optimal control",
-        "How much energy could a free, clairvoyant brake save over C?",
-        ("B1_front", "B1_gap", "B1_sens", "B1_schedule", "B1_history"),
-        chp.build_b1,
-        "B1",
-    ),
-    Chapter(
         "ft",
         "FT · forward transition",
         "Which four ArduPilot settings take the aircraft from hover to wing-borne flight "

@@ -13,7 +13,7 @@ absolute imports mean it does not shadow the standard library.)
 | `gate.py` | `release_gate`, `GateResult`, `verification_from_junit`, `REQUIRED_TESTS`, `SEARCH_ANALYSES` |
 | `settings.py` | strict pydantic models for the plain files `study.yaml` and `scenarios.yaml` |
 | `inputs.py` | `load_inputs`: reads the five config files, converts units once, builds `VehicleParams` and friends from the register, records fallbacks, reports every problem (`InputError`); `StudyInputs` |
-| `stages.py` | the study as independent tasks (`basics`, `C`, `FT`, `FT_scan:<AIRSPEED_MIN>`, `B1:<scenario>`, `sensitivity`): `plan_tasks`, `run_task` |
+| `stages.py` | the study as independent tasks (`basics`, `C`, `FT`, `FT_scan:<AIRSPEED_MIN>`, `sensitivity`): `plan_tasks`, `run_task` |
 | `recommended.py` | `settings_recommended.csv`: the ArduPilot parameters, the register, the recommended and the default values |
 | `assemble.py` | turns task results into tables, figures, `report.md`, `inputs_used.md`, the run record and the gate verdict |
 | `study.py` | `run_study`: load, check, run tasks in a spawn process pool with a per-task disk cache, assemble |
@@ -46,10 +46,9 @@ against `run_record.json`; `registry.py` lists the chapters and renders the page
 builder per analysis; `charts.py` draws the SVG; `html.py` holds the CSS, the tokens and the one inline
 script; `workbook.py` writes the xlsx (index sheet, one sheet per CSV, units in row 2, no formulas).
 A missing table or column makes a figure absent and prints "not in this run: <table>", never an error; a
-results folder from an older version loads through aliases (`C_runs` from `C_ensemble_runs`, `B1_front`
-from `B1_pareto_<scenario>`) and is named as older. Grey ink is reserved for reference series (the
+results folder from an older version loads through aliases (`C_runs` from `C_ensemble_runs`) and is named as older. Grey ink is reserved for reference series (the
 ArduPilot default), which are dashed; no chart has more than three coloured series. The writer adds the
-tables the viewer reads: `C_history`, `B1_history`, `inputs_register`, `settings_recommended`,
+tables the viewer reads: `C_history`, `inputs_register`, `settings_recommended`,
 `headline.json`, and `schema_version`, `tables` and `context` in the run record.
 
 ## The run record (`record.py`)
@@ -151,7 +150,7 @@ and `.summary()` prints it.
 
 `verification_from_junit(path)` reads a pytest JUnit XML file and maps tests whose names start
 `test_tNN_` to `T-NN`; an ID passes only if every test carrying it passed. The suite's tests are
-named to this convention (for example `test_t11_collocation_replayed_…`).
+named to this convention (for example `test_t12_…`).
 
 **In CI.** The workflow runs `pytest --junitxml=junit.xml`, then
 `python -m sagetrans.io.ci_check junit.xml`, which prints one line per ID and exits non-zero if any

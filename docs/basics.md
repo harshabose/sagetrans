@@ -1,5 +1,7 @@
 > B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 # module.physics
 ## aero.py
 

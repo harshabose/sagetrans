@@ -213,8 +213,8 @@ def test_gate_blocks_missing_or_failed_verification_tests():
     missing = {k: v for k, v in ALL_PASS.items() if k != "T-09"}
     assert any("T-09: no verification" in r for r in
                gate.release_gate(_released_record(), missing, sens, []).reasons)  # fmt: skip
-    failed = {**ALL_PASS, "T-11": False}
-    assert any("T-11: verification failed" in r for r in
+    failed = {**ALL_PASS, "T-10": False}
+    assert any("T-10: verification failed" in r for r in
                gate.release_gate(_released_record(), failed, sens, []).reasons)  # fmt: skip
 
 

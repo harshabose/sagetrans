@@ -1,5 +1,7 @@
 # Analysis FT: forward transition (hover to cruise) — implementation spec
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 Status: DRAFT for review. Written 2026-10-27. Needs: `docs/B2_removal_spec.md` done first (it removes the
 other users of the legacy forward model). Sources: `docs/ardupilot_open_questions.md` O-14 to O-22
 (`Plane-4.7.2`). Read O-15, O-16, O-17, O-18, O-20, O-21, O-22 before this spec.

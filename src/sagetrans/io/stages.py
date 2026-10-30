@@ -13,7 +13,6 @@ import math
 import time
 import traceback
 from collections.abc import Callable
-from functools import partial
 from typing import Any
 
 import numpy as np
