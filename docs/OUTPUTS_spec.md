@@ -193,6 +193,10 @@ today unless marked NEW.
   state D and C start from at the register's and the recommended `AIRSPEED_MIN` (entry
   airspeed `AIRSPEED_MIN - 2` read as EAS, its TAS, the ground speed, V/Vs). The pitch and rotor
   start are the settings of D and C.
+- **What each analysis is** (right after the scenarios panel, so only with `E_scenarios`): a
+  reader's guide with one row per analysis (A, D, F, Q2, E, FT, C, Sensitivity): the question its
+  chapter answers, what it gives and who reads it. The text is fixed in the viewer
+  (`chapters.ANALYSES_GUIDE`), not read from a table.
 - `E_summary` columns: `max_range_km` (one-way distance or radius), `flown_total_km`, and per
   requirement `margin_Wh_at_<km>km`, `conflict_<km>km` and `radius_at_<km>km` (the radius that
   flies the required distance).
