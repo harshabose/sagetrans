@@ -166,8 +166,11 @@ today unless marked NEW.
 
 ### F · landing descent
 - Tables: `F_descent`, `F_profile`.
-- Figures: (1) altitude, rate, power against time (three stacked panels); (2) margin to the
-  vortex-ring onset against time.
+- Figures: (1) **Descent rate against time to go** and (2) **Energy to go against time to go**: one
+  chart each, one line per scenario (legend `S-xx, <altitude> m`; a sixth scenario repeats the
+  colours dashed), a marker with a tooltip (scenario, height, time to go, value) on every third
+  sample and on the last. The time counts down to touchdown. Energy is shown in kJ. (They were
+  small multiples, one panel per scenario.)
 - Result box: descent rate used, `kappa` and its source, minimum VRS margin.
 
 ### E · energy budget
