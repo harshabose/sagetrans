@@ -147,10 +147,14 @@ today unless marked NEW.
 
 ### Q2 · pusher acceleration
 - Tables: `Q2_pusher_margin`, `Q2_worst` (optional).
-- Figures: (1) acceleration against speed, one line per site and mass, E's assumed `a_fwd` drawn as
-  a horizontal rule with label; (2) worst acceleration by altitude and state of charge (heat strip,
-  sequential single hue, values printed in cells); (3) true against equivalent airspeed reading
-  (two lines, same axis, the gap labelled).
+- Figures: **Pusher acceleration by altitude, mass and state of charge**: one heat grid of the
+  rows that feed E (`feeds_e` = yes, the convention `Q2.feed_convention`, `eas`): a row per altitude,
+  a column per mass factor and state of charge (`mass/SoC in %`), the value printed in each cell,
+  a cross where the end speed is not reached, and a last column `E` with the acceleration E assumes
+  for the site at that altitude (`E_summary.a_fwd_out_ms2`). It replaces the scatter against
+  altitude, the heat strip by state of charge and the true-against-equivalent chart. A folder
+  without `feeds_e` uses `eas` (or the only convention present). The tiles use the same rows. Both
+  conventions stay in the `Q2_pusher_margin` table.
 - Result box: worst margin and its case; whether E's assumption holds everywhere (yes/no + number).
 
 ### D · braking
@@ -168,10 +172,27 @@ today unless marked NEW.
 
 ### E · energy budget
 - Tables: `E_summary`, `E_budget`, `E_segments`, `E_cruise_sweep`, `E_hover_check`, `E_reserve`.
-- Figures: (1) whole-mission waterfall in Wh per segment (one per site and mission, small
-  multiples); (2) range margin by site and mission against the requirement lines
-  (`requirements_km`); (3) state-of-charge trace with the reserve band; (4) cruise sweep
-  (range against cruise speed, optimum marked).
+- Figures: (1) **Maximum range and the required ranges: energy by segment**, one panel per site
+  and mission (one way left, round trip right), from the `case` rows of `E_budget`: `plausible`
+  (the maximum range the usable energy allows, solid bars; the total ends on the usable-energy
+  rule) and one `required_<km>` row per requirement of `mission.yaml` (100 and 120 km), faint and
+  outlined (dashed, dotted), drawn behind the plausible bars when a pure-CSS checkbox is on. A
+  requirement is the distance flown: a round trip of 100 km is a 50 km radius (`range_km` is the
+  one-way distance or the radius, `flown_km` the distance flown in all). The verdict line of each
+  panel is computed from the rows ("short of 100 km by 8.0 km"); a column of panels shares one
+  energy axis, so the checkbox does not move anything. A folder without a `case` column keeps the
+  older two figures (whole-mission waterfall, maximum range against the requirement). (2)
+  state-of-charge trace with the reserve band; (3) cruise sweep (range against cruise speed,
+  optimum marked).
+- **Scenarios at the recommended settings** (after "Register against recommended settings", only
+  with `E_scenarios`, written by `assemble.e_scenarios`): one row per scenario of
+  `scenarios.yaml` with its altitude, ISA offset, mass, SoC and headwind, and the AIRBRAKE-exit
+  state D, C and B1 start from at the register's and the recommended `AIRSPEED_MIN` (entry
+  airspeed `AIRSPEED_MIN - 2` read as EAS, its TAS, the ground speed, V/Vs). The pitch and rotor
+  start are the settings of D and C.
+- `E_summary` columns: `max_range_km` (one-way distance or radius), `flown_total_km`, and per
+  requirement `margin_Wh_at_<km>km`, `conflict_<km>km` and `radius_at_<km>km` (the radius that
+  flies the required distance).
 - Result box: min range margin and where; limiting reserve; hover check pass/fail.
 
 ### C · restricted back-transition search (reference mock)

@@ -39,6 +39,7 @@ DESCRIPTIONS = {
     "E_summary": "E: range, reserves and flyability by site and mission",
     "E_budget": "E: energy by segment for each range",
     "E_segments": "E: every segment of every mission",
+    "E_scenarios": "E: what each scenario is and its AIRBRAKE-exit state at the register and recommended AIRSPEED_MIN",
     "C_params": "C: the optimum, the register start and the ArduPilot default",
     "C_runs": "C: one row per ensemble member and case",
     "C_search": "C: best cost of each search seed",

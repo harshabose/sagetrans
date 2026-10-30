@@ -181,8 +181,6 @@ class ECfg(_Strict):
     # airfield elevations; the cruise altitude is the site plus mission.profile.climb_height_m
     sites_amsl_m: list[float] = [0.0, 1500.0, 2500.0, 5000.0]
     missions: list[Literal["round_trip", "one_way"]] = ["round_trip", "one_way"]
-    # report points: the one-way distance, or the radius of a round trip
-    ranges_km: list[float] = [50.0, 100.0, 113.0, 150.0]
     a_plan_fallback_ms2: float = Field(2.5, gt=0.0)  # used when D produced no recommendation
     # forward-transition acceleration: from Q2 at E's own site ("case"), the worst over the Q2
     # grid ("worst"), or the value in mission.yaml ("mission")
@@ -193,13 +191,25 @@ class ECfg(_Strict):
     # wing_share_handover 0.39 to 0.44 for the register and the recommended settings)
     fade_wing_share: float = Field(0.4, gt=0.0, le=1.0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _old_keys(cls, data: object) -> object:
+        if isinstance(data, dict) and "ranges_km" in data:
+            raise ValueError(
+                "E.ranges_km was removed: E reports the maximum range and the two requirements "
+                "of mission.yaml (requirements.range_primary_km and range_p95_km), as distances "
+                "flown (a round trip of 100 km is a 50 km radius)"
+            )
+        return data
+
 
 class Q2Cfg(_Strict):
     altitudes_m: list[float] = [0.0, 1000.0, 2500.0, 5000.0]
     mass_factors: list[float] = [0.85, 1.0, 1.15]
     soc: list[float] = [0.8, 0.6, 0.3]
     conventions: list[Literal["tas", "eas"]] = ["tas", "eas"]  # AIRSPEED_MIN read as TAS or EAS
-    feed_convention: Literal["tas", "eas"] = "tas"  # the one E reads
+    # the one E reads: AIRSPEED_MIN is an equivalent airspeed (O-14, O-23), as in D, C, B1 and FT
+    feed_convention: Literal["tas", "eas"] = "eas"
     isa_offset_k: float = 0.0
     n_speed: int = Field(41, ge=11)
     write_profile: bool = False

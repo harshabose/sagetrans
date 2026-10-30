@@ -31,6 +31,7 @@ deceleration) is a modelling choice that has not been made.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -604,6 +605,37 @@ class MissionBudget:
         r = num / sum(b.e_cruise_J_per_m for _, _, b in self.legs)
         return r if r >= self.fixed_distance_m else 0.0
 
+    @property
+    def n_legs(self) -> int:
+        """1 for a one-way mission, 2 for a round trip."""
+        return len(self.legs)
+
+    def radius_for_flown(self, flown_m: float) -> float:
+        """The one-way distance (radius of a round trip) whose mission flies `flown_m` in all.
+
+        A range requirement is the distance flown: a 100 km round trip is a 50 km radius.
+        """
+        return flown_m / self.n_legs
+
+    def cases(self, required_km: Sequence[float]) -> list[dict[str, float | bool | str]]:
+        """The budget at the maximum range ("plausible") and at each required distance flown.
+
+        `range_km` is the one-way distance or the radius (what `table` takes), `flown_km` the
+        distance flown in all, `required_km` the requirement of a "required_<km>" case. A case
+        shorter than the fixed segments' distance has no row.
+        """
+        todo: list[tuple[str, float, float | None]] = [("plausible", self.max_range_m, None)]
+        todo += [(f"required_{x:g}", self.radius_for_flown(x * 1e3), x) for x in required_km]
+        out: list[dict[str, float | bool | str]] = []
+        for name, r, req in todo:
+            if r < self.fixed_distance_m:
+                continue
+            row = self.table([r])[0]
+            row["fits"] = float(row["margin_Wh"]) >= -1e-6  # the maximum range has margin 0
+            out.append({"case": name, "required_km": "" if req is None else req,
+                        "flown_km": r * self.n_legs / 1e3, **row})
+        return out
+
     def table(self, ranges_m: list[float]) -> list[dict[str, float | bool]]:
         """Budget by range: leg-prefixed segments in Wh, cruise, reserve, total and margin."""
         rows: list[dict[str, float | bool]] = []
@@ -626,8 +658,8 @@ class MissionBudget:
         return rows
 
     def conflicts(self, required_m: tuple[float, ...] = (100e3, 113e3)) -> dict[float, bool]:
-        """True where the requirement (the same one-way distance or radius) exceeds the range."""
-        return {r: self.max_range_m < r for r in required_m}
+        """True where the required distance flown exceeds what the energy allows."""
+        return {r: self.max_range_m < self.radius_for_flown(r) for r in required_m}
 
 
 def build_mission(

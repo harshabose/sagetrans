@@ -251,12 +251,75 @@ def build_a(c: Ctx) -> Out:
 
 
 # ------------------------------------------------------------------------------------------ Q2
+def q2_rows_fed_to_e(rows: Sequence[Row]) -> tuple[list[Row], str]:
+    """The rows of the airspeed convention E reads, and its name.
+
+    `feeds_e` marks them; a folder from before it uses `eas` (E reads AIRSPEED_MIN as an
+    equivalent airspeed since 2026-10-27) or, if only `tas` is there, that one."""
+    if any("feeds_e" in r for r in rows):
+        sub = [r for r in rows if r.get("feeds_e") is True]
+    else:
+        names = [v for v in uniq([r.get("convention") for r in rows]) if v]
+        pick = "eas" if "eas" in names else (names[0] if names else None)
+        sub = [r for r in rows if r.get("convention") == pick] if pick else list(rows)
+    conv = next((str(r["convention"]) for r in sub if r.get("convention")), "")
+    return sub, conv
+
+
+def pusher_grid(sub: Sequence[Row], conv: str, e_rows: Sequence[Row]) -> str | None:
+    """Every altitude x mass factor x state of charge as one heat grid, with what E assumes.
+
+    The columns are the mass factor and the state of charge in %; the last column is E's
+    forward-transition acceleration (the out leg) at the site of that altitude, where E ran
+    there. A cross marks a case that does not reach the end speed."""
+    alts = sorted({r["altitude_m"] for r in sub if ok(num(r.get("altitude_m")))})
+    masses = sorted({r["mass_factor"] for r in sub if r.get("mass_factor") is not None})
+    socs = sorted({r["soc"] for r in sub if r.get("soc") is not None}, reverse=True)
+    if not (alts and masses and socs):
+        return None
+    cols = [(m, s) for m in masses for s in socs]
+    e_by_site: dict[float, float] = {}
+    for r in e_rows:
+        if ok(num(r.get("a_fwd_out_ms2"))):
+            e_by_site.setdefault(float(r["site_amsl_m"]), num(r["a_fwd_out_ms2"]))
+    has_e = any(a in e_by_site for a in alts)
+    vals: list[list[float | None]] = []
+    flags: list[list[bool]] = []
+    for a in alts:
+        v: list[float | None] = []
+        f: list[bool] = []
+        for m, s in cols:
+            cell = [r for r in sub if r["altitude_m"] == a and r["mass_factor"] == m
+                    and r["soc"] == s and ok(num(r.get("a_min_ms2")))]
+            v.append(min((num(r["a_min_ms2"]) for r in cell), default=None))
+            f.append(any(r.get("reachable") is False for r in cell))
+        if has_e:
+            v.append(e_by_site.get(float(a)))
+            f.append(False)
+        vals.append(v)
+        flags.append(f)
+    labels = [f"{m:g}/{round(100 * s)}" for m, s in cols] + (["E"] if has_e else [])
+    note = (" The last column (E) is the acceleration E assumes for the site at that altitude: "
+            "one way, the register mass and the state of charge at the start of the leg."
+            if has_e else "")
+    return panelbox(
+        "Pusher acceleration by altitude, mass and state of charge",
+        f"Lowest acceleration the pusher gives on the way up to AIRSPEED_MIN, read as "
+        f"{'an equivalent' if conv == 'eas' else 'a true'} airspeed ({conv or 'all'}: the "
+        "convention E reads), for every altitude, mass factor and state of charge in %. A cross "
+        "marks a case that does not reach the end speed." + note,
+        ch.heat_chart(labels, [f"{a:g} m" for a in alts], vals, "Pusher acceleration",
+                      "mass factor / state of charge in %", "m/s^2", 2, flags,
+                      w=max(720.0, 70.0 * len(labels) + 130.0)))
+
+
 def build_q2(c: Ctx) -> Out:
     o = Out()
     rows = c.rows("Q2_pusher_margin")
     if not rows:
         return o
-    i = c.extreme("Q2_pusher_margin", "a_min_ms2", min)
+    sub, conv = q2_rows_fed_to_e(rows)
+    i = c.extreme("Q2_pusher_margin", "a_min_ms2", min, lambda r: any(r is x for x in sub))
     if i is not None:
         it = c.item(
             "Worst pusher acceleration",
@@ -267,14 +330,14 @@ def build_q2(c: Ctx) -> Out:
         )
         if it:
             o.items.append(it)
-    reach = [r.get("reachable") for r in rows if "reachable" in r]
+    reach = [r.get("reachable") for r in sub if "reachable" in r]
     if reach:
         n_ok = sum(1 for v in reach if v is True)
         o.items.append(
             Item(
                 "Every case reaches the end speed",
                 "yes" if n_ok == len(reach) else "NO",
-                expr=f"{n_ok} of {len(reach)} rows have reachable = yes",
+                expr=f"{n_ok} of {len(reach)} rows have reachable = yes ({conv or 'all'} reading)",
             )
         )
         if n_ok != len(reach):
@@ -285,97 +348,9 @@ def build_q2(c: Ctx) -> Out:
         it = c.item("Acceleration E assumes (lowest, out leg)", "E_summary", "a_fwd_out_ms2", e_i)
         if it:
             o.items.append(it)
-    conv = [v for v in uniq([r.get("convention") for r in rows]) if v]
-    first = conv[0] if conv else None
-    sub = [r for r in rows if r.get("convention") == first] if first else rows
-    series = []
-    masses = sorted({r["mass_factor"] for r in sub if r.get("mass_factor") is not None})
-    for k, m in enumerate(masses[:3]):
-        rs = [r for r in sub if r.get("mass_factor") == m]
-        series.append(ch.Series(f"mass x {m:g}", f"s{k + 1}", [(r["altitude_m"], r["a_min_ms2"]) for r in rs],
-                                [tip(r, ["altitude_m", "soc", "a_min_ms2", "v_at_min_ms", "mass_kg"], f"mass x {m:g}")
-                                 for r in rs], hollow=[r.get("reachable") is False for r in rs],
-                                line=False))  # fmt: skip
-    if e_rows and any("a_fwd_out_ms2" in r for r in e_rows):
-        pts = [
-            (r["site_amsl_m"], r["a_fwd_out_ms2"])
-            for r in e_rows
-            if ok(num(r.get("a_fwd_out_ms2")))
-        ]
-        series.append(ch.Series("E assumes (out leg)", "ink", pts,
-                                [tip(r, ["site_amsl_m", "mission", "a_fwd_out_ms2"], "E_summary")
-                                 for r in e_rows if ok(num(r.get("a_fwd_out_ms2")))],
-                                line=False, marker="dia"))  # fmt: skip
-    if series:
-        o.figures.append(
-            panelbox(
-                "Pusher acceleration by altitude",
-                f"Lowest acceleration the pusher gives up to the end speed ({first or 'all'} convention), "
-                "one mark per mass factor and state of charge; E's assumed value as a diamond.",
-                ch.xy_chart(
-                    series, "altitude [m]", "a_min [m/s^2]", "Pusher acceleration", y_from_zero=True
-                ),
-                _legend(*[(s.cls, "dot" if s.cls != "ink" else "dia", s.name) for s in series]),
-            )
-        )
-    alts = sorted({r["altitude_m"] for r in sub})
-    socs = sorted({r["soc"] for r in sub})
-    if alts and socs:
-        vals, flg = [], []
-        for a in alts:
-            row_v, row_f = [], []
-            for s in socs:
-                cell = [r for r in sub if r["altitude_m"] == a and r["soc"] == s]
-                row_v.append(min((r["a_min_ms2"] for r in cell), default=None))
-                row_f.append(any(r.get("reachable") is False for r in cell))
-            vals.append(row_v)
-            flg.append(row_f)
-        o.figures.append(
-            panelbox(
-                "Worst acceleration by altitude and state of charge",
-                "Lowest a_min over the mass factors; the value is printed in each cell.",
-                ch.heat_chart(
-                    [f"SoC {s:g}" for s in socs],
-                    [f"{a:g} m" for a in alts],
-                    vals,
-                    "Worst acceleration",
-                    "state of charge",
-                    "m/s^2",
-                    2,
-                    flg,
-                ),
-            )
-        )
-    if len(conv) >= 2:
-        series = []
-        for k, cv in enumerate(conv[:2]):
-            by = {
-                a: min(
-                    r["a_min_ms2"]
-                    for r in rows
-                    if r.get("convention") == cv and r["altitude_m"] == a
-                )
-                for a in alts
-            }
-            pts = sorted(by.items())
-            series.append(ch.Series(f"AIRSPEED_MIN read as {cv}", f"s{k + 1}", pts,
-                                    [f"{cv}: altitude {a:g} m, a_min {v:.2f} m/s^2" for a, v in pts],
-                                    labels={len(pts) - 1: cv}))  # fmt: skip
-        o.figures.append(
-            panelbox(
-                "True against equivalent airspeed reading",
-                "Lowest a_min at each altitude when the controller's AIRSPEED_MIN is read as true (tas) or as "
-                "equivalent (eas) airspeed. The gap is the effect of the convention.",
-                ch.xy_chart(
-                    series,
-                    "altitude [m]",
-                    "worst a_min [m/s^2]",
-                    "Convention effect",
-                    y_from_zero=True,
-                ),
-                _legend(*[(s.cls, "line", s.name) for s in series]),
-            )
-        )
+    grid = pusher_grid(sub, conv, e_rows)
+    if grid:
+        o.figures.append(grid)
     o.tables = [("Q2_worst", None), ("Q2_pusher_margin", None)]
     return o
 
@@ -558,6 +533,166 @@ def build_f(c: Ctx) -> Out:
 
 
 # ------------------------------------------------------------------------------------------- E
+# ------------------------------------------------------------------------------------------- E
+E_SEGS = ("takeoff", "fwd_transition", "climb", "descent", "back_transition", "landing")
+E_LABEL = {"takeoff": "take-off", "fwd_transition": "fwd transition", "climb": "climb",
+           "descent": "descent", "back_transition": "back transition", "landing": "landing",
+           "cruise": "cruise", "drop": "payload drop", "reserve": "reserve", "total": "total"}
+E_MISSION = {"one_way": "one way", "round_trip": "round trip (radius)"}
+
+
+def e_case_parts(row: Row) -> dict[str, float]:
+    """Wh per category of one E_budget row, the legs added (the leg is `out`, `ret` or `leg`)."""
+    parts: dict[str, float] = {}
+    for seg in E_SEGS:
+        parts[seg] = sum(num(row.get(f"{d}_{seg}_Wh")) for d in ("out", "ret", "leg")
+                         if ok(num(row.get(f"{d}_{seg}_Wh"))))
+    parts["cruise"] = num(row.get("cruise_Wh"))
+    if ok(num(row.get("drop_Wh"))) and num(row.get("drop_Wh")) > 0.0:
+        parts["drop"] = num(row["drop_Wh"])
+    parts["reserve"] = num(row.get("reserve_Wh"))
+    return parts
+
+
+def e_verdict(rows: Sequence[Row]) -> str:
+    """The maximum range against each requirement, as distance flown (a computed sentence)."""
+    plaus = next((r for r in rows if r.get("case") == "plausible"), None)
+    if plaus is None:
+        return ""
+    flown = num(plaus.get("flown_km"))
+    text = f"max range {flown:.1f} km flown"
+    if abs(num(plaus.get("range_km")) - flown) > 1e-9:
+        text += f" (radius {num(plaus['range_km']):.1f} km)"
+    bits = []
+    for r in rows:
+        if r.get("case") == "plausible" or not ok(num(r.get("required_km"))):
+            continue
+        need = num(r["required_km"])
+        bits.append(f"meets {need:g} km" if flown >= need
+                    else f"short of {need:g} km by {need - flown:.1f} km")
+    return f"<b>{ch.esc(text)}</b>" + (": " + ch.esc("; ".join(bits)) if bits else "")
+
+
+def _pair(r: Row, key: str, fmt: str) -> str:
+    """"register -> recommended" of a pair of columns `<key>_register*` / `<key>_recommended*`."""
+    lo, hi = num(r.get(key.replace("@", "register"))), num(r.get(key.replace("@", "recommended")))
+    return f"{lo:{fmt}} -> {hi:{fmt}}" if ok(lo) and ok(hi) else ""
+
+
+def scenarios_panel(rows: Sequence[Row]) -> str:
+    """What each scenario is, and the AIRBRAKE-exit state at the register's and the recommended
+    AIRSPEED_MIN (from E_scenarios; the entry rule is AIRSPEED_MIN - 2 as an equivalent airspeed)."""
+    r0 = rows[0]
+    reg, rec = num(r0.get("airspeed_min_register_ms")), num(r0.get("airspeed_min_recommended_ms"))
+    notes = [f"{r['scenario']}: {r['note']}" for r in rows if r.get("note")]
+    head = (
+        "The scenarios of scenarios.yaml and the state each back transition starts from: the "
+        f"AIRBRAKE exit at AIRSPEED_MIN - 2, read as an equivalent airspeed, with the register's "
+        f"AIRSPEED_MIN ({reg:g} m/s) -> the recommended one ({rec:g} m/s). The columns with an "
+        "arrow are in m/s (register -> recommended): the entry true airspeed, the ground speed "
+        "(the true airspeed less the headwind) and V/Vs, the true airspeed over the 1 g stall "
+        "speed at the scenario's mass." if ok(reg) and ok(rec)
+        else "The scenarios of scenarios.yaml and the state each back transition starts from.")
+    if ok(num(r0.get("entry_pitch_deg"))):
+        head += (f" Pitch at the exit {num(r0['entry_pitch_deg']):g} deg and rotors "
+                 f"'{r0.get('entry_rotor_start')}' (D.theta_fw0_deg and C.rotor_start).")
+    show = [{
+        "scenario": r["scenario"], "altitude_m": r.get("altitude_m"),
+        "isa_offset_k": r.get("isa_offset_k"), "mass_kg": r.get("mass_kg"), "soc": r.get("soc"),
+        "headwind_ms": r.get("headwind_ms"),
+        "entry TAS": _pair(r, "entry_tas_@_ms", ".1f"),
+        "ground speed": _pair(r, "entry_ground_@_ms", ".1f"),
+        "V/Vs": _pair(r, "entry_over_stall_@", ".2f"),
+    } for r in rows]
+    body = table_html("E_scenarios", list(show[0]), show)
+    if notes:
+        body += '<p class="cap">' + ch.esc("; ".join(notes)) + "</p>"
+    return panelbox("Scenarios at the recommended settings", head, body)
+
+
+def energy_cases_figure(bud: Sequence[Row]) -> str | None:
+    """Energy by segment at the maximum range, with the required distances behind it.
+
+    One panel per site and mission, from the `case` rows of E_budget (`plausible` and one per
+    requirement). The required cases are faint and outlined and appear when the checkbox is on;
+    they differ from the plausible case in cruise, reserve and total only. Each mission column
+    shares one energy axis, so the sites compare. A requirement is the distance flown.
+    """
+    if not any(r.get("case") for r in bud):
+        return None
+    keys = uniq([(r["site_amsl_m"], r["mission"]) for r in bud])
+    missions = [m for m in E_MISSION if any(k[1] == m for k in keys)]
+    sites = sorted({k[0] for k in keys})
+    xmax: dict[str, float] = {}
+    for m in missions:
+        xmax[m] = 1.03 * max([num(r.get("total_Wh")) for r in bud if r["mission"] == m
+                              and ok(num(r.get("total_Wh")))]
+                             + [num(r.get("usable_Wh")) for r in bud if r["mission"] == m
+                                and ok(num(r.get("usable_Wh")))] + [1.0])  # fmt: skip
+    panels = []
+    for site in sites:
+        for m in missions:
+            rows = [r for r in bud if r["site_amsl_m"] == site and r["mission"] == m]
+            title = f"site {site:g} m, {E_MISSION[m]}"
+            plaus = next((r for r in rows if r.get("case") == "plausible"), None)
+            if plaus is None:
+                panels.append((title, absent("the usable energy does not cover the fixed segments: "
+                                              "no maximum range")))
+                continue
+            order = [r for r in rows if r.get("case") != "plausible"]
+            parts = {r["case"]: e_case_parts(r) for r in rows}
+            usable = num(plaus.get("usable_Wh"))
+            cats = [k for k in E_LABEL if k in parts["plausible"] and k != "total"]
+            spans: dict[str, dict[str, tuple[float, float]]] = {}
+            for r in rows:
+                run, sp = 0.0, {}
+                for k in cats:
+                    v = parts[r["case"]].get(k, 0.0)
+                    sp[k] = (run, run + (v if ok(v) else 0.0))
+                    run = sp[k][1]
+                sp["total"] = (0.0, num(r.get("total_Wh")))
+                spans[r["case"]] = sp
+            crow = []
+            for k in [*cats, "total"]:
+                a, b = spans["plausible"][k]
+                what = f"{E_LABEL[k]} at the maximum range ({num(plaus['flown_km']):.1f} km): "
+                main_cls = "s2" if k == "reserve" else ("ink" if k == "total" else "s1")
+                ghosts = []
+                for gi, r in enumerate(order):
+                    ga, gb = spans[r["case"]][k]
+                    extra = ""
+                    if k == "total":
+                        over = -num(r.get("margin_Wh"))
+                        extra = (f", {over:.0f} Wh over the usable energy" if over > 0
+                                 else f", {-over:.0f} Wh to spare")
+                    ghosts.append((gi, ga, gb, f"{E_LABEL[k]} at the required "
+                                   f"{num(r.get('required_km')):g} km: {gb - ga:.1f} Wh{extra}"))
+                crow.append(ch.CaseRow(E_LABEL[k], (a, b, main_cls, f"{what}{b - a:.1f} Wh"),
+                                       ghosts))
+            svg = ch.case_bars(crow, "energy [Wh]", f"Energy by segment, {title}", xmax[m],
+                               rule=(usable, f"usable {usable:.0f}"))
+            panels.append((title, f'<p class="cap sub">{e_verdict(rows)}</p>{svg}'))
+    reqs = sorted({num(r["required_km"]) for r in bud if ok(num(r.get("required_km")))})
+    names = " and ".join(f"{q:g}" for q in reqs)
+    legend = ('<div class="legend" role="list" aria-label="Legend">'
+              '<span><i class="sw s1"></i>plausible: the maximum range the energy allows</span>'
+              + "".join(f'<span class="gl"><i class="sw s1 gh g{i}"></i>required {q:g} km</span>'
+                        for i, q in enumerate(reqs))
+              + '<span><i class="sw ink"></i>total (ends on the usable-energy rule at the '
+              "maximum range)</span></div>")
+    control = ('<input type="checkbox" id="e-req" class="etoggle"><label for="e-req" '
+               f'class="elabel">Show the required ranges ({names} km) on top of the plausible '
+               "range</label>")
+    return panelbox(
+        "Maximum range and the required ranges: energy by segment",
+        "Energy of each segment (out and return added) at the maximum range the usable energy "
+        f"allows. The checkbox adds the same budget at the required distances ({names} km flown; "
+        "a round trip of 100 km is a 50 km radius), faint and outlined: they differ only in "
+        "cruise, reserve and total, and they pass the usable-energy rule wherever the aircraft "
+        "cannot fly them. Each column shares one axis.",
+        control + legend + ch.multiples(panels, 2))
+
+
 def build_e(c: Ctx) -> Out:
     o = Out()
     summ, bud, seg = c.rows("E_summary"), c.rows("E_budget"), c.rows("E_segments")
@@ -600,9 +735,13 @@ def build_e(c: Ctx) -> Out:
         )
         if n_ok != len(hv):
             o.flags.append("hover check fails")
-    # whole-mission waterfall: one per site and mission, at the longest range in E_budget
+    # energy by segment at the maximum range with the required distances behind it (E_budget has
+    # a `case` column); a folder from before it keeps the two older figures below
+    cases_fig = energy_cases_figure(bud)
+    if cases_fig:
+        o.figures.append(cases_fig)
     segs = ["takeoff", "fwd_transition", "climb", "descent", "back_transition", "landing"]
-    if bud:
+    if bud and not cases_fig:
         panels = []
         for key in uniq([(r["site_amsl_m"], r["mission"]) for r in bud]):
             rs = [r for r in bud if (r["site_amsl_m"], r["mission"]) == key]
@@ -611,7 +750,7 @@ def build_e(c: Ctx) -> Out:
             for sg in segs:
                 v = sum(
                     num(r.get(f"{d}_{sg}_Wh"))
-                    for d in ("out", "ret")
+                    for d in ("out", "ret", "leg")
                     if ok(num(r.get(f"{d}_{sg}_Wh")))
                 )
                 items.append((sg.replace("_", " "), v, f"{sg}: {v:.1f} Wh", "s1"))
@@ -637,7 +776,7 @@ def build_e(c: Ctx) -> Out:
                 _legend(("s1", "line", "mission segments"), ("s2", "line", "reserve")),
             )
         )
-    if summ:
+    if summ and not cases_fig:
         req = sorted({int(k.split("_at_")[1][:-2]) for r in summ for k in r if k.startswith("margin_Wh_at_")
                       and k.endswith("km")})  # fmt: skip
         items = [(f"site {r['site_amsl_m']:g} m, {r['mission']}", r["max_range_km"],
@@ -758,6 +897,10 @@ def build_e(c: Ctx) -> Out:
             "ratio is a like-for-like size check by site, not a validation.",
             table_html("E_cases", [k for k in cols if any(k in r for r in cases)], cases),
         ))
+        scen = c.rows("E_scenarios")
+        if scen:
+            o.figures.append(scenarios_panel(scen))
+            o.tables.append(("E_scenarios", None))
         o.tables += [("E_summary_recommended", None), ("E_segments_recommended", None),
                      ("E_budget_recommended", None), ("E_hover_check_recommended", None),
                      ("Q2_pusher_margin_recommended", None), ("Q2_worst_recommended", None)]

@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from sagetrans.analysis import braking, runs
+from sagetrans.analysis.braking import RHO0
 from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
@@ -221,6 +223,40 @@ def ft_site_energy(
     return out
 
 
+def e_scenarios(inp: StudyInputs, rec: Mapping[str, Any]) -> Table:
+    """What each scenario of scenarios.yaml is, and the state the back transition starts from.
+
+    One row per scenario: where it is (altitude, ISA offset, mass, SoC, headwind) and, at the
+    register's AIRSPEED_MIN and at the FT optimum's, the AIRBRAKE-exit state D, C and B1 start
+    from: the entry airspeed (`AIRSPEED_MIN - 2`, read as an equivalent airspeed), its true and
+    ground speed, and the ratio to the 1 g stall speed. The pitch and the rotor start are the
+    settings of D and C.
+    """
+    conv = inp.study.D.entry_convention
+    rows: Table = []
+    for name, sc in inp.scenarios.items():
+        vp_s = sc.vehicle_for(inp.vehicle)
+        rho = sc.rho
+        v_stall = runs.stall_speed(vp_s, rho)
+        row: dict[str, Any] = {
+            "scenario": name, "note": inp.scenario_notes.get(name, ""),
+            "altitude_m": sc.altitude_amsl_m, "isa_offset_k": sc.isa_offset_k,
+            "mass_kg": vp_s.m, "soc": sc.soc, "headwind_ms": sc.headwind_ms,
+            "stall_tas_ms": v_stall,
+        }  # fmt: skip
+        for lab, v in (("register", inp.airspeed_min), ("recommended", rec["airspeed_min"])):
+            tas = braking.entry_airspeed(float(v), rho, conv)
+            row[f"airspeed_min_{lab}_ms"] = float(v)
+            row[f"entry_eas_{lab}_ms"] = tas * math.sqrt(rho / RHO0)
+            row[f"entry_tas_{lab}_ms"] = tas
+            row[f"entry_ground_{lab}_ms"] = tas - sc.headwind_ms
+            row[f"entry_over_stall_{lab}"] = tas / v_stall
+        row["entry_pitch_deg"] = inp.study.D.theta_fw0_deg
+        row["entry_rotor_start"] = inp.study.C.rotor_start
+        rows.append(row)
+    return rows
+
+
 def e_cases(inp: StudyInputs, tables: Mapping[str, Table], rec: Mapping[str, Any]) -> Table:
     """E at the register and at the recommended settings, side by side, one row per case, site and
     mission. E's forward transition (the wait to AIRSPEED_MIN plus the rotor fade) is set beside
@@ -312,12 +348,15 @@ def assemble(
         parts = [md_table(tables["E_summary"]), "",
                  "The range is an OUTPUT: what is left after the fixed segments and the reserve "
                  "goes to cruise (the radius for a round trip, which flies twice that). The "
-                 "requirements are comparison columns only. A pusher command above "
+                 "requirements are distances flown (a round trip of 100 km is a 50 km radius) "
+                 "and comparison columns only. A pusher command above "
                  "`TKOFF_THR_MAX` is reported (`over_ceiling`); a segment fails only above 1 or at "
                  "another limit (`feasible`, `limit`).", "",
-                 "Budget by range (a range shorter than the largest leg's fixed distance is "
-                 "not tabulated):", "",
-                 md_table(tables.get("E_budget", []), ["site_amsl_m", "mission", "range_km",
+                 "Budget at the maximum range (`plausible`) and at each required distance "
+                 "(`range_km` is the one-way distance or the radius, `flown_km` the distance "
+                 "flown in all; a case shorter than the fixed segments is not tabulated):", "",
+                 md_table(tables.get("E_budget", []), ["site_amsl_m", "mission", "case",
+                                                        "flown_km", "range_km",
                                                         "cruise_Wh", "reserve_Wh", "total_Wh",
                                                         "usable_Wh", "margin_Wh", "fits"]), "",
                  "Segments:", "",
@@ -495,6 +534,7 @@ def assemble(
         tables.update(rec_task["tables"])
         errors += [f"recommended settings: {e}" for e in rec_task.get("errors", [])]
         tables["E_cases"] = e_cases(inp, tables, rec_task)
+        tables["E_scenarios"] = e_scenarios(inp, rec_task)
         sections["E and Q2 at the recommended settings"] = (  # the register case stays the headline
             "AIRSPEED_MIN and TKOFF_THR_MAX of the FT optimum instead of the register's; the "
             "register case above stays the headline. D is re-run at the recommended entry speed. "
