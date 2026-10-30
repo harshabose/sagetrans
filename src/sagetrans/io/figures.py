@@ -43,16 +43,17 @@ def range_margin_figure(
     budget: BudgetResult, required_km: Sequence[float] = (100.0, 113.0)
 ) -> Figure:
     """Energy margin against range: where the usable pack energy runs out."""
-    lo = budget.fixed_distance_m / 1e3
-    ranges = np.linspace(lo, max(budget.max_range_m / 1e3 * 1.1, max(required_km) * 1.1), 120)
-    margin = [budget.margin_J(r * 1e3) / 3600.0 for r in ranges]
+    n = getattr(budget, "n_legs", 1)  # the axis is the distance flown, a round trip flies 2 radii
+    lo = n * budget.fixed_distance_m / 1e3
+    flown = np.linspace(lo, max(n * budget.max_range_m / 1e3 * 1.1, max(required_km) * 1.1), 120)
+    margin = [budget.margin_J(r * 1e3 / n) / 3600.0 for r in flown]
     fig, ax = plt.subplots(figsize=(7.0, 4.0))
-    ax.plot(ranges, margin, color="#264653")
+    ax.plot(flown, margin, color="#264653")
     ax.axhline(0.0, color="black", lw=0.8)
     for r in required_km:
         ax.axvline(r, color="#e76f51", ls="--", lw=1.0)
         ax.annotate(f"{r:.0f} km", (r, ax.get_ylim()[1] * 0.9), rotation=90, va="top", ha="right")
-    ax.axvline(budget.max_range_m / 1e3, color="#2a9d8f", lw=1.2)
+    ax.axvline(n * budget.max_range_m / 1e3, color="#2a9d8f", lw=1.2)
     ax.set_xlabel("flown distance [km]")
     ax.set_ylabel("usable energy margin [Wh]")
     ax.set_title("Range margin (reserves included)")

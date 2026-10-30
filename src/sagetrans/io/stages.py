@@ -185,7 +185,8 @@ def q2_cells(inp: StudyInputs, conventions: list[str]) -> list[Q2Cell]:
                 for soc in c.soc:
                     f = pusher.forward_accel(vps, sc.rho, v_end, soc, inp.tkoff_thr_max, c.n_speed)
                     row = {
-                        "convention": conv, "altitude_m": alt, "rho_kg_m3": sc.rho,
+                        "convention": conv, "feeds_e": conv == c.feed_convention,
+                        "altitude_m": alt, "rho_kg_m3": sc.rho,
                         "mass_factor": mf, "mass_kg": vps.m, "soc": soc,
                         "tkoff_thr_max": inp.tkoff_thr_max, "tkoff_status": status,
                         "v_end_tas_ms": v_end, "a_min_ms2": _num(f.a_min),
@@ -639,11 +640,12 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                          "v_cap_ms": p.v_cap, "binding_limit": p.binding,
                          "descent_time_s": p.time, "hover_power_W": p.hover_power,
                          "hover_energy_J": p.energy_J, "kappa_source": p.kappa_source})  # fmt: skip
+            # every 20th sample and the last one (touchdown): a plain stride stops short of it
+            keep = sorted({*range(0, len(p.h), 20), len(p.h) - 1})
             out["tables"].setdefault("F_profile", []).extend(
-                {"scenario": name, "h_m": float(h), "descent_rate_ms": float(v),
-                 "time_to_go_s": float(t), "energy_to_go_J": float(e)}
-                for h, v, t, e in zip(p.h[::20], p.v[::20], p.t_to_go[::20], p.e_to_go[::20],
-                                      strict=True)
+                {"scenario": name, "h_m": float(p.h[i]), "descent_rate_ms": float(p.v[i]),
+                 "time_to_go_s": float(p.t_to_go[i]), "energy_to_go_J": float(p.e_to_go[i])}
+                for i in keep
             )  # fmt: skip
         out["tables"]["F_descent"] = rows
 
@@ -662,7 +664,6 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
             worst = w_f.a_min if ec.a_fwd_metric == "min" else w_f.a_equiv
         tabs = out["tables"]
         budgets: dict[str, Any] = {}
-        ranges = sorted({*ec.ranges_km, *inp.requirements_km})
         window = inp.window
         for site in ec.sites_amsl_m:
             for kind in ec.missions:
@@ -679,7 +680,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                 mp_site = site_mission(inp, site)
                 rho_c = float(atmosphere.density(mp_site.cruise_amsl_m, mp_site.isa_offset_k))
                 v_c = mb.profiles[mb.legs[0][0]].v_cruise or math.nan
-                reqs = {f"{x:g}": x * 1e3 for x in inp.requirements_km}
+                # a requirement is the distance flown: a round trip of 100 km is a 50 km radius
+                reqs = {f"{x:g}": mb.radius_for_flown(x * 1e3) for x in inp.requirements_km}
                 summ = soc_trace.summarise(cs.checks)
                 row: dict[str, Any] = {
                     "site_amsl_m": site, "mission": kind, "cruise_amsl_m": mp_site.cruise_amsl_m,
@@ -704,9 +706,9 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                     ok = rm >= mb.fixed_distance_m
                     row[f"margin_Wh_at_{lab}km"] = mb.margin_J(rm) / 3600.0 if ok else ""
                     row[f"conflict_{lab}km"] = mb.max_range_m < rm
+                    row[f"radius_at_{lab}km"] = rm / 1e3
                 tabs.setdefault("E_summary", []).append(row)
-                ok_ranges = [x * 1e3 for x in ranges if x * 1e3 >= mb.fixed_distance_m]
-                for brow in mb.table(ok_ranges):
+                for brow in mb.cases(inp.requirements_km):
                     tabs.setdefault("E_budget", []).append(
                         {"site_amsl_m": site, "mission": kind, **brow})
                 by_leg = {n: (m, b) for n, m, b in mb.legs}

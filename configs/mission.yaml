@@ -37,6 +37,6 @@ descent:         # analysis F
   h_slow: {value: 6.0, unit: "m", source: "below this height the descent slows to v_final; set to the ArduPilot Q_LAND_FINAL_ALT default", status: assumed}
   v_final: {value: 0.5, unit: "m/s", source: "final descent rate; set to the ArduPilot Q_LAND_FINAL_SPD default; rangefinder and ground effect", status: assumed}
 
-requirements:    # the range requirements the budget is checked against
+requirements:    # the distances flown the budget is checked against (a round trip of 100 km is a 50 km radius)
   range_primary_km: {value: 100.0, unit: "km", source: "specified range requirement", status: stated}
   range_p95_km: {value: 120.0, unit: "km", source: "about 113 km needed for the 95th-percentile mission", status: stated}

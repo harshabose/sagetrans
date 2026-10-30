@@ -130,6 +130,16 @@ svg.viz{width:100%;height:auto;display:block;overflow:visible}
 .bar.ref{fill:var(--refc)}
 .bar.hatched{fill:url(#hatch);stroke:var(--refc);stroke-width:1.5;stroke-dasharray:4 3}
 .hatchbg{fill:var(--panel)}.hatchln{stroke:var(--refc);stroke-width:2.5}
+.etoggle{position:absolute;opacity:0}.elabel{display:inline-flex;gap:8px;align-items:center;cursor:pointer;margin:2px 0 10px}
+.elabel::before{content:"";width:16px;height:16px;border:2px solid var(--ink2);border-radius:4px;background:var(--panel)}
+.etoggle:checked+.elabel::before{background:var(--s2);border-color:var(--s2);box-shadow:inset 0 0 0 3px var(--panel)}
+.etoggle:focus-visible+.elabel::before{outline:2px solid var(--s2);outline-offset:2px}
+.ghosts{display:none}.etoggle:checked~.mult .ghosts{display:inline}.gl{display:none}.etoggle:checked~.legend .gl{display:inline-flex}
+.bar.ghost{fill-opacity:.22;stroke-width:1.4}.bar.ghost.s1{stroke:var(--s1)}.bar.ghost.s2{stroke:var(--s2)}.bar.ghost.ink{stroke:var(--ink2)}
+.bar.ghost.g0{stroke-dasharray:5 3}.bar.ghost.g1{stroke-dasharray:1.5 3;fill-opacity:.12}
+.rule{stroke:var(--ink);stroke-width:1.5;stroke-dasharray:2 3}.rulelab{font-weight:600}
+.sw.gh{height:10px;width:18px;border:1.4px solid var(--s1);background:color-mix(in srgb,var(--s1) 22%,transparent)}
+.sw.gh.g0{border-style:dashed}.sw.gh.g1{border-style:dotted;background:color-mix(in srgb,var(--s1) 12%,transparent)}
 .refmk{stroke:var(--refc);stroke-width:3}
 .band{fill:var(--accent-soft);opacity:.7}
 .cell{stroke:var(--panel)}.cell.ok{fill:var(--accent-soft)}.cell.no{fill:var(--panel);

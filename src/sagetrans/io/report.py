@@ -67,14 +67,16 @@ def build_report(r: ReportInputs, k: int = 3) -> str:
     if r.budget is not None:
         out += ["Range margin (analysis E, reserves included):", ""]
         out += ["| Range | Total [Wh] | Margin [Wh] | Fits |", "| --- | --- | --- | --- |"]
-        for row in r.budget.table([x * 1e3 for x in r.required_km]):
+        n = getattr(r.budget, "n_legs", 1)  # a requirement is the distance flown
+        for x, row in zip(r.required_km, r.budget.table([x * 1e3 / n for x in r.required_km]),
+                          strict=True):
             out.append(
-                f"| {row['range_km']:.0f} km | {row['total_Wh']:.0f} | {row['margin_Wh']:.0f} "
+                f"| {x:.0f} km | {row['total_Wh']:.0f} | {row['margin_Wh']:.0f} "
                 f"| {'yes' if row['fits'] else 'NO'} |"
             )
         conflicts = r.budget.conflicts(tuple(x * 1e3 for x in r.required_km))
         bad = [f"{km / 1e3:.0f} km" for km, c in conflicts.items() if c]
-        out += ["", f"Maximum range: {r.budget.max_range_m / 1e3:.0f} km."]
+        out += ["", f"Maximum range: {r.budget.max_range_m * n / 1e3:.0f} km flown."]
         if bad:
             out.append(f"**Range requirement and usable energy conflict at: {', '.join(bad)}.**")
         out.append("")

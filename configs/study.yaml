@@ -77,8 +77,7 @@ F:                         # landing descent profile
 
 E:                         # energy budget
   sites_amsl_m: [0, 1500, 2500, 5000]       # airfield elevations; cruise = site + mission.profile.climb_height_m
-  missions: [round_trip, one_way]           # the range is an OUTPUT; requirements are comparison columns
-  ranges_km: [50, 100, 150]   # report points: one-way distance, or the radius of a round trip
+  missions: [round_trip, one_way]           # the range is an OUTPUT; the requirements (mission.yaml) are the comparison, as distance flown: a round trip of 100 km is a 50 km radius
   a_plan_fallback_ms2: 2.5    # Q_TRANS_DECEL used when D gives no recommendation
   a_fwd_mode: case            # forward-transition acceleration: case (Q2 at E's site) | worst (Q2 grid) | mission
   a_fwd_metric: min           # min (worst over speed) | equiv (distance-equivalent constant a)
