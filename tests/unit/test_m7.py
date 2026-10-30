@@ -360,11 +360,12 @@ def test_ci_check_fails_on_a_missing_or_failing_verification_id(tmp_path):
         p.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>", encoding="utf-8")
         return p
 
-    ok, lines = ci_check.check(junit(range(1, 16)))
-    assert ok and lines[0] == "T-01: pass" and len(lines) == 15
-    ok, lines = ci_check.check(junit([i for i in range(1, 16) if i != 12]))
+    ids = [i for i in range(1, 16) if i != 11]  # T-11 was withdrawn with B1
+    ok, lines = ci_check.check(junit(ids))
+    assert ok and lines[0] == "T-01: pass" and len(lines) == 14
+    ok, lines = ci_check.check(junit([i for i in ids if i != 12]))
     assert not ok and "T-12: MISSING" in lines
-    ok, lines = ci_check.check(junit(range(1, 16), failing=(7,)))
+    ok, lines = ci_check.check(junit(ids, failing=(7,)))
     assert not ok and "T-07: FAILED" in lines
     assert ci_check.main([str(junit(range(1, 16)))]) == 0
     assert ci_check.main([str(junit(range(1, 16), failing=(3,)))]) == 1
