@@ -1,5 +1,7 @@
 > B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 > [!abstract] What this file is
 > Analysis C: **what the autopilot can be configured to do.** It searches over a few ArduPilot parameters (`Q_BACKTRANS_MS`, `Q_A_ANGLE_MAX`, `Q_M_SPIN_MIN`, and in the `full` scope also `AIRSPEED_MIN`, `Q_TRANSITION_MS`, `TKOFF_THR_MAX`) with CMA-ES, flies the ArduPilot-structured baseline controller through an ensemble of scenarios, and scores each parameter set with the ensemble cost (10.1). The result is compared with the free-form bound (B1) and the speed-scheduled law (B2) to say whether a custom transition controller is worth the effort. Section 10C of the proposal.
 > The shipped study runs the **`back` scope only**: the back transition from level cruise, with three parameters free.

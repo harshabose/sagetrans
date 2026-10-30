@@ -1,7 +1,7 @@
 """Motor and ESC electrical/mechanical model (eqs. 6.8-6.9).
 
 `smooth` is the smoothing parameter of section 6.5 in amps: 0 gives the exact clip used by
-simulation, a positive value the smooth version used by collocation.
+simulation, a positive value the smooth version used by the CasADi model.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ Num = Any
 def effective_throttle(delta: Num, p: MotorParams, smooth: float = 0.0) -> Num:
     """ESC dead zone: zero below the dead-zone fraction, rescaled to reach 1.
 
-    `smooth` > 0 rounds the two corners (dimensionless width, for collocation)."""
+    `smooth` > 0 rounds the two corners (dimensionless width, for the CasADi model)."""
     x = (delta - p.dead_zone) / (1.0 - p.dead_zone)
     if smooth == 0.0:
         return ca.fmin(ca.fmax(x, 0.0), 1.0)

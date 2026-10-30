@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from sagetrans.io.view import charts as ch
-from sagetrans.io.view.html import Item, Out, absent, details, panelbox, table_html
+from sagetrans.io.view.html import Item, Out, absent, panelbox, table_html
 from sagetrans.io.view.load import Results
 from sagetrans.io.view.units import fmt_value, header_label, unit_of
 
@@ -943,7 +943,7 @@ def _c_cases(c: Ctx) -> list[str]:
 
 def history_panels(band: float | None) -> list[ch.Panel]:
     """The four panels of C's history figures: the airspeed axis starts at 0 and the altitude panel
-    draws the B1 altitude band as two thin lines."""
+    draws the altitude band (`C.history_band_m`) as two thin lines."""
     lines = [(band, f"+{band:g} m"), (-band, f"-{band:g} m")] if band else []
     return [
         ch.Panel("V", "airspeed [m/s]", "m/s", ymin=0.0),
@@ -954,28 +954,26 @@ def history_panels(band: float | None) -> list[ch.Panel]:
 
 
 def select_history(
-    c_rows: Sequence[Row], b1_rows: Sequence[Row], view: str, headline: str | None = None
+    c_rows: Sequence[Row], view: str, headline: str | None = None
 ) -> tuple[dict[str, list[Row]], tuple[str, Any]]:
     """The rows of one history figure, by series, all from ONE scenario or ONE ensemble member.
 
-    `view` is "core" (C's runs on the B1 headline scenario, with B1's replays of the same scenario)
-    or "default_fails" (both C cases on the ensemble member where the default overshoots most; no B1).
-    Returns `({case: rows}, ("scenario", name) | ("member", index))`. A figure never mixes
-    scenarios: C rows of another scenario or member, and B1 rows of another scenario, are dropped.
+    `view` is "core" (C's runs on the history scenario) or "default_fails" (both C cases on the
+    ensemble member where the default overshoots most). Returns `({case: rows}, ("scenario", name)
+    | ("member", index))`. A figure never mixes scenarios: C rows of another scenario or member
+    are dropped.
     """
     cr = [r for r in c_rows if r.get("view") == view]
     if view == "core":
         name = headline or (cr[0].get("scenario") if cr else None)
         cr = [r for r in cr if r.get("scenario") == name]
-        br = [r for r in b1_rows if name is not None and r.get("scenario") == name]
         ident: tuple[str, Any] = ("scenario", name)
     else:
         mem = cr[0].get("member") if cr else None
         cr = [r for r in cr if r.get("member") == mem]
-        br = []
         ident = ("member", mem)
     out: dict[str, list[Row]] = {}
-    for r in [*cr, *br]:
+    for r in cr:
         out.setdefault(str(r.get("case")), []).append(r)
     return out, ident
 
@@ -998,8 +996,6 @@ def scenario_caption(r: Row) -> str:
 C_HIST_STYLE = {  # case -> (class, dashed, thick)
     "C optimum": ("s1", False, True),
     "C ardupilot_default": ("ref", True, False),
-    "B1 attached": ("s2", False, False),
-    "B1 c_envelope": ("s3", False, False),
     "C unconstrained (reference)": ("ink", True, False),
 }
 
@@ -1027,7 +1023,7 @@ def history_figure(
 
 
 def build_c_histories(c: Ctx, o: Out) -> None:
-    """C's two time-history figures: the B1 scenario, and where the default fails."""
+    """C's two time-history figures: the history scenario, and where the default fails."""
     hist = c.rows("C_history")
     if not hist:
         o.absent.append("not in this run: C_history")
@@ -1045,46 +1041,24 @@ def build_c_histories(c: Ctx, o: Out) -> None:
             ch.panel_figure("c_hist", HIST_PANELS, ts),
             _legend(*[(s.cls, "dash" if s.dash else "line", s.short) for s in ts])))
         return
-    b1h = [{**r, "case": r.get("case") or f"B1 {r.get('variant')}"} for r in c.rows("B1_history")]
-    b1h = b1h or [{**r, "case": f"B1 {r.get('variant')}"} for r in c.rows("B1_schedule")]
-    headline = b1h[0].get("scenario") if b1h else None
-    front = c.rows("B1_front")
     band_vals = [num(r.get("band_eps_h_m")) for r in hist if ok(num(r.get("band_eps_h_m")))]
     band = band_vals[0] if band_vals else None
 
-    series, (_, name) = select_history(hist, b1h, "core", headline)
+    series, (_, name) = select_history(hist, "core")
     ref_h = [r for r in c.rows("C_ref_history") if r.get("scenario") == name]
     if series and ref_h:
         series["C unconstrained (reference)"] = ref_h
     if series and name is not None:
         first = next(rows[0] for case, rows in series.items() if case.startswith("C"))
         entry = {case: num(first.get("V0_tas_ms")) for case in series}
-        for case in series:  # B1's own entry speed, when its table has it
-            if case.startswith("B1 "):
-                fr = next((r for r in front if r.get("scenario") == name
-                           and f"B1 {r.get('variant')}" == case and ok(num(r.get("V0_air_ms")))), None)
-                if fr is not None:
-                    entry[case] = num(fr["V0_air_ms"])
-        note = ""
-        if any(k.startswith("B1 ") for k in series):
-            env_rows = [r for r in front if r.get("scenario") == name
-                        and r.get("variant") == "c_envelope" and r.get("replay_verified") is True]
-            late = [r.get("replay_late_command_ok") for r in env_rows]
-            tail = ""
-            if "B1 c_envelope" in series and late:
-                tail = ("; c_envelope is verified for exact timing only" if False in late
-                        else "; c_envelope also replays with commands 10 ms late")
-            note = (" The B1 curves are open-loop bounds that use the altitude band, not "
-                    "controllers" + tail + ".")
         o.figures.append(history_figure(
-            f"Same scenario as B1 ({name})",
+            f"C on one scenario ({name})",
             f"Scenario {name}: {scenario_caption(first)}. C's optimum and the ArduPilot default "
-            "run on the scenario that B1's headline replay uses; each curve ends with a marker "
+            "run on it (`C.history_scenario`); each curve ends with a marker "
             + ("where the run stopped. The dashed curve is C without the wing-angle cap (the "
-               "model ignores the stall; reference only)." if ref_h else "where the run stopped.")
-            + note,
+               "model ignores the stall; reference only)." if ref_h else "where the run stopped."),
             "c_hist_core", series, band, entry))
-    series, (_, mem) = select_history(hist, [], "default_fails")
+    series, (_, mem) = select_history(hist, "default_fails")
     if series and mem is not None:
         first = next(iter(series.values()))[0]
         entry = {case: num(first.get("V0_tas_ms")) for case in series}
@@ -1490,7 +1464,7 @@ def build_c(c: Ctx) -> Out:
             if it:
                 o.items.append(it)
 
-    # 1. energy against distance: C only (B1's points are single scenarios; its chapter has them)
+    # 1. energy against distance
     series, labels = [], []
     cr = sorted((r for r in curve if (r.get("grid") or "coarse") == "coarse"
                  and ok(num(r.get("p95_distance_m"))) and ok(num(r.get("mean_energy_kJ")))
@@ -1529,8 +1503,7 @@ def build_c(c: Ctx) -> Out:
             panelbox(
                 "Energy against stopping distance",
                 "C: ensemble mean energy against the 95th-percentile distance, the optimum's "
-                "ramp with q varied (each point is labelled with its q). B1's scenario points "
-                "are in the B1 chapter.",
+                "ramp with q varied (each point is labelled with its q).",
                 ch.xy_chart(
                     series, "stopping distance [m]", "bus energy [kJ]", "Energy against distance"
                 ),
@@ -1649,530 +1622,6 @@ def build_c(c: Ctx) -> Out:
         ("C_ref_params", None),
         ("C_ref_runs", None),
         ("C_ref_history", None),
-    ]
-    return o
-
-
-# ------------------------------------------------------------------------------------------ B1
-LATE_WARNING = "verified for exact timing only: fails with commands 10 ms late"
-VARIANT_ORDER = ("margin", "attached", "c_envelope")
-VARIANT_CLS = {"margin": "s4", "attached": "s2", "c_envelope": "s3"}  # colour follows the variant
-VARIANT_ROLE = {"margin": "flyable bound", "attached": "upper bound at the lift peak",
-                "c_envelope": "upper bound at the lift peak"}  # fmt: skip
-
-
-def variants_in_order(names: Sequence[Any]) -> list[Any]:
-    """The variants present, the flyable one first, any other (a config's own) after them."""
-    rank = {v: i for i, v in enumerate(VARIANT_ORDER)}
-    return sorted(uniq(list(names)), key=lambda v: rank.get(str(v), len(rank)))
-
-
-REASONS = ("verified", "not converged", "replay mismatch", "fails 10 ms late")
-
-
-def b1_reason(r: Row) -> str:
-    """Why a B1 point is or is not quoted: the `reason` column, or derived from the flags."""
-    if r.get("reason"):
-        return str(r["reason"])
-    if r.get("converged") is not True:
-        return "not converged"
-    if r.get("replay_verified") is not True:
-        return "replay mismatch"
-    if r.get("replay_late_command_ok") is False:
-        return "fails 10 ms late"
-    return "verified"
-
-
-def reasons_fold(front: Sequence[Row]) -> str:
-    """A collapsible table: points by scenario, variant and reason (all of B1_front)."""
-    cnt: dict[tuple[str, str], dict[str, int]] = {}
-    for r in front:
-        key = (str(r.get("scenario")), str(r.get("variant")))
-        cnt.setdefault(key, dict.fromkeys(REASONS, 0))[b1_reason(r)] += 1
-    rows = [{"scenario": s, "variant": v, **c, "points": sum(c.values())}
-            for (s, v), c in sorted(cnt.items())]  # fmt: skip
-    return details(
-        "Why points are not quoted: count by scenario, variant and reason",
-        table_html("B1_front_reasons", ["scenario", "variant", *REASONS, "points"], rows))
-
-
-def verified_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
-    """One panel per scenario: the verified B1 points per variant and, where B1_gap has one, C's
-    run of THAT scenario (at the register parameters with q = 2). A panel with three or more
-    verified points of a variant draws them as a front; a panel with none says so."""
-    matched: dict[str, Row] = {}
-    for g in gap:
-        if (g.get("b1_replay_verified") is True and ok(num(g.get("c_energy_kJ")))
-                and ok(num(g.get("c_distance_m")))):  # fmt: skip
-            matched.setdefault(g["scenario"], g)
-    panels, leg, fronts, with_points = [], {}, 0, 0
-    for s in uniq([r["scenario"] for r in front]):
-        series, most = [], 0
-        for v in variants_in_order([r.get("variant") for r in front]):
-            rs = sorted([r for r in front if r["scenario"] == s and r.get("variant") == v
-                         and r.get("replay_verified") is True and ok(num(r.get("energy_kJ")))],
-                        key=lambda r: num(r.get("distance_m")))  # fmt: skip
-            most = max(most, len(rs))
-            if rs:
-                cls = VARIANT_CLS.get(v, "ink")
-                series.append(ch.Series(
-                    f"B1 {v}", cls, [(r["distance_m"], r["energy_kJ"]) for r in rs],
-                    [tip(r, ["eps_x_m", "energy_kJ", "distance_m", "excursion_m", "t_f_s"],
-                         f"B1 {v}") for r in rs],
-                    line=len(rs) >= 3))  # fmt: skip
-                leg[v] = (cls, "line", f"B1 {v}")
-        mc = matched.get(s)
-        notes = ""
-        if mc is not None:
-            series.append(ch.Series(
-                "C, this scenario", "s1", [(num(mc["c_distance_m"]), num(mc["c_energy_kJ"]))],
-                [tip(mc, ["c_energy_kJ", "c_distance_m", "c_source"], f"C, {s}")],
-                line=False, marker="dia"))
-            leg["C"] = ("s1", "dia", "C, the same scenario (register parameters, q = 2)")
-        else:
-            notes = absent("no scenario-matched C run")
-        if most:
-            with_points += 1
-            fronts += most >= 3
-            panels.append((f"{s} (front)" if most >= 3 else s,
-                           ch.xy_chart(series, "distance [m]", "bus energy [kJ]", f"Verified {s}",
-                                       w=340, h=280) + notes))  # fmt: skip
-        else:
-            panels.append((s, absent("no verified solution") + notes))
-    if not panels:
-        return None
-    title = ("Pareto front by scenario" if with_points and fronts == with_points
-             else "Verified solutions by scenario")
-    return panelbox(
-        title,
-        "Least energy against the distance cap per wing-limit variant, verified points only; "
-        "a panel with three or more verified points of a variant draws them as a front. The C "
-        "point is C's run of the same scenario at the register parameters with q = 2, drawn "
-        "where B1_gap has one.",
-        ch.multiples(panels), _legend(*leg.values()))
-
-
-def _verified_gap(r: Row) -> bool:
-    return (r.get("b1_replay_verified") is True and ok(num(r.get("b1_energy_kJ")))
-            and ok(num(r.get("c_energy_kJ"))))  # fmt: skip
-
-
-def limit_text(front: Sequence[Row], variant: str) -> str:
-    """The wing limit of a variant in words, from the B1_front columns (no number if absent)."""
-    lim = next((num(r["alpha_limit_deg"]) for r in front if r.get("variant") == variant
-                and ok(num(r.get("alpha_limit_deg")))), NAN)  # fmt: skip
-    return f"|alpha_w| up to {lim:.2f} deg" if ok(lim) else "its wing limit"
-
-
-def gap_contents(front: Sequence[Row], gap: Sequence[Row], c_row: Row | None) -> str:
-    """What "B1 below C" contains, written from the computed rows (the numbers are the files').
-
-    C and B1 `margin` fly the same wing limit and the same pitch ceiling, so the pitch freedom is
-    already removed from the gap between them; what is left is B1's missing rotor lag and its
-    clairvoyance (it knows the scenario and is open loop, where C's four settings serve every
-    ensemble member). `attached` and `c_envelope` add the lift peak: a wing limit above the margin
-    (and, for `attached`, a pitch command above C's ceiling). C without the wing cap is a reference
-    that ignores the stall.
-    """
-    lag = num(c_row.get("rotor_lag_s")) if c_row else NAN
-    ptch = num(c_row.get("ptch_lim_deg")) if c_row else NAN
-    lim = num(c_row.get("alpha_limit_deg")) if c_row else NAN
-    held = bool(c_row and c_row.get("alpha_enforced") is True)
-    out: list[str] = []
-    for s in uniq([r.get("scenario") for r in gap]):
-        rows = {str(r.get("variant")): r for r in gap if r.get("scenario") == s}
-        base = next((r for r in rows.values() if ok(num(r.get("c_energy_kJ")))), None)
-        if base is None:
-            continue
-        c_e, c_d = num(base["c_energy_kJ"]), num(base.get("c_distance_m"))
-        txt = (f"{s}: C (register parameters, q = 2" + (f", wing held to {lim:.2f} deg" if held
-               and ok(lim) else ", wing not held") + f") needs {c_e:.1f} kJ over "
-               f"{c_d:.0f} m. ")
-        e_m = num(rows["margin"].get("b1_energy_kJ")) if "margin" in rows and _verified_gap(
-            rows["margin"]) else NAN
-        if ok(e_m):
-            txt += (f"B1 `margin` needs {e_m:.1f} kJ ({(1 - e_m / c_e) * 100:.0f} % less): it flies "
-                    "the same wing limit and the same pitch ceiling"
-                    + (f" ({ptch:g} deg)" if ok(ptch) else "")
-                    + ", so the pitch freedom is already removed from that saving; what is left is "
-                    "B1's missing rotor lag" + (f" (C has {lag:g} s)" if ok(lag) else "")
-                    + " and its clairvoyance (B1 knows the scenario and is open loop, where C's four "
-                    "settings serve every ensemble member). ")
-        elif "margin" in rows:
-            txt += "B1 `margin` has no verified point here, so nothing is said about it. "
-        for v in ("attached", "c_envelope"):
-            r = rows.get(v)
-            if r is not None and not _verified_gap(r):
-                txt += f"B1 `{v}` has no verified point here, so nothing is said about it. "
-            if r is not None and _verified_gap(r):
-                e_v = num(r["b1_energy_kJ"])
-                step = f"{e_v - e_m:+.1f} kJ against `margin`, " if ok(e_m) else ""
-                txt += (f"B1 `{v}` needs {e_v:.1f} kJ ({step}{(1 - e_v / c_e) * 100:.0f} % below C): "
-                        f"it adds operation at the lift peak ({limit_text(front, v)}"
-                        + (", and a pitch command above C's ceiling" if v == "attached" else "")
-                        + "). ")
-        e_u = num(base.get("c_unconstrained_energy_kJ"))
-        if ok(e_u):
-            txt += (f"C without the wing cap needs {e_u:.1f} kJ over "
-                    f"{num(base.get('c_unconstrained_distance_m')):.0f} m because the model ignores "
-                    "the stall: a reference, not a competitor.")
-        out.append(txt.strip())
-    if not out:
-        return panelbox("What the gap between B1 and C contains",
-                        "No scenario has both a C run and a verified B1 solution.", "")
-    out.append("So the B1-C gap is not what a better ArduPilot parameter set could save: it is the "
-               "sum of the missing rotor lag, the clairvoyance and, for `attached` and "
-               "`c_envelope`, the lift-peak operation.")
-    return panelbox("What the gap between B1 and C contains", " ".join(out), "")
-
-
-def gap_ladder_figure(front: Sequence[Row], gap: Sequence[Row]) -> str | None:
-    """The gap ladder, one panel per scenario: C (wing held), B1 `margin`, `attached` and
-    `c_envelope` at C's own distance, verified points only, and C without the wing cap as a hatched
-    reference. A scenario without a C run draws nothing and says so."""
-    panels = []
-    for s in uniq([r.get("scenario") for r in front]):
-        rows = {str(r.get("variant")): r for r in gap if r.get("scenario") == s}
-        base = next((r for r in rows.values() if ok(num(r.get("c_energy_kJ")))), None)
-        if base is None:
-            panels.append((str(s), absent("no scenario-matched C run: nothing to compare with")))
-            continue
-        held = base.get("c_wing_held") is True
-        c_e = num(base["c_energy_kJ"])
-        items = [("C" + (" (wing held)" if held else ""), c_e,
-                  tip(base, ["c_energy_kJ", "c_distance_m", "c_source"], f"C, {s}"), "s1")]
-        for v in variants_in_order(list(rows)):
-            r = rows[str(v)]
-            if _verified_gap(r):
-                items.append((f"B1 {v}", num(r["b1_energy_kJ"]),
-                              tip(r, ["b1_energy_kJ", "b1_distance_m", "energy_margin"],
-                                  f"B1 {v}, {s}"), VARIANT_CLS.get(str(v), "ink")))
-        hatched = []
-        e_u = num(base.get("c_unconstrained_energy_kJ"))
-        if ok(e_u):
-            hatched = [len(items)]
-            items.append(("C without the cap (ref.)", e_u,
-                          tip(base, ["c_unconstrained_energy_kJ", "c_unconstrained_distance_m"],
-                              "C unconstrained: the model ignores the stall; reference only"),
-                          "ref"))
-        steps = []
-        for it in items[1:]:
-            name = it[0]
-            delta = it[1] - c_e
-            if name == "B1 margin":
-                steps.append(f"{name}: {delta:+.1f} kJ, the missing rotor lag and the clairvoyance "
-                             "(the pitch freedom is already removed)")
-            elif name.startswith("B1 "):
-                steps.append(f"{name}: {delta:+.1f} kJ, adds lift-peak operation")
-        steps += [f"B1 {v}: no verified point here" for v in variants_in_order(list(rows))
-                  if not _verified_gap(rows[str(v)])]
-        note = f'<p class="cap">{ch.esc("; ".join(steps))}.</p>' if steps else ""
-        panels.append((str(s), ch.bar_chart(items, "bus energy [kJ]", f"Gap ladder {s}", w=470,
-                                            hatched=hatched) + note))
-    if not panels:
-        return None
-    return panelbox(
-        "Gap ladder: C, B1 margin, attached, c_envelope",
-        "Energy of the same problem at C's own distance (C at the register parameters with q = 2), "
-        "verified B1 points only. The hatched bar is C without the wing cap: it ignores the stall, "
-        "is a reference and never a recommendation.",
-        ch.multiples(panels, 1),
-        _legend(("s1", "line", "C, wing held"), ("s4", "line", "B1 margin (flyable bound)"),
-                ("s2", "line", "B1 attached (upper bound at the lift peak)"),
-                ("s3", "line", "B1 c_envelope (upper bound at the lift peak)"),
-                ("ref", "dash", "C without the cap (reference only)")))
-
-
-def attached_statement(front: Sequence[Row], variant: str = "attached") -> str:
-    """Is `attached` attached? Where the wing limit of `variant` sits against the peak of the
-    model's C_L, in the same angle convention (alpha_w, with the wing incidence), from the B1_front
-    columns."""
-    rows = [r for r in front if r.get("variant") == variant and ok(num(r.get("alpha_limit_deg")))
-            and ok(num(r.get("alpha_w_clmax_deg")))]  # fmt: skip
-    if not rows:
-        return ""
-    r = rows[0]
-    lim, pk, a_s = num(r["alpha_limit_deg"]), num(r["alpha_w_clmax_deg"]), num(r.get("alpha_s_deg"))
-    clmax, frac = num(r.get("cl_max")), num(r.get("cl_at_limit_over_max"))
-    below = pk - lim
-    text = (f"The {variant} limit is |alpha_w| <= {lim:.2f} deg"
-            + (f" ({lim / a_s:.2f} x alpha_s, alpha_s = {a_s:.2f} deg)" if ok(a_s) and a_s else "")
-            + f". The model's C_L peaks at alpha_w = {pk:.2f} deg"
-            + (f" (C_L,max {clmax:.3f})" if ok(clmax) else "") + ", in the same convention. ")
-    if below >= 0.0:
-        text += f"The limit sits {below:.2f} deg below that peak"
-        text += f", where C_L is {frac:.2%} of C_L,max" if ok(frac) else ""
-        text += (". It leaves no stall margin in lift: the wing is flown at the top of the lift "
-                 "curve, not below it" if below < 1.0 else
-                 ". That is a margin in angle before the lift peak")
-    else:
-        text += f"The limit sits {-below:.2f} deg ABOVE that peak, in the stalled region"
-    peaks = [num(x.get("alpha_w_peak_above_vs_deg")) for x in front
-             if x.get("variant") == variant and x.get("replay_verified") is True
-             and ok(num(x.get("alpha_w_peak_above_vs_deg")))]  # fmt: skip
-    if peaks:
-        span = (f"{min(peaks):.2f} deg" if f"{min(peaks):.2f}" == f"{max(peaks):.2f}"
-                else f"{min(peaks):.2f} to {max(peaks):.2f} deg")
-        text += f". The replayed peak wing angle of the verified points is {span}"
-    return text + "."
-
-
-def nominal_of(r: Row, front: Sequence[Row], head_eps: float) -> tuple[Row | None, str]:
-    """The nominal point of a sensitivity row: the same scenario, variant and distance cap with
-    the setting unchanged (the headline altitude band, the default rotor start and end band).
-    Returns (the verified B1_front row or None, why there is none: "" | "unverified" | "none")."""
-    cands = [f for f in front if f.get("scenario") == r.get("scenario")
-             and f.get("variant") == r.get("variant") and f.get("eps_x_m") == r.get("eps_x_m")
-             and f.get("eps_h_m") == head_eps]  # fmt: skip
-    for f in cands:
-        if f.get("replay_verified") is True and ok(num(f.get("energy_kJ"))):
-            return f, ""
-    return None, ("unverified" if cands else "none")
-
-
-def b1_sensitivity_figure(sens: Sequence[Row], front: Sequence[Row]) -> str | None:
-    """B1's energy when one setting changes, with the nominal energy as a hollow marker on each
-    row. The row label names the scenario and the variant (the band sweep uses `c_envelope`); a row
-    whose nominal point is not verified says so."""
-    head = next((num(f["eps_h_m"]) for f in front if ok(num(f.get("eps_h_m")))), NAN)
-    items, refs = [], []
-    for r in sens:
-        if not ok(num(r.get("energy_kJ"))):
-            continue
-        nom, why = nominal_of(r, front, head)
-        label = f"{r.get('sensitivity')} = {r.get('value')} ({r.get('scenario')}, {r.get('variant')})"
-        if why:
-            label += " [nominal unverified]" if why == "unverified" else " [no nominal point]"
-        items.append((label, num(r["energy_kJ"]), tip(r, ["energy_kJ", "distance_m", "replay_verified"]),
-                      "s2"))  # fmt: skip
-        refs.append((num(nom["energy_kJ"]), f"nominal: {num(nom['energy_kJ']):.2f} kJ (the setting "
-                     f"unchanged; {nom.get('scenario')}, {nom.get('variant')}, cap "
-                     f"{nom.get('eps_x_m'):g} m)") if nom is not None else None)  # fmt: skip
-    if not items:
-        return None
-    swept = {str(r.get("variant")) for r in sens}
-    unswept = [v for v in variants_in_order([r.get("variant") for r in front])
-               if str(v) not in swept]
-    skipped = (" The variant" + ("s " if len(unswept) > 1 else " ")
-               + ", ".join(f"`{v}`" for v in unswept) + " is not swept here." if unswept else "")
-    leg = _legend(("s2", "dot", "B1 with the setting changed"),
-                  ("ref", "hollow", "nominal: the same scenario and cap, setting unchanged"))
-    return panelbox(
-        "Sensitivity",
-        "Energy of B1 when one setting changes; the hollow marker on each row is the nominal "
-        "energy of that row's scenario, variant and distance cap. A row marked [nominal "
-        "unverified] has no verified nominal point to compare with." + skipped,
-        ch.dot_chart(items, "bus energy [kJ]", "B1 sensitivity", zero=False, refs=refs), leg)
-
-
-def gap_items(gap: Sequence[Row]) -> list[Item]:
-    """The tiles of the B1-C gap, variant by variant and never averaged or picked across them:
-    `margin` first ("flyable bound"; a scenario where it has no verified point says so and quotes
-    nothing), then `attached` and `c_envelope` ("upper bounds at the lift peak"; `c_envelope` with
-    its warning when its schedule fails a late command).
-
-    Read from the existing `B1_gap` rows; the energy tiles are those of the first verified row.
-    """
-    items: list[Item] = []
-    first = True
-    for v in variants_in_order([r.get("variant") for r in gap]):
-        role = VARIANT_ROLE.get(str(v), "")
-        for gi, r in enumerate(gap):
-            if r.get("variant") != v:
-                continue
-            label = f"B1 below C ({r['scenario']}, {v})"
-            if not (r.get("b1_replay_verified") is True and ok(num(r.get("b1_energy_kJ")))
-                    and ok(num(r.get("c_energy_kJ")))):  # fmt: skip
-                if v == "margin":
-                    items.append(Item(label, "no verified solution", "",
-                                      f"B1_gap.b1_replay_verified[{gi}]",
-                                      note=f"{role}: nothing is quoted for it here"))
-                continue
-            c_e, b_e = num(r["c_energy_kJ"]), num(r["b1_energy_kJ"])
-            warn = LATE_WARNING if r.get("b1_late_command_ok") is False else ""
-            if first:
-                first = False
-                for lab, col in (("C energy", "c_energy_kJ"), ("B1 energy", "b1_energy_kJ")):
-                    items.append(Item(f"{lab} ({r['scenario']}, {r['variant']})",
-                                      f"{num(r[col]):.2f}", "kJ", f"B1_gap.{col}[{gi}]"))
-            if c_e:
-                items.append(Item(
-                    label, f"{(1 - b_e / c_e) * 100:.0f} %", "",
-                    f"B1_gap.b1_energy_kJ[{gi}]; B1_gap.c_energy_kJ[{gi}]",
-                    f"1 - {b_e:.2f}/{c_e:.2f}", ". ".join(x for x in (role, warn) if x)))
-    return items
-
-
-def build_b1(c: Ctx) -> Out:
-    o = Out()
-    front, gap = c.rows("B1_front"), c.rows("B1_gap")
-    if gap:
-        o.items += gap_items(gap)
-        c_row = next((r for r in c.rows("C_params") if r.get("case") == "optimum"), None)
-        o.figures.append(gap_contents(front, gap, c_row))
-        ladder = gap_ladder_figure(front, gap)
-        if ladder:
-            o.figures.append(ladder)
-        mar = attached_statement(front, "margin")
-        if mar:
-            o.figures.append(panelbox('Is "margin" flyable?', mar, ""))
-        att = attached_statement(front)
-        if att:
-            o.figures.append(panelbox('Is "attached" attached?', att, ""))
-        # the quoted gap can come from a schedule that does not survive a late command: say so
-        late = [r for r in gap if r.get("b1_replay_verified") is True
-                and r.get("b1_late_command_ok") is False]  # fmt: skip
-        for r in late:
-            o.flags.append(f"the B1-C gap quoted ({r['scenario']}, {r['variant']}) comes from a "
-                           "schedule that fails when its commands are 10 ms late")
-    if front:
-        bi = c.extreme("B1_front", "energy_kJ", min, lambda r: r.get("replay_verified") is True)
-        if bi is not None:
-            for lab, col in (
-                ("Rotors on at", "t_rotor_on_s"),
-                ("V / Vs at rotor start", "V_over_Vs_rotor_on"),
-                ("Peak wing angle (gated)", "alpha_w_peak_gated_deg"),
-            ):
-                it = c.item(
-                    lab,
-                    "B1_front",
-                    col,
-                    bi,
-                    note=f"{front[bi].get('scenario')}, {front[bi].get('variant')}",
-                )
-                if it:
-                    o.items.append(it)
-        nv = sum(1 for r in front if r.get("replay_verified") is True)
-        o.items.append(
-            Item(
-                "Replay-verified points",
-                f"{nv} of {len(front)}",
-                "",
-                expr="count of replay_verified = yes in B1_front",
-            )
-        )
-        if nv < len(front):
-            o.flags.append(f"{len(front) - nv} point(s) without a verified solution")
-        n_fragile = sum(1 for r in front if r.get("replay_verified") is True
-                        and r.get("replay_late_command_ok") is False)
-        if n_fragile:
-            o.flags.append(
-                f"{n_fragile} verified point(s) fail when the commands are 10 ms late "
-                "(replay_late_command_ok = no): the optimum sits on the lift peak, a fraction of a "
-                "degree below the stall cliff")
-        o.figures.append(reasons_fold(front))
-        fig = verified_figure(front, gap)
-        if fig:
-            o.figures.append(fig)
-    if gap:
-        items = []
-        for r in sorted(gap, key=lambda g: variants_in_order(
-                [x.get("variant") for x in gap]).index(g.get("variant"))):
-            if r.get("b1_replay_verified") is True and ok(num(r.get("b1_energy_kJ"))):
-                lab = f"{r['scenario']} {r['variant']}"
-                items.append(
-                    (
-                        lab + ": C",
-                        r["c_energy_kJ"],
-                        tip(r, ["c_energy_kJ", "c_distance_m"], lab + " C"),
-                        "s1",
-                    )
-                )
-                cls = VARIANT_CLS.get(r["variant"], "ink")
-                items.append(
-                    (
-                        lab + ": B1",
-                        r["b1_energy_kJ"],
-                        tip(r, ["b1_energy_kJ", "b1_distance_m", "energy_margin"], lab + " B1"),
-                        cls,
-                    )
-                )
-        if items:
-            o.figures.append(
-                panelbox(
-                    "B1 against C at C's own distance",
-                    "Energy of the same problem in the two "
-                    "analyses (B1 has no rotor lag where C has one).",
-                    ch.bar_chart(items, "bus energy [kJ]", "Gap B1 to C"),
-                    _legend(
-                        ("s1", "line", "C"),
-                        ("s4", "line", "B1 margin"),
-                        ("s2", "line", "B1 attached"),
-                        ("s3", "line", "B1 c_envelope"),
-                    ),
-                )
-            )
-    sched = c.rows("B1_schedule")
-    if sched:
-        ts = []
-        for v in variants_in_order([r.get("variant") for r in sched]):
-            rs = [r for r in sched if r.get("variant") == v]
-            cls = VARIANT_CLS.get(v, "ink")
-            ts.append(
-                ch.TSeries(
-                    f"B1 {v}",
-                    cls,
-                    f"B1 {v}",
-                    [r["t"] for r in rs],
-                    {
-                        "delta_r": [num(r.get("delta_r")) for r in rs],
-                        "theta_cmd": [num(r.get("theta_cmd")) for r in rs],
-                    },
-                    False,
-                    True,
-                )
-            )
-        o.figures.append(
-            panelbox(
-                "Optimal schedule",
-                "The rotor throttle and the pitch command that B1 found "
-                f"(scenario {sched[0].get('scenario')}, distance cap {sched[0].get('eps_x_m'):g} m).",
-                ch.panel_figure(
-                    "b1_sched",
-                    [
-                        ch.Panel("delta_r", "rotor throttle [-]", "", 2),
-                        ch.Panel("theta_cmd", "pitch command [deg]", "deg", 1),
-                    ],
-                    ts,
-                ),
-                _legend(*[(s.cls, "line", s.short) for s in ts]),
-            )
-        )
-    bh = c.rows("B1_history") or sched
-    if bh:
-        plan = {
-            f"B1 {v}": (
-                VARIANT_CLS.get(v, "ink"),
-                f"B1 {v}",
-                False,
-                True,
-            )
-            for v in variants_in_order(
-                [r.get("variant") or str(r.get("case", "")).replace("B1 ", "") for r in bh]
-            )
-        }
-        rows = [{**r, "case": r.get("case") or f"B1 {r.get('variant')}"} for r in bh]
-        ts = hist_series(rows, plan, ["V", "h", "theta", "delta_r"])
-        if ts:
-            o.figures.append(
-                panelbox(
-                    "Time histories",
-                    "B1's replayed solution at the headline cap, as in C's figure.",
-                    ch.panel_figure("b1_hist", HIST_PANELS, ts),
-                    _legend(*[(s.cls, "line", s.short) for s in ts]),
-                )
-            )
-    sens = c.rows("B1_sens")
-    if sens:
-        sf = b1_sensitivity_figure(sens, front)
-        if sf:
-            o.figures.append(sf)
-    o.tables = [
-        ("B1_front", None),
-        ("B1_gap", None),
-        ("B1_sens", None),
-        ("B1_schedule", None),
-        ("B1_history", None),
     ]
     return o
 

@@ -1,5 +1,7 @@
 # Project report — Sage VTOL transition and landing-approach toolkit
 
+> **Status 2026-10-30:** B1 (open-loop optimal control) was removed, like B2 before it (docs/B1_removal.md). The milestone narrative below is history and keeps its B1 mentions.
+
 Status at the time of writing: milestones **M0–M7 are implemented**; M8 (calibration against
 iron-bird data and software-in-the-loop) is not started because it needs data that does not exist
 yet. **144 tests pass**, and `ruff`, `mypy --strict` and the `import-linter` layering contract are

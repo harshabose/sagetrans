@@ -18,7 +18,6 @@
 | `unit/test_defaults.py` | 9 | the ArduPilot-defaults register, `resolve_default`, the third case in C and FT |
 | `unit/test_view.py` | 15 | the results viewer and workbook: tolerance, legacy folders, `data-src`, no network, `--view` |
 | `unit/test_m5.py` | 13 | **T-12** (analytic), search, ensembles, baseline controller, analysis C (including C taking `Q_TRANS_DECEL` from analysis D) |
-| `unit/test_m6.py` | 9 | analysis B1 including **T-11** |
 | `unit/test_m7.py` | 23 | sensitivity, run records, results writer, release gate (including the real-problem T-12 rule), the CI check, report |
 | `unit/test_register_drift.py` | 8 | the YAML register against the physics defaults; missing register files |
 | `unit/physics_reference.py` | — | the NumPy reference implementation used only by tests (T-15, T-07) |
@@ -39,7 +38,7 @@ The release gate reads tests by name: a test whose name starts `test_tNN_` count
 | T-08 | motor steady state | `test_physics.py` |
 | T-09 | step-size convergence against the adaptive reference | `test_dynamics.py` |
 | T-10 | Cartesian against flight-path-angle dynamics | `test_dynamics.py` |
-| T-11 | collocation replayed in the simulator | `test_m6.py` |
+| T-11 | withdrawn with B1 (a collocation result replayed in the simulator) | none (docs/B1_removal.md) |
 | T-12 | optimiser repeatability from three seeds | `test_m5.py` tests the search machinery on an analytic cost only. **The real-problem T-12 is not a unit test** (a three-seed optimisation takes minutes); it is enforced by the release gate through `search_spreads` in the run record (`test_m7.py`). See `analysis/README.md` for the measured spreads |
 | T-13 | unit boundary | `test_units.py` |
 | T-14 | TBD makes a run DRAFT; report writing refused | `test_config.py` (and `test_m7.py` for the writer) |
@@ -49,8 +48,8 @@ The release gate reads tests by name: a test whose name starts `test_tNN_` count
 
 * **Tests are not under mypy** (`files = ["src"]`), and `ruff` ignores the naming rules for physics
   symbols in `tests/` (`T_r`, `Vc`, …) as in `src/`.
-* **Slow tests** are the collocation ones (`test_m6.py`, about 70 s in total; the solves are shared
-  through module-scoped fixtures) and the sensitivity runs (`test_m7.py`, about 30 s).
+* **Slow tests** are the sensitivity runs (`test_m7.py`, about 30 s) and the C and D runs of
+  `test_c_stall_configs.py` and `test_pitch_limit.py`.
 * **Not in the suite:** the `benchmarks/` and `regression/` folders of the proposed layout; the
   real-problem T-12 runs; a Sobol run on the real model.
 * **Property-based tests** use Hypothesis (density positivity and monotonicity, thrust and drag

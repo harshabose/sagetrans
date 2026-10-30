@@ -16,7 +16,7 @@ stepping, or analyses.**
 
 ## The central design decision: one model, written once, in CasADi (NFR-08, O-17)
 
-Collocation (analysis B1) needs the vehicle as a *symbolic* expression; simulation needs fast
+Collocation (analysis B1, removed: docs/B1_removal.md) needed the vehicle as a *symbolic* expression; simulation needs fast
 *numeric* code. Writing both invites drift, so the vehicle is written **once**, as CasADi
 expressions, and compiled into a single `casadi.Function`. `simulate()` calls it with numbers;
 the collocation NLP calls it with symbols.
@@ -39,7 +39,7 @@ the collocation NLP calls it with symbols.
   gradient-based solver can use them (used by collocation). The current-clip width is `smooth`
   amps; the dimensionless clips (rotor inflow ratios, ESC dead zone) use the fixed
   `SMOOTH_ND = 0.02`. The size of the difference is measured and reported (see
-  `analysis/README.md`, B1).
+  `analysis/README.md`).
 
 ## `params.py` — parameter containers and the placeholder vehicle
 
@@ -232,16 +232,16 @@ m vh_dot = T_p sin(th) + T_r cos(th) - H_r sin(th) + L cos(g) - D sin(g) - m g  
 
 ### Non-smooth or singular points, and what is and is not done about them
 
-These matter for gradient-based use (analysis B1) and were pointed out in review:
+These matter for gradient-based use (analysis B1, removed) and were pointed out in review:
 
 | Item | Status |
 | --- | --- |
 | **Stall blend** (`M = 100 /rad`, a cliff about 0.01 rad wide) | **Not smoothed.** It is the model. Collocation *works around* it with a stall margin (`|alpha_w| <= 0.85 alpha_s` while the wing carries load), enforced at nodes and midpoints; without that the optimiser flew through the cliff between nodes and its solutions failed replay. |
 | **`gamma = atan2(vh, va)`** | **Not regularised, and its derivative is undefined at `V = 0`.** `V` itself is protected (`sqrt(... + 1e-9)`) but `gamma` is not. Simulation never differentiates it, and B1 stays away from hover in still air or a headwind (the end condition is ground speed 1 m/s and `|vh| <= 0.5 m/s`, so airspeed is about 1 m/s or more at the last node). **A tailwind equal to the end ground speed would put the airspeed near zero at the last node and approach the singularity**; B1 has not been run there. A formulation that must reach hover exactly needs a regularised flight-path angle. |
-| **Attitude rate limit** (`if_else` on `q >= q_max`) | **Not smoothed** (it is non-smooth in both exact and smooth modes). It is inactive in the B1 solutions: the largest pitch rate seen was about 1.0 rad/s against `q_max = 1.5`. If a problem drives `q` to the limit, expect gradient trouble there. |
+| **Attitude rate limit** (`if_else` on `q >= q_max`) | **Not smoothed** (it is non-smooth in both exact and smooth modes). It was inactive in the B1 solutions: the largest pitch rate seen was about 1.0 rad/s against `q_max = 1.5`. If a problem drives `q` to the limit, expect gradient trouble there. |
 | **Motor torque switch at zero current** | **Smoothed when `smooth > 0`** (`tanh(I_m / smooth)`); exact `sign` for simulation. |
 | **Current clip and rotor-inflow clips** | Smoothed when `smooth > 0` (hyperbolic rounding). |
-| **ESC dead zone** | Smoothed when `smooth > 0`; B1 avoids it entirely by using the *effective* throttle as its control. |
+| **ESC dead zone** | Smoothed when `smooth > 0`; B1 (removed) avoided it entirely by using the *effective* throttle as its control. |
 
 ## Tests
 

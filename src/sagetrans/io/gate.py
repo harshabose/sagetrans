@@ -11,7 +11,9 @@ from pathlib import Path
 from sagetrans.analysis.sensitivity import SensitivityResult
 from sagetrans.io.record import FullRunRecord
 
-REQUIRED_TESTS = tuple(f"T-{i:02d}" for i in range(1, 16))
+# T-11 (a collocation result replayed in the simulator) belonged to B1, which is removed
+# (docs/B1_removal.md): no analysis is left that it could verify.
+REQUIRED_TESTS = tuple(f"T-{i:02d}" for i in range(1, 16) if i != 11)
 # Analyses that use a stochastic search must register under these names in the run record and
 # carry their three-seed cost spread; T-12 must hold on the REAL problem, not only on the analytic
 # cost the unit test uses.

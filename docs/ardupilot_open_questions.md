@@ -1,5 +1,7 @@
 # ArduPilot open questions O-01 … O-23: source findings
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 Read from ArduPilot `master` (`ArduPlane/version.h` says 4.8.0-dev) on 2026-10-07 (O-14 to O-23 on 2026-10-27, from `ArduPlane/quadplane.cpp` (`SLT_Transition::update`, `set_FW_roll_pitch`, `active_frwd`, `hold_hover`, `hold_stabilize`, `assist_climb_rate_cms`, `multicopter_attitude_rate_update`), `ArduPlane/servos.cpp` (`apply_throttle_limits`), `ArduPlane/VTOL_Assist.cpp`, `ArduPlane/takeoff.cpp`, `libraries/AP_TECS/AP_TECS.cpp`; those functions are the same in `Plane-4.7.2` as in master apart from two lines of failure handling, and `Plane-4.6.3` differs only in the airspeed accessor name; O-12 and O-13 on 2026-10-27, from `libraries/AC_AttitudeControl/AC_PosControl.cpp` and `.h`, `libraries/AC_PID/AC_PID.cpp`, `ArduPlane/quadplane.cpp`, `ArduPlane/transition.h`). Latest release notes in the
 same tree: 4.7.0 (21 Jul 2026), 4.7.1 (31 Aug 2026), 4.7.2-beta1 (29 Sep 2026).
 Files: `ArduPlane/quadplane.cpp`, `quadplane.h`, `transition.h`, `mode_qrtl.cpp`,

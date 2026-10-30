@@ -1,5 +1,7 @@
 # ArduPilot defaults as a reference in the results — implementation spec
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 Status: DRAFT for review. Written 2026-10-27. Chosen option: "D in two steps" (values column first, then
 the simulated third case in FT and C, then the summary chapter). Reference mock: `docs/report_mock.html`
 (settings table has the new column; the figures do not show the default yet).

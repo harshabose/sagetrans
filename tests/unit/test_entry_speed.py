@@ -1,4 +1,4 @@
-"""The back transition has one entry speed: the AIRBRAKE exit, in D, C, B1 and E."""
+"""The back transition has one entry speed: the AIRBRAKE exit, in D, C and E."""
 
 import dataclasses
 import math

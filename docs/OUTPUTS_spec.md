@@ -1,8 +1,8 @@
 # Outputs: results viewer (HTML) and workbook — implementation spec
 
 Status: DRAFT for review. Reference mock: `docs/report_mock.html` (static, hand-built from the real
-C and B1 numbers; open it before reading this spec). Companion: `docs/B2_removal_spec.md`
-(do that first, so the viewer never has to know about B2).
+C numbers; open it before reading this spec). Companions: `docs/B2_removal_spec.md` and
+`docs/B1_removal.md` (B2 and B1 are removed, so the viewer never has to know about them).
 
 Audience of the output: the author and the lab. Technical, complete, true to the tables. Length is
 not a problem; a wrong or untraceable number is.
@@ -73,7 +73,7 @@ Rules for the loader:
    in that chapter ("not in this run: C_q_curve") and the rest of the chapter still renders. A
    missing column makes that chart/column absent, never a crash. Unknown tables and columns still
    appear in the workbook and in the chapter's "all tables" block.
-4. **Legacy folders.** The current `results/study` has `B1_pareto_S-01.csv`, `C_ensemble_runs.csv`
+4. **Legacy folders.** The old `results/study` had `C_ensemble_runs.csv`
    and no `C_runs`/`C_q_curve`. The registry lists aliases (`C_runs` <- `C_ensemble_runs`), and the
    page header shows "results written by an older version; some figures need a new run".
 5. Never invent: a number on the page is a cell of a table, or an arithmetic expression of cells
@@ -92,7 +92,7 @@ screens, collapsed at phone width. Order:
    parameter: parameter, value, unit, source analysis, evidence grade, flags, "what moves it".
    Source: `settings_recommended.csv` (new, section 5). Below it, "not decided by this run" for
    parameters with no recommendation and the reason.
-3. **Chapters** A, Q2, D, F, E, C, B1, Forward (when it exists), Sensitivity. Same internal order in
+3. **Chapters** A, Q2, D, F, E, C, Forward (when it exists), Sensitivity. Same internal order in
    every chapter (section 4).
 4. **Inputs and grades**: `inputs_register.csv` (new) as a table with the grade as a coloured chip
    plus text, sorted worst grade first; `inputs_used.md` collapsed below it.
@@ -190,7 +190,7 @@ today unless marked NEW.
 - **Scenarios at the recommended settings** (after "Register against recommended settings", only
   with `E_scenarios`, written by `assemble.e_scenarios`): one row per scenario of
   `scenarios.yaml` with its altitude, ISA offset, mass, SoC and headwind, and the AIRBRAKE-exit
-  state D, C and B1 start from at the register's and the recommended `AIRSPEED_MIN` (entry
+  state D and C start from at the register's and the recommended `AIRSPEED_MIN` (entry
   airspeed `AIRSPEED_MIN - 2` read as EAS, its TAS, the ground speed, V/Vs). The pitch and rotor
   start are the settings of D and C.
 - `E_summary` columns: `max_range_km` (one-way distance or radius), `flown_total_km`, and per
@@ -203,10 +203,8 @@ today unless marked NEW.
   `C_history` (NEW).
 - Figures (these exist in the mock — copy their construction from `mock/build.py`):
   1. **Energy against stopping distance** at each `Q_TRANS_DECEL`: register ramp (dashed) and
-     searched ramp (solid) from `C_q_curve` rows (`q`, `energy_kJ`, `distance_m`); B1 front points
-     overlaid when `B1_front` exists. Hollow marker where `flags` is non-empty.
-  2. **Time histories** of the optimum member (V, h, theta, rotor throttle), from `C_history`;
-     B1 series overlaid from `B1_history` when present. Shared crosshair.
+     searched ramp (solid) from `C_q_curve` rows (`q`, `energy_kJ`, `distance_m`). Hollow marker where `flags` is non-empty.
+  2. **Time histories** of the optimum member (V, h, theta, rotor throttle), from `C_history`. Shared crosshair.
   3. **Search convergence**: best cost per seed (`C_search`), spread printed; points at a search
      bound flagged from `C_params.at_bound`.
   4. **Ensemble spread**: `energy_kJ`, `excursion_m`, `end_sink_ms`, `overshoot_m` per member
@@ -218,9 +216,9 @@ today unless marked NEW.
 - **Report fixes (branch `feat/c-b1-report-fixes`)**, all read from columns, never recomputed in the
   viewer:
   - *Time histories (C1).* `C_history` rows carry `view` (`core` | `default_fails`), `scenario`,
-    `member` (-1 = not an ensemble member), the scenario's axes, the entry airspeed and the B1 band.
-    Figure "Same scenario as B1 (<name>)" = C optimum and the ArduPilot default on `B1.scenarios[0]`
-    next to the B1 replays; figure "Where the default fails (ensemble member N)" = both C cases on the
+    `member` (-1 = not an ensemble member), the scenario's axes, the entry airspeed and the altitude band.
+    Figure "C on one scenario (<name>)" = C optimum and the ArduPilot default on `C.history_scenario`
+    (band `C.history_band_m`); figure "Where the default fails (ensemble member N)" = both C cases on the
     member with the largest default overshoot. The last sample of every run is kept and marked
     ("stops at"); the airspeed panel starts at 0. An older folder (no `view`) gets the old figure.
   - *Margins (C2).* `C_params` (every case): `os_tol_m`, `sink_tol_ms`, `max_end_sink_ms`,
@@ -235,7 +233,7 @@ today unless marked NEW.
     (J minus the penalty); two aligned charts: failing members (by type in the tooltip) and the
     change of `J_smooth`.
   - *Energy against distance (C5).* Marks drawn register, default, optimum (last); every coarse q
-    labelled; no B1 points.
+    labelled.
   - *Search convergence (C6).* `C_search` has `T_bt_s`, `theta_A_deg`, `spin_min`,
     `Q_TRANS_DECEL_ms2` per seed; a computed ridge / single-optimum / not-converged sentence; the
     `theta_A:hi` chip says the bound is `min(30, PTCH_LIM_MAX_DEG)` (`theta_A_hi_deg`,
@@ -258,42 +256,6 @@ today unless marked NEW.
     about a degree above it; the figures say so ("the C_L peak is the stall").
   - *Settings sheet.* The `Q_TRANS_DECEL` note states the wing limit (or that it is not held), the
     stop distance and time (p95), D's `a_rec` minimum and C's excess over it, and "provisional".
-
-### B1 · open-loop optimal control
-- Tables: `B1_front`, `B1_gap`, `B1_sens`, `B1_schedule`, `B1_history` (NEW). Legacy:
-  `B1_pareto_<scenario>` read as `B1_front`.
-- Figures: (1) Pareto front (energy against distance, one line per variant) with the C result
-  overlaid; (2) the gap B1 vs C as bars at matched distance (`B1_gap`); (3) the optimal schedule
-  (throttle, theta_cmd against time; `B1_schedule`); (4) time histories as in C figure 2;
-  (5) sensitivity dot plot (`B1_sens`).
-- **Report fixes (branch `feat/c-b1-report-fixes`).** (a) The headline gap tiles come from every
-  verified `B1_gap` row, `attached` first, `c_envelope` beside it with "verified for exact timing
-  only" when `replay_late_command_ok` is false. (b) "Verified solutions by scenario": one panel per
-  scenario with the verified points per variant and the scenario-matched C run of `B1_gap`
-  (`c_source`) where one exists, "no verified solution" / "no scenario-matched C run" otherwise; a
-  collapsible table of all `B1_front` points by scenario, variant and `reason` (new column: verified,
-  not converged, replay mismatch, fails 10 ms late). (c) A computed paragraph on what the gap
-  contains (pitch freedom 34.4 against `PTCH_LIM_MAX_DEG`, rotor lag, foreknowledge). (d) "Is
-  `attached` attached?": `B1_front` columns `alpha_limit_deg`, `alpha_s_deg`, `wing_incidence_deg`,
-  `alpha_w_clmax_deg`, `cl_max`, `cl_at_limit_over_max` and a computed paragraph on how far the limit
-  sits below the lift peak. (e) Sensitivity chart with the nominal energy (same scenario, variant and
-  distance cap, headline band) as a hollow marker per row and the variant in the row label; a row
-  says "[nominal unverified]" or "[no nominal point]".
-- **Wing-angle work (branch `fix/time-history-wing-angle`).** Variants are ordered `margin`,
-  `attached`, `c_envelope` everywhere (colour series 4 for `margin`, 2 and 3 as before). (a) The gap
-  tiles come from the verified `B1_gap` rows, `margin` first with "flyable bound" (a scenario where it
-  has no verified point shows "no verified solution" and quotes nothing), then `attached` and
-  `c_envelope` with "upper bound at the lift peak" (and the late-command warning). (b) *Gap ladder*,
-  one panel per scenario: C (wing held), `margin`, `attached`, `c_envelope` at C's own distance,
-  verified points only, and C without the cap as a hatched reference, from `B1_gap` columns
-  `c_wing_held`, `c_unconstrained_energy_kJ`, `c_unconstrained_distance_m`; a scenario without a C run
-  says so. (c) "What the gap contains" is rewritten from the rows: `margin` against C (same wing limit,
-  same pitch ceiling: what is left is the rotor lag and the clairvoyance), `attached` and
-  `c_envelope` against `margin` in kJ, C without the cap as a reference. (d) "Is `margin` flyable?"
-  next to "Is `attached` attached?" (same columns, per variant). (e) The sensitivity caption names a
-  variant that is not swept. `B1_front` has `end_balance`.
-- Result box: energy at the register distance for B1 and C and the gap in % (expression shown);
-  `t_rotor_on_s`, `V_over_Vs_rotor_on`, `alpha_w_peak_gated_deg`; replay-verified count.
 
 ### FT · forward transition
 - Tables and figures are specified in `docs/FT_spec.md` section 6.1 and section 7 (`FT_params`, `FT_search`,
@@ -358,9 +320,9 @@ numbers the proposal quotes (the existing `headline` mapping in `ReportInputs` g
 The viewer's result boxes read this file when present; otherwise compute from the tables with the
 same lookups. Purpose: one traceable source of every quoted number.
 
-### 5.3 `C_history.csv` and `B1_history.csv`
-Time series for the representative runs, downsampled every 5th sample (same as the existing
-`series()` in `task_b1`). Columns: `case` (`C optimum`, `B1 attached`, `B1 c_envelope`, ...),
+### 5.3 `C_history.csv`
+Time series for the representative runs, downsampled every 5th sample (`_c_trace` in
+`stages.py`). Columns: `case` (`C optimum`, `C ardupilot_default`, ...),
 `t, x, h, V, v_h, theta, alpha_w_deg, delta_r, theta_cmd, omega_r`. For C use the optimum member
 `member = 0` unless `C_params` names another; add a `member` column. Rows are floats; no
 nested JSON.
@@ -393,8 +355,7 @@ Built from the same loaded tables (no recomputation).
 ## 7. Visual rules (from the dataviz review of the mock)
 
 - Own tokens for light and dark, validated with the dataviz validator (the mock's palette passes;
-  re-run if colours change). Categorical order is fixed: C = series 1, B1 attached = series 2,
-  B1 wing-to-30° = series 3; the colour follows the entity, never the rank.
+  re-run if colours change). Categorical order is fixed: C = series 1; the further series take 2 to 4; the colour follows the entity, never the rank.
 - Thin lines (2 px), markers 5 px minimum, 2 px surface ring on overlapping marks, grid recessive.
 - Grey ink is reserved for reference series (the ArduPilot default); no entity gets it. Reference series are dashed.
 - Legend whenever there are at least 2 series, plus direct labels for at most 4. Text uses text
@@ -410,7 +371,7 @@ Unit (`tests/test_view.py`, no browser):
    unchanged).
 2. On a fixture folder with only `C_params.csv`, `C_search.csv`, `run_record.json`: HTML contains
    the C chapter, the "not in this run: C_q_curve" line, no exception.
-3. Legacy fixture (`C_ensemble_runs.csv`, `B1_pareto_S-01.csv`): alias resolution works, the
+3. Legacy fixture (`C_ensemble_runs.csv`): alias resolution works, the
    "older version" notice appears.
 4. Hash mismatch fixture: warning chip present.
 5. Every number in a result box equals the table cell it cites (parse the HTML `data-src`

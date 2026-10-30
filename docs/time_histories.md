@@ -86,6 +86,8 @@ change and is out of scope.
 
 ## B1: the optimum sits on the edge of the lift curve and ends falling
 
+*B1 was removed afterwards (docs/B1_removal.md); this section is the record of what it showed.*
+
 * `attached` (0.85 alpha_s = 13.34 deg) holds C_L at 99.97 % of its peak: the limit is 0.09 deg
   below the C_L peak, so there is no margin in lift. `c_envelope` (30 deg) flies far past the peak
   and does not survive a command 10 ms late.

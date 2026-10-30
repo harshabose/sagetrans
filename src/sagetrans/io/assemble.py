@@ -14,8 +14,7 @@ from sagetrans.analysis.braking import RHO0
 from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
-from sagetrans.io.stages import FT_PARAM_COLUMNS, b1_ceiling_deg, ft_bounds, grid_winner
-from sagetrans.io.view.chapters import b1_reason
+from sagetrans.io.stages import FT_PARAM_COLUMNS, ft_bounds, grid_winner
 
 Table = list[dict[str, Any]]
 
@@ -227,7 +226,7 @@ def e_scenarios(inp: StudyInputs, rec: Mapping[str, Any]) -> Table:
     """What each scenario of scenarios.yaml is, and the state the back transition starts from.
 
     One row per scenario: where it is (altitude, ISA offset, mass, SoC, headwind) and, at the
-    register's AIRSPEED_MIN and at the FT optimum's, the AIRBRAKE-exit state D, C and B1 start
+    register's AIRSPEED_MIN and at the FT optimum's, the AIRBRAKE-exit state D and C start
     from: the entry airspeed (`AIRSPEED_MIN - 2`, read as an equivalent airspeed), its true and
     ground speed, and the ratio to the 1 g stall speed. The pitch and the rotor start are the
     settings of D and C.
@@ -630,82 +629,6 @@ def assemble(
                md_table(tables["C_alpha_curve"])] if tables.get("C_alpha_curve") else []),
         ])  # fmt: skip
 
-    # B1 from the AIRBRAKE exit: one table per kind over every scenario that ran
-    b1_runs = [(n, task_results[f"B1:{n}"]) for n in inp.study.B1.scenarios
-               if f"B1:{n}" in task_results]  # fmt: skip
-    if b1_runs:
-        bc = inp.study.B1
-        for key, tab in (("points", "B1_front"), ("gap", "B1_gap"), ("sens", "B1_sens")):
-            tables[tab] = [r for _, res in b1_runs for r in res[key]]
-        tables["B1_schedule"] = b1_runs[0][1]["schedule"]
-        # the same traces under the shared history name; `case` = "B1 <variant>", C's is "C <case>"
-        tables["B1_history"] = [
-            {"case": f"B1 {r['variant']}", **{k: v for k, v in r.items() if k != "variant"}}
-            for r in tables["B1_schedule"]]  # fmt: skip
-        for n, res in b1_runs:
-            errors += [f"B1 {n}: {e}" for e in res["errors"]]
-        front, gap, sens_rows = tables["B1_front"], tables["B1_gap"], tables["B1_sens"]
-        for fr_row in front:
-            fr_row["reason"] = b1_reason(fr_row)
-        unver = [f"{r['scenario']} {r['variant']} eps_x={r['eps_x_m']:g}" for r in front
-                 if not r.get("replay_verified")]  # fmt: skip
-        b1_parts = [
-            "Least bus energy from the AIRBRAKE exit to the stop, as a function of the distance "
-            f"cap, with the altitude held to {', '.join(f'{e:g}' for e in bc.eps_h_m)} m, "
-            "under a **stated wing limit**: " + "; ".join(
-                f"`{v.name}` ("
-                + (f"|alpha_w| <= {v.alpha_margin:g} alpha_s" if v.alpha_max_deg is None
-                   else f"|alpha_w| <= {v.alpha_max_deg:g} deg")
-                + f", pitch command <= {b1_ceiling_deg(inp, v):g} deg)" for v in bc.variants
-            ) + ". A run with no wing limit is not part of the study. **The wing limit decides "
-            "the number.** B1 is clairvoyant (it knows the scenario) and open loop, and it is not "
-            "a strict lower bound (B-2). The end band on the vertical speed is "
-            f"{bc.end_vh_band_ms or inp.study.C.sink_tol_ms:g} m/s (C's sink tolerance; B1 bounds "
-            "climb as well as sink). The entry, the sink tolerance and the rotor start are C's and "
-            "D's.", "",
-            "**Front** (`J_point` is C's cost of the point; `j_best` marks the least per scenario "
-            "and variant):", "",
-            md_table(front, ["scenario", "variant", "eps_x_m", "converged", "replay_verified",
-                             "replay_late_command_ok", "converged_attempts", "energy_kJ",
-                             "excursion_m", "distance_m",
-                             "t_f_s", "below_vs", "t_rotor_on_s", "V_over_Vs_rotor_on",
-                             "alpha_w_peak_above_vs_deg", "J_point", "j_best"]), "",
-        ]  # fmt: skip
-        if unver:
-            b1_parts += ["**No verified solution (energy blank, do not quote): "
-                         + "; ".join(unver) + ".** A point that did not converge from three "
-                         "starts, or whose replay in the simulator disagrees, is a solver result, "
-                         "not a proof that it is infeasible.", ""]  # fmt: skip
-        fragile = [f"{r['scenario']} {r['variant']} eps_x={r['eps_x_m']:g}" for r in front
-                   if r.get("replay_verified") and r.get("replay_late_command_ok") is False]
-        if fragile:
-            b1_parts += [
-                "**Verified, but not robust to a 10 ms late command: " + "; ".join(fragile)
-                + ".** Their replay agrees when the schedule is applied as the optimiser means it "
-                "(the step's mean command) and fails when each 20 ms step reads it at its start "
-                "(`replay_late_command_ok` = no; the excursion is in "
-                "`replay_late_command_excursion_m`): the optimum sits on the lift peak, a fraction "
-                "of a degree below the stall cliff. "
-                "Quote them as the best the model allows with exact timing, not as a flyable "
-                "schedule.", ""]  # fmt: skip
-        if gap:
-            b1_parts += [
-                "**Same-problem gap to C** (B1 at C's own excursion and distance; "
-                "B1 has no rotor lag where C has `rotor_lag_s`):", "",
-                md_table(gap, ["scenario", "variant", "c_source", "c_energy_kJ", "c_excursion_m",
-                               "c_distance_m", "b1_converged", "b1_replay_verified",
-                               "b1_late_command_ok", "b1_energy_kJ", "energy_margin"]), "",
-            ]  # fmt: skip
-        if sens_rows:
-            b1_parts += [
-                "**Sensitivities** (altitude band on every scenario, the rest on the first):", "",
-                md_table(sens_rows, ["scenario", "sensitivity", "value", "variant", "eps_x_m",
-                                     "converged", "replay_verified", "energy_kJ", "distance_m",
-                                     "t_f_s"]), "",
-            ]  # fmt: skip
-        sections["B1 — least energy from the AIRBRAKE exit (direct collocation)"] = "\n".join(
-            b1_parts)
-
     # sensitivity
     s_res = task_results.get("sensitivity", {}).get("result")
     nominal: dict[str, float] = dict(task_results.get("sensitivity", {}).get("nominal", {}))
@@ -744,10 +667,10 @@ def assemble(
     conv_d, conv_q = inp.study.D.entry_convention, inp.study.Q2.feed_convention
     kind = {"eas": "an equivalent", "tas": "a true"}
     limitations = [
-        "Back-transition: B1 and C. Forward transition: FT, when it is among the analyses; B1 "
-        "does not cover it.",
+        "Back-transition: C. Forward transition: FT, when it is among the analyses; C does not "
+        "cover it.",
         "The forward transition in the energy budget is a quasi-steady estimate.",
-        f"AIRSPEED_MIN: D, C, B1 and FT read it as {kind[conv_d]} airspeed "
+        f"AIRSPEED_MIN: D, C and FT read it as {kind[conv_d]} airspeed "
         f"(D.entry_convention); Q2, which feeds E, reads it as {kind[conv_q]} airspeed "
         "(Q2.feed_convention). "
         "Which one ArduPilot compares is open (O-02).",
@@ -781,7 +704,7 @@ def assemble(
         "ft_grid": ft_grid_context,
         "ft_scenarios": ft_scenarios_context(inp),
         "study": {a: getattr(inp.study, a).model_dump(mode="json")
-                  for a in ("A", "D", "F", "E", "Q2", "C", "FT", "B1", "sensitivity")
+                  for a in ("A", "D", "F", "E", "Q2", "C", "FT", "sensitivity")
                   if a in inp.study.analyses},
     })  # fmt: skip
     folder = results.write_results(

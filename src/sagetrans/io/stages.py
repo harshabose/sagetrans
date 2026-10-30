@@ -1,7 +1,7 @@
 """The analysis stages of a study, each a function of the loaded inputs.
 
 A *task* is the unit of parallel work: ``basics`` (analyses A, D, F, E and Q2, which are quick and
-share results), ``C``, ``B1:<scenario>`` (one per scenario) and ``sensitivity``. Every task
+share results), ``C`` and ``sensitivity``. Every task
 returns a plain dict of tables and objects that can be pickled, so it can be cached and run in a
 separate process. Nothing here reads a file: all data arrives through `StudyInputs`.
 """
@@ -13,7 +13,6 @@ import math
 import time
 import traceback
 from collections.abc import Callable
-from functools import partial
 from typing import Any
 
 import numpy as np
@@ -32,7 +31,6 @@ from sagetrans.analysis import (
     soc_trace,
     zero_loss,
 )
-from sagetrans.analysis import collocation as coll
 from sagetrans.analysis import sensitivity as sens
 from sagetrans.analysis.common import Scenario
 from sagetrans.analysis.ensemble import (
@@ -56,10 +54,10 @@ Table = list[dict[str, Any]]
 # Seconds per task as observed in the last full clean run (2026-10-29: 24 workers on a 24-core
 # machine, all busy, so they include the slowdown of running side by side; one worker alone is
 # about 1.7 times faster). The run took 4.1 h: C 10269 s, FT_grid 6.7 to 8.6 ks, FT_scan 6.4 to
-# 9.1 ks, B1 1.0 to 1.7 ks, the fine-pass FT_grid points 3.9 to 4.0 ks, basics 848 s.
+# 9.1 ks, the fine-pass FT_grid points 3.9 to 4.0 ks, basics 848 s.
 # "FT_fine" is the fine pass (a FT_grid point planned after the first wave).
 TASK_COST = {"basics": 850, "C": 10300, "FT": 370, "FT_grid": 7700, "FT_fine": 4000,
-             "FT_scan": 7700, "B1": 1400, "sensitivity": 420, "basics_rec": 110}
+             "FT_scan": 7700, "sensitivity": 420, "basics_rec": 110}
 
 
 def tas(eas: float, scen: Scenario) -> float:
@@ -264,7 +262,7 @@ def solve_e_case(
     mp = site_mission(inp, site)
     masses = {"out": vp.m, "ret": vp.m - mp.payload_kg} if kind == "round_trip" else {"leg": vp.m}
     rho_bt = float(atmosphere.density(site + mp.h_bt_agl_m, mp.isa_offset_k))
-    # the stopping run starts at the AIRBRAKE exit, as in D, C and B1 (AIRSPEED_MIN - 2)
+    # the stopping run starts at the AIRBRAKE exit, as in D and C (AIRSPEED_MIN - 2)
     v0 = braking.entry_airspeed(inp.airspeed_min, rho_bt, inp.study.D.entry_convention)
     e_nom = vp.battery.e_nominal_wh * 3600.0
     src = None
@@ -783,7 +781,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
     return out
 
 
-# ---- tasks: C, FT, B1, sensitivity -------------------------------------------------------------
+# ---- tasks: C, FT, sensitivity -------------------------------------------------------------
 def c_wing_limit_rad(inp: StudyInputs, frac: float | None = None) -> float:
     """The wing-angle limit [rad] of the enforced configuration: `margin_alpha_frac` x alpha_s
     (or `frac` x alpha_s for one point of the alpha curve)."""
@@ -800,7 +798,7 @@ def c_settings(
     from the D block: it describes the AIRBRAKE exit, not C. `enforce` (default `C.enforce_alpha`)
     holds the wing angle to `frac` (default `margin_alpha_frac`) x alpha_s by limiting the pitch
     command to the limit plus the flight-path angle: the ENFORCED configuration. Without it C
-    ignores the stall. Every reader of C's settings (B1's gap, the sensitivity) gets the
+    ignores the stall. Every reader of C's settings (the sensitivity) gets the
     configuration the study is set to, so it follows the headline.
     """
     c, d = inp.study.C, inp.study.D
@@ -832,14 +830,6 @@ def alpha_limits(inp: StudyInputs) -> tuple[zero_loss.ActuatorLimits, float]:
         cl_frac=inp.study.A.cl_frac or 0.8,
     )  # fmt: skip
     return lim, zero_loss._alpha_band(vp, lim)[1] + vp.wing.i_w
-
-
-def b1_ceiling_deg(inp: StudyInputs, variant: Any) -> float:
-    """The pitch-command ceiling of a B1 variant in degrees; `null` in the config is the
-    register's PTCH_LIM_MAX_DEG, so the `c_envelope` variant follows it."""
-    if variant.theta_cmd_max_deg is None:
-        return math.degrees(inp.theta_p)
-    return float(variant.theta_cmd_max_deg)
 
 
 def c_theta_a_hi_deg(inp: StudyInputs) -> float:
@@ -982,8 +972,8 @@ def _c_trace(
     sim: Any, i_w: float, case: str, member: int, every: int = 5,
     meta: dict[str, Any] | None = None,
 ) -> Table:  # fmt: skip
-    """`C_history` rows of one run: every `every`-th sample (and the last), angles in degrees (as
-    B1's series). `meta` is the scenario description every row of the run carries."""
+    """`C_history` rows of one run: every `every`-th sample (and the last), angles in degrees.
+    `meta` is the scenario description every row of the run carries."""
     cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
             "theta": np.degrees(sim["theta"]), "alpha_w_deg": np.degrees(sim["alpha"] + i_w),
             "delta_r": sim["delta_r"], "theta_cmd": np.degrees(sim["theta_cmd"]),
@@ -1196,12 +1186,12 @@ def task_c(inp: StudyInputs, variant: str = "") -> dict[str, Any]:
     })  # fmt: skip
 
     progress.phase("C: histories and the q curve")
-    # Two views (member = -1 is "not an ensemble member"): the B1 headline scenario with C's
-    # optimum and the ArduPilot default on it, and the ensemble member on which the default
+    # Two views (member = -1 is "not an ensemble member"): the scenario `C.history_scenario` with
+    # C's optimum and the ArduPilot default on it, and the ensemble member on which the default
     # overshoots most with both cases. Every row of a run says which scenario it is.
     history: Table = []
-    band = float(inp.study.B1.eps_h_m[0])
-    core_name = inp.study.B1.scenarios[0] if inp.study.B1.scenarios else ""
+    band = float(c.history_band_m)
+    core_name = c.history_scenario
     hist_notes: list[str] = []
     if core_name in inp.scenarios:
         core = inp.scenarios[core_name]
@@ -1213,7 +1203,7 @@ def task_c(inp: StudyInputs, variant: str = "") -> dict[str, Any]:
                 history += _c_trace(cr.sim, vp.wing.i_w, case, -1,
                                     meta=_hist_meta("core", core_name, core, vp, cr, band))
         except (ValueError, RuntimeError) as exc:
-            hist_notes.append(f"C on the B1 scenario {core_name} could not be run: {exc}")
+            hist_notes.append(f"C on the scenario {core_name} could not be run: {exc}")
     if dflt_runs is not None:
         over = [r.overshoot if math.isfinite(r.overshoot) else -math.inf for r in dflt_runs]
         worst = max(range(len(over)), key=over.__getitem__)
@@ -1790,284 +1780,12 @@ def task_ft_scan(inp: StudyInputs, v_arg: str) -> dict[str, Any]:
 
 
 def wing_lift_peak(wing: Any) -> tuple[float, float]:
-    """(alpha_w at the peak of the model's C_L [rad], that C_L), in the angle convention of the B1
-    wing limits (alpha_w = body angle of attack + wing incidence). A 0.01 deg scan to 40 deg."""
+    """(alpha_w at the peak of the model's C_L [rad], that C_L), in the angle convention of the wing
+    limit (alpha_w = body angle of attack + wing incidence). A 0.01 deg scan to 40 deg."""
     grid = np.radians(np.arange(0.0, 40.0001, 0.01))
     cl = np.array([float(aero.coefficients(float(a), wing)[0]) for a in grid])
     k = int(np.argmax(cl))
     return float(grid[k]), float(cl[k])
-
-
-def margin_limit(inp: StudyInputs) -> dict[str, float]:
-    """The shared wing-angle margin, computed: the limit `margin_alpha_frac` x alpha_s in degrees,
-    C_L at the limit as a fraction of C_L,max, and the angle margin to the C_L peak (alpha_w)."""
-    wing = inp.vehicle.wing
-    lim = inp.study.margin_alpha_frac * wing.alpha_s
-    a_pk, cl_pk = wing_lift_peak(wing)
-    return {
-        "margin_alpha_frac": inp.study.margin_alpha_frac, "alpha_s_deg": math.degrees(wing.alpha_s),
-        "limit_deg": math.degrees(lim), "limit_rad": lim, "alpha_w_clmax_deg": math.degrees(a_pk),
-        "cl_max": cl_pk, "cl_at_limit_over_max": float(aero.coefficients(lim, wing)[0]) / cl_pk,
-        "angle_margin_to_peak_deg": math.degrees(a_pk - lim),
-    }
-
-
-def wing_limit_cols(wing: Any, variant: Any) -> dict[str, float]:
-    """Where a B1 wing limit sits against the lift peak (columns of every B1_front row)."""
-    a_pk, cl_pk = wing_lift_peak(wing)
-    lim = (math.radians(variant.alpha_max_deg) if variant.alpha_max_deg is not None
-           else variant.alpha_margin * wing.alpha_s)  # fmt: skip
-    cl_lim = float(aero.coefficients(lim, wing)[0])
-    return {
-        "alpha_limit_deg": math.degrees(lim), "alpha_s_deg": math.degrees(wing.alpha_s),
-        "wing_incidence_deg": math.degrees(wing.i_w), "alpha_w_clmax_deg": math.degrees(a_pk),
-        "cl_max": cl_pk, "cl_at_limit_over_max": cl_lim / cl_pk,
-    }
-
-
-def task_b1(inp: StudyInputs, scen_name: str) -> dict[str, Any]:
-    """Analysis B1 for one scenario: least-energy back-transition from the AIRBRAKE exit.
-
-    Per wing-limit variant, the front (energy against the distance cap at the headline band), the
-    altitude-band sweep, the same-problem gap to C and, for the first scenario, the sensitivities.
-    A point that did not converge or replay stays in the table with its energy blank: it means the
-    solver failed from three starts, not that the point is infeasible.
-    """
-    b, c, d, vp = inp.study.B1, inp.study.C, inp.study.D, inp.vehicle
-    scen = inp.scenarios[scen_name]
-    cev, c_base, w = c_settings(inp)
-    base = exit_params(inp, rotor_lag_s=c.rotor_lag_s)  # the entry state reads theta_fw0, delta_min
-    v_air = braking.entry_airspeed(inp.airspeed_min, scen.rho, d.entry_convention)
-    end_band = first_set(b.end_vh_band_ms, c.sink_tol_ms)
-    lim, alpha_hi = alpha_limits(inp)
-    errors: list[str] = []
-    out: dict[str, Any] = {
-        "points": [], "gap": [], "sens": [], "schedule": [], "sols": [], "errors": errors,
-        "v0": v_air, "scen": scen, "name": scen_name,
-    }  # fmt: skip
-    v_s = runs.stall_speed(scen.vehicle_for(vp), scen.rho)
-    variants = {v.name: v for v in b.variants}
-    ceiling = variants.get("c_envelope")
-    if ceiling is not None and b1_ceiling_deg(inp, ceiling) > math.degrees(inp.theta_p) + 1e-9:
-        raise ValueError(
-            f"B1 variant c_envelope: pitch command ceiling {b1_ceiling_deg(inp, ceiling):g} deg "
-            f"is above PTCH_LIM_MAX_DEG ({math.degrees(inp.theta_p):g} deg); it describes what "
-            "C's ramp can reach"
-        )
-    ex_max = max(b.eps_x_m)
-
-    def options(v: Any, band: float, theta_deg: float | None = None) -> coll.CollocationOptions:
-        kw: dict[str, Any] = {
-            "n": b.intervals, "max_iter": b.max_iter, "vh_band": band,
-            "theta_cmd_max": math.radians(first_set(theta_deg, b1_ceiling_deg(inp, v))),
-            "end_balance": b.end_balance,
-        }  # fmt: skip
-        if v.alpha_max_deg is not None:
-            kw["alpha_max"] = math.radians(v.alpha_max_deg)
-        else:
-            kw["stall_margin"] = v.alpha_margin
-        return coll.CollocationOptions(**kw)
-
-    def problem(opt: coll.CollocationOptions, rotor_start: str) -> coll.Problem:
-        return coll.make_problem_exit(
-            vp, scen, base, v_air, opt, inp.controller_overrides, inp.theta_p, rotor_start
-        )
-
-    def series(prob: coll.Problem, chk: coll.ReplayCheck) -> Table:
-        sim = chk.sim
-        aw = np.degrees(sim["alpha"] + prob.vp.wing.i_w)
-        cols = {"t": sim.t, "x": sim["x"], "h": sim["h"], "V": sim["V"], "v_h": sim["vh"],
-                "theta": np.degrees(sim["theta"]), "alpha_w_deg": aw, "delta_r": sim["delta_r"],
-                "theta_cmd": np.degrees(sim["theta_cmd"]), "omega_r": sim["omega_r"]}  # fmt: skip
-        return [{k: float(v[i]) for k, v in cols.items()}
-                for i in _sample_indices(len(sim.t), 5)]
-
-    def row(
-        prob: coll.Problem, ver: coll.Verified, variant: str, eh: float, ex: float, rs: str,
-        band: float, theta_deg: float,
-    ) -> dict[str, Any]:  # fmt: skip
-        s = ver.sol
-        r: dict[str, Any] = {
-            "scenario": scen_name, "variant": variant, "eps_h_m": eh, "eps_x_m": ex,
-            **wing_limit_cols(vp.wing, variants[variant]),
-            "end_vh_band_ms": band, "end_balance": b.end_balance, "rotor_start": rs,
-            "theta_cmd_max_deg": theta_deg,
-            "converged": s.ok, "replay_verified": ver.verified,
-            "converged_attempts": sum(a.ok for a in ver.attempts), "status": s.status,
-            "V0_air_ms": v_air, "V0_ground_ms": float(prob.x0[2]), "Vs_ms": v_s,
-            "below_vs": v_air < v_s,
-        }  # fmt: skip
-        if not (s.ok and ver.verified and ver.check is not None):
-            return r
-        chk = ver.check
-        if ver.delayed is not None:  # does the schedule survive commands that are 10 ms late?
-            r["replay_late_command_ok"] = ver.delay_robust
-            r["replay_late_command_excursion_m"] = ver.delayed.metrics["excursion"]
-        fl = braking.braking_flags(
-            chk.sim, vp, scen, base, alpha_hi=alpha_hi, alpha_min=lim.alpha_min,
-            kappa=inp.descent.kappa, gate=d.alpha_gate_ms, sink_tol=c.sink_tol_ms,
-        )  # fmt: skip
-        sm = coll.schedule_summary(prob, chk, d.alpha_gate_ms)
-        j = (w.w_E * s.energy / w.E_ref + w.w_x * s.distance / w.x_ref
-             + w.w_h * s.excursion / w.h_ref)  # fmt: skip
-        r.update({
-            "energy_kJ": s.energy / 1e3, "excursion_m": s.excursion, "distance_m": s.distance,
-            "t_f_s": s.t_f, **{f"replay_err_{k}": e for k, e in chk.rel_error.items()},
-            "J_point": j, **{k: _num(v) for k, v in sm.items()},
-            **{k: _num(fl[k]) for k in ("vrs_min", "t_above_alpha_08_s", "alpha_max_gated_deg")},
-        })  # fmt: skip
-        return r
-
-    n_front = len(b.variants) * len(b.eps_h_m) * len(b.eps_x_m)
-    n_total = (n_front + len(b.band_sweep.eps_h_m) + len(b.variants)
-               + (3 if scen_name == b.scenarios[0] else 0))  # an upper bound: the first scenario
-    n_done = [0]  # also has the rotor-start, band and ceiling sensitivities
-
-    def solved(
-        kind: str, what: str, ok: bool, verified: bool, e_kj: float | None, t0: float
-    ) -> None:  # fmt: skip
-        n_done[0] += 1
-        state = "verified" if verified else ("converged, replay differs" if ok else "no solution")
-        e = f" E={e_kj:.2f} kJ" if e_kj is not None else ""
-        progress.step(f"{scen_name} {kind} {what}: {state}{e} ({time.time() - t0:.0f} s)",
-                      n_done[0], max(n_total, n_done[0]))  # fmt: skip
-
-    def solve_point(
-        v: Any, eh: float, ex: float, *, rs: str | None = None, band: float | None = None,
-        theta_deg: float | None = None,
-    ) -> tuple[dict[str, Any], Table, coll.B1Solution | None]:  # fmt: skip
-        rs, band = first_set(rs, c.rotor_start), first_set(band, end_band)
-        theta = first_set(theta_deg, b1_ceiling_deg(inp, v))
-        t0 = time.time()
-        progress.phase(f"B1 {scen_name}: solving {v.name} eps_h={eh:g} eps_x={ex:g}")
-        prob = problem(options(v, band, theta), rs)
-        ver = coll.solve_verified(prob, eh, ex, "energy", ns=tuple(b.refine_from))
-        rw = row(prob, ver, v.name, eh, ex, rs, band, theta)
-        e = rw.get("energy_kJ")
-        solved("solve", f"{v.name} eps_h={eh:g} eps_x={ex:g}", ver.sol.ok, ver.verified, e, t0)
-        ser = series(prob, ver.check) if ver.verified and ver.check is not None else []
-        return rw, ser, ver.sol
-
-    def attempt(label: str, fn: Callable[[], Any]) -> Any:
-        try:
-            return fn()
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{label}: {type(exc).__name__}: {exc}")
-            return None
-
-    try:
-        problem(options(b.variants[0], end_band), c.rotor_start)  # the entry must exist
-    except ValueError as exc:
-        errors.append(str(exc))
-        return out
-
-    # -- the front: per variant, the headline band(s) against the distance caps
-    kept: dict[str, list[tuple[dict[str, Any], Table]]] = {v.name: [] for v in b.variants}
-    for v in b.variants:
-        for eh in b.eps_h_m:
-            for ex in b.eps_x_m:
-                label = f"{v.name} eps_h={eh:g} eps_x={ex:g}"
-                got = attempt(label, partial(solve_point, v, eh, ex))
-                if got is None:
-                    out["points"].append({
-                        "scenario": scen_name, "variant": v.name, "eps_h_m": eh, "eps_x_m": ex,
-                        "converged": False, "replay_verified": False, "status": errors[-1],
-                    })  # fmt: skip
-                    continue
-                rw, ser, sol = got
-                out["points"].append(rw)
-                out["sols"].append((v.name, eh, ex, sol))
-                if "J_point" in rw:
-                    kept[v.name].append((rw, ser))
-    for v in b.variants:  # the point with the least C cost per variant
-        if kept[v.name]:
-            best = min(kept[v.name], key=lambda t: t[0]["J_point"])
-            best[0]["j_best"] = True
-            out["schedule"] += [{"scenario": scen_name, "variant": v.name,
-                                 "eps_x_m": best[0]["eps_x_m"], **r} for r in best[1]]  # fmt: skip
-    for r in out["points"]:
-        r.setdefault("j_best", False)
-
-    # -- sensitivities: the altitude band (every scenario), the rest on the first scenario
-    def sens(kind: str, value: Any, **kw: Any) -> None:
-        v = kw.pop("variant")
-        eh = kw.pop("eps_h")
-        got = attempt(f"sens {kind}={value}", partial(solve_point, v, eh, ex_max, **kw))
-        if got is None:
-            out["sens"].append({"scenario": scen_name, "sensitivity": kind, "value": value,
-                                "variant": v.name, "converged": False, "replay_verified": False,
-                                "status": errors[-1]})  # fmt: skip
-            return
-        out["sens"].append({"sensitivity": kind, "value": value, **got[0]})
-
-    bv = variants[b.band_sweep.variant]
-    for eh in b.band_sweep.eps_h_m:
-        sens("eps_h_m", eh, variant=bv, eps_h=eh)
-    if scen_name == b.scenarios[0]:
-        v0, eh0 = b.variants[0], b.eps_h_m[0]
-        if b.sens.rotor_start_flip:
-            other = "idle" if c.rotor_start == "carry" else "carry"
-            sens("rotor_start", other, variant=v0, eps_h=eh0, rs=other)
-        if b.sens.end_vh_band_ms is not None:
-            sens("end_vh_band_ms", b.sens.end_vh_band_ms, variant=v0, eps_h=eh0,
-                 band=b.sens.end_vh_band_ms)  # fmt: skip
-        abs_v = next((v for v in b.variants if v.alpha_max_deg is not None), None)
-        if abs_v is not None and b.sens.c_envelope_theta_cmd_deg is not None:
-            sens("theta_cmd_max_deg", b.sens.c_envelope_theta_cmd_deg, variant=abs_v, eps_h=eh0,
-                 theta_deg=b.sens.c_envelope_theta_cmd_deg)  # fmt: skip
-
-    # -- the same-problem gap: B1 at C's own excursion and distance
-    if b.gap_c is None:
-        gp = {"T_bt": inp.start_params["T_bt"], "theta_A": inp.start_params["theta_A"],
-              "spin_min": inp.start_params["spin_min"], "q": restricted.C_Q_START}  # fmt: skip
-        src = f"register parameters at q = {restricted.C_Q_START:g}"
-    else:
-        gc = b.gap_c
-        gp = {"T_bt": gc.T_bt, "theta_A": math.radians(gc.theta_A_deg), "spin_min": gc.spin_min,
-              "q": gc.q}  # fmt: skip
-        src = "B1.gap_c (the C optimum, pasted from C_params)"
-    cm = attempt("C at the gap parameters", lambda: restricted.evaluate_c(
-        vp, scen, gp, cev, c_base))  # fmt: skip
-    if cm is not None and "not_stopped" in cm.failures:
-        errors.append(f"C at the gap parameters did not stop ({','.join(cm.failures)}): no gap")
-        cm = None
-    cm_free = None  # the same C run without the wing cap: a reference bar, never a comparison
-    if cm is not None and c_base.alpha_cap is not None and c.unconstrained_reference:
-        cev_f, base_f, _ = c_settings(inp, enforce=False)
-        cm_free = attempt("C without the wing cap at the gap parameters",
-                          lambda: restricted.evaluate_c(vp, scen, gp, cev_f, base_f))
-        if cm_free is not None and "not_stopped" in cm_free.failures:
-            cm_free = None
-    if cm is not None:
-        for v in b.variants:
-            t0 = time.time()
-
-            def gap_solve(v: Any = v) -> coll.BoundCheck:
-                prob = problem(options(v, end_band), c.rotor_start)
-                return coll.bound_check_c(prob, cm, ns=tuple(b.refine_from))
-
-            res = attempt(f"gap {v.name}", gap_solve)
-            g: dict[str, Any] = {
-                "scenario": scen_name, "variant": v.name, "c_source": src,
-                "c_energy_kJ": cm.energy / 1e3, "c_excursion_m": cm.excursion,
-                "c_distance_m": cm.distance, "c_flags": ",".join(cm.failures),
-                "c_wing_held": c_base.alpha_cap is not None,
-                "c_unconstrained_energy_kJ": cm_free.energy / 1e3 if cm_free else "",
-                "c_unconstrained_distance_m": cm_free.distance if cm_free else "",
-            }  # fmt: skip
-            if res is not None:
-                s_ = res.b1
-                g.update({"b1_converged": s_.ok, "b1_replay_verified": res.verified,
-                          "b1_late_command_ok": res.delay_robust,
-                          "eps_h_m": s_.eps_h, "eps_x_m": s_.eps_x})  # fmt: skip
-                if res.verified:
-                    g.update({
-                        "b1_energy_kJ": s_.energy / 1e3, "b1_excursion_m": s_.excursion,
-                        "b1_distance_m": s_.distance, "energy_margin": res.energy_margin,
-                    })  # fmt: skip
-                solved("gap", v.name, s_.ok, res.verified, None, t0)
-            out["gap"].append(g)
-    return out
 
 
 def sensitivity_model(inp: StudyInputs) -> sens.HeadlineModel:
@@ -2119,8 +1837,6 @@ def plan_tasks(inp: StudyInputs) -> list[str]:
     if "FT" in wanted:
         tasks += grid_coarse_ids(inp)  # the report of the winner follows (`follow_up_tasks`)
         tasks += [f"FT_scan:{v:g}" for v in inp.study.FT.scan.airspeed_min_eas_ms]
-    if "B1" in wanted:
-        tasks += [f"B1:{n}" for n in inp.study.B1.scenarios]
     if "sensitivity" in wanted:
         tasks.append("sensitivity")
     return sorted(tasks, key=lambda t: -TASK_COST.get(t.split(":")[0], 100))
@@ -2147,8 +1863,6 @@ def run_task(inp: StudyInputs, task: str) -> dict[str, Any]:
         return task_ft_grid(inp, arg)
     if kind == "FT_scan":
         return task_ft_scan(inp, arg)
-    if kind == "B1":
-        return task_b1(inp, arg)
     if kind == "sensitivity":
         return task_sensitivity(inp)
     raise ValueError(f"unknown task {task!r}")

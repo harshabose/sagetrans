@@ -51,13 +51,6 @@ def test_first_set_treats_zero_and_empty_as_settings(value, default, expected):
     assert stages.first_set(value, default) == expected
 
 
-def test_no_b1_setting_is_chosen_with_or():
-    src = (Path(stages.__file__)).read_text(encoding="utf-8")
-    for needle in ("band or end_band", "theta_deg or ", "rs or c.rotor_start",
-                   "end_vh_band_ms or "):
-        assert needle not in src
-
-
 def test_ft_members_are_ds_sobol_sample_and_not_cs_latin_hypercube():
     """The comment said FT used C's Sobol sample. C draws a Latin hypercube; FT draws D's Sobol."""
     inp = load_inputs(CONFIGS)

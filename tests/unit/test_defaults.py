@@ -134,7 +134,7 @@ FT:
 def _tiny_study(cfg: Path) -> None:
     """Shrink the placeholder study's C block and add a small FT block (a search of a few runs)."""
     text = (cfg / "study.yaml").read_text(encoding="utf-8")
-    a, b = text.index("C:  "), text.index("B1:")
+    a, b = text.index("C:  "), text.index("sensitivity:")
     (cfg / "study.yaml").write_text(text[:a] + TINY_C + text[b:] + TINY_FT, encoding="utf-8")
 
 

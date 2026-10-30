@@ -1,4 +1,4 @@
-"""CI helper: check the verification tests T-01 to T-15 from a pytest JUnit file.
+"""CI helper: check the verification tests T-01 to T-15 (not T-11) in a pytest JUnit file.
 
     pytest --junitxml=junit.xml
     python -m sagetrans.io.ci_check junit.xml

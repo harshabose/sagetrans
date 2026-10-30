@@ -169,8 +169,8 @@ def test_the_heartbeat_with_a_running_search_has_phase_seed_best_and_a_rough_tim
 def test_at_normal_the_terminal_gets_a_heartbeat_block_every_fifteen_minutes(tmp_path):
     clk = Clock()
     rl, lines = _run(tmp_path, clk, level="normal", heartbeat=60.0)
-    rl.submit(["B1:S-01"])
-    w = _worker_with_search(tmp_path, clk, "B1:S-01")
+    rl.submit(["C"])
+    w = _worker_with_search(tmp_path, clk, "C")
     rl.poll()
     beats = 0
     for _ in range(60):  # one hour in one-minute steps
@@ -248,11 +248,11 @@ def test_the_log_flags_are_not_part_of_the_cache_key(tmp_path):
 
 
 def test_a_full_study_stays_inside_the_terminal_line_budget(tmp_path):
-    """Replay the event stream of the last full run (36 tasks, 3.5 h) through the printer."""
+    """Replay the event stream of the last full run (30 tasks) through the printer."""
     clk = Clock()
     rl, lines = _run(tmp_path, clk, level="normal", heartbeat=60.0)
     tasks = ([f"FT_grid:{q}" for q in (2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20)]
-             + [f"FT_scan:{v}" for v in range(15, 21)] + [f"B1:S-0{i}" for i in range(1, 7)]
+             + [f"FT_scan:{v}" for v in range(15, 21)]
              + ["C", "sensitivity", "basics", "FT_grid:11", "FT_grid:11.5", "FT:18", "basics_rec"])
     rl.start(["banner"] * 18, 3.0 * 3600)
     rl.wave_start(1, tasks, 23)

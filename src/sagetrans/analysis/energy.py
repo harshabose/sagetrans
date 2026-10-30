@@ -430,7 +430,7 @@ def back_transition_segment(
 
     `bp` is the configured controller (`stages.d_exit_params`, the one analysis D runs;
     `run_braking` sets the target height and the hover throttle itself). With it the run starts at
-    the AIRBRAKE exit like D, C and B1 (`braking.airbrake_entry_state`: pitch `bp.theta_fw0`, the
+    the AIRBRAKE exit like D and C (`braking.airbrake_entry_state`: pitch `bp.theta_fw0`, the
     rotors carrying what the wing does not). None builds a controller from the code defaults and
     starts from the legacy hover state (rotors at hover speed, level), which no study path uses.
     """
@@ -518,7 +518,7 @@ def build_budget(
     """First-pass budget of ONE leg from the component models and analyses D and F.
 
     `bp` is the controller of the back transition and `v0_entry` its entry ground speed. E and
-    the sensitivity pass the AIRBRAKE exit speed (`braking.entry_airspeed`, the speed D, C and B1
+    the sensitivity pass the AIRBRAKE exit speed (`braking.entry_airspeed`, the speed D and C
     start from) and `inp.controller`; None keeps the legacy behaviour (code defaults, entry at the
     cruise speed), which no study path uses any more. `mp.v_trans` is a true airspeed here
     (`mission_at_site` converts the loaded AIRSPEED_MIN once).

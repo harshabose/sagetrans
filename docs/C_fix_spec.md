@@ -1,5 +1,7 @@
 # Analysis C fix specification (`restricted.py`, `ardupilot_like.py`, `braking.py`): hand-off for an implementing agent
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 > B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
 
 Repo: `sagetrans` (Python, `src/sagetrans/...`). This file is self-contained. **Status: specified, not implemented.** Branch from the tip of `feat/d-lag-and-curve` (PR #6) and open the PR against that branch; this work uses D's `theta_fw0`, `rotor_lag_s`, `airbrake_entry_state`, `entry_airspeed` and the D config values. Every number below was produced with scratch scripts that are not in the repo (section 13); the controller law in section 3 and the evaluation in section 5 are the authoritative definition, the scripts are not.

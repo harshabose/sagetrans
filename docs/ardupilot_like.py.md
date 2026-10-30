@@ -1,5 +1,7 @@
 > B2 was removed from the code on 2026-10-27. Mentions of B2 below describe the code at the time of writing.
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 > [!abstract] What this file is
 > The **baseline controller**: a hand-written imitation of how ArduPilot's QuadPlane flies a VTOL landing approach. It is the thing every analysis compares the optimised trajectories against (A, B1, B2 are "best possible", this is "what ArduPilot-style logic would do").
 > It is a *policy*: a function `(t, x, aux, mode) -> (u, mode')`. It has no physics in it. The only physics call is `trim.hover_throttle` (see [[trim.py]]) to get a hover feed-forward.

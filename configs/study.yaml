@@ -11,10 +11,10 @@ parallel:
   enabled: true
   max_workers: 0           # 0 = one per CPU core (capped by the number of tasks)
 
-# Which analyses to run. Names: A D F E Q2 FT C B1 sensitivity
-analyses: [A, D, F, E, Q2, FT, C, B1, sensitivity]
+# Which analyses to run. Names: A D F E Q2 FT C sensitivity
+analyses: [A, D, F, E, Q2, FT, C, sensitivity]
 
-margin_alpha_frac: 0.7      # ASSUMED, PROPOSED: the wing-angle margin, defined once: |alpha_w| <= margin_alpha_frac x alpha_s. C (C.enforce_alpha) and the B1 `margin` variant use it. alpha_s is a guess (no lift peak in the CFD up to 15 deg); the C_L peak is at 13.43 deg.
+margin_alpha_frac: 0.7      # ASSUMED, PROPOSED: the wing-angle margin, defined once: |alpha_w| <= margin_alpha_frac x alpha_s. C (C.enforce_alpha) uses it. alpha_s is a guess (no lift peak in the CFD up to 15 deg); the C_L peak is at 13.43 deg.
 
 switch_test: ground        # speed used in the Position1 switch test: ground | air  (O-02)
 
@@ -86,7 +86,7 @@ Q2:                        # forward acceleration of the pusher at TKOFF_THR_MAX
   mass_factors: [0.80, 1.0, 1.15]
   soc: [0.8, 0.6, 0.3]
   conventions: [tas, eas]   # AIRSPEED_MIN read as true or equivalent airspeed (DEC-1 open): both reported
-  feed_convention: eas      # the one E reads: AIRSPEED_MIN is an equivalent airspeed (O-14, O-23), as in D, C, B1 and FT
+  feed_convention: eas      # the one E reads: AIRSPEED_MIN is an equivalent airspeed (O-14, O-23), as in D, C and FT
 
 FT:                        # forward transition from hover (docs/FT_spec.md)
   # Start: mission.profile.clearance_agl_m above the site; limits mission.profile.fwd_alt_loss_max_m / fwd_alt_gain_max_m.
@@ -143,6 +143,8 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
   maxiter: 20
   rotor_lag_s: 0.25        # D's lumped actuator lag (D spec section 14); C's own value
   rotor_start: idle        # idle | carry: rotors at the AIRBRAKE exit; idle is O-13, UNVERIFIED (SITL or log)
+  history_scenario: S-01   # the scenario of the C_history figure "C on one scenario" (a name of scenarios.yaml)
+  history_band_m: 1.0      # the altitude band drawn on it (C holds about 0.5 to 1 m)
   enforce_alpha: true      # ON (the headline, written to settings_recommended): C holds |alpha_w| <= margin_alpha_frac x alpha_s. OFF: C ignores the stall (C_L falls from 1.44 to about 0.5 within 4 deg), reference only
   unconstrained_reference: true   # also run C without the cap (task C:unconstrained): "model ignores the stall; reference only; never a recommendation"
   alpha_curve_fracs: [1.0, 0.85]  # ASSUMED: more limits as fractions of alpha_s, one C search each (tasks C:alpha:<f>), for the table of what the margin costs; the headline fraction (margin_alpha_frac) is added
@@ -167,24 +169,6 @@ C:                         # ArduPilot parameters from the AIRBRAKE exit (docs/C
     z_vel_p: [2.5, 5, 10]
     z_acc_p: [0.015, 0.03, 0.06]
     theta_fw0_deg: [0, 8]
-
-B1:                        # open-loop least-energy back-transition from the AIRBRAKE exit (docs/B1_fix_spec.md)
-  # The entry (rotor start, sink tolerance) comes from the C block, the entry speed rule from the D block.
-  scenarios: [S-01, S-02, S-03, S-04, S-05, S-06]
-  intervals: 40
-  refine_from: [20]
-  max_iter: 800
-  eps_h_m: [1.0]                       # headline altitude band (C holds about 0.5 to 1 m)
-  eps_x_m: [40, 50, 60, 75, 100, 300]  # distance caps swept: the energy-against-distance front
-  end_vh_band_ms: null                 # null = C.sink_tol_ms
-  end_balance: true                    # every variant ends in vertical force balance: without it the optimum ends falling at about 0.5 g (the throttle and pitch dump), which understates the energy of every variant
-  variants:                            # the wing limit is stated, never silent; no "no limit" variant
-    - {name: attached,   alpha_margin: 0.85,  theta_cmd_max_deg: 34.4}   # |alpha_w| <= 0.85 alpha_s
-    - {name: c_envelope, alpha_max_deg: 30.0, theta_cmd_max_deg: null}   # what C's ramp can reach: null = its ceiling, the register's PTCH_LIM_MAX_DEG (20 deg)
-    - {name: margin,     margin: true,        theta_cmd_max_deg: null}   # |alpha_w| <= margin_alpha_frac x alpha_s (top of this file), pitch command <= PTCH_LIM_MAX_DEG: the flyable bound; attached and c_envelope sit at the lift peak
-  band_sweep: {eps_h_m: [3.0, 10.0], variant: c_envelope}   # sensitivity at the largest distance cap
-  sens: {rotor_start_flip: true, end_vh_band_ms: 0.5, c_envelope_theta_cmd_deg: 34.4}   # first scenario only
-  gap_c: null                          # C parameters for the gap: {T_bt, theta_A_deg, spin_min, q}; null = register at q = 2
 
 sensitivity:
   scenario: S-01                   # the scenario the sensitivity is run in

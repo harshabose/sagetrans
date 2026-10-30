@@ -52,7 +52,6 @@ how much of each result rests on assumptions. **`configs/README.md` documents ev
 | **F** | how fast may it descend for landing (vortex-ring limit) and what does the hover cost? |
 | **Q2** | can the pusher reach the transition speed at altitude, against mass? |
 | **C** | what can the autopilot be *configured* to do? (ArduPilot-parameter optimisation) |
-| **B1** | what is the best open-loop trajectory? (direct collocation, energy against altitude excursion) |
 | **FT** | which `AIRSPEED_MIN`, `Q_TRANSITION_MS`, `TKOFF_THR_MAX` and `Q_TRAN_PIT_MAX` take it from hover to wing-borne flight without losing altitude or stalling? |
 | sensitivity | which inputs drive each result, and how firmly do we know them? |
 
@@ -92,7 +91,7 @@ A full study takes hours, so it reports what it is doing. Every line is plain AS
 | `wave 2 starts: ...` / `wave 2 ends ...` | a wave is the set of tasks that run together; the next one is planned from the results of the last |
 | `start`, `done`, `cached`, `FAILED  <task>` | one line per task, with its seconds; `start` is when the worker opened its state file |
 | `FT_grid:12000  seed 3/3 done  J=0.7741  96 evals  18.4 min` | one finished CMA-ES seed (`search done` adds the seed spread) |
-| `B1:S-03  9/17  S-03 solve attached ...: verified E=25.5 kJ (41 s)` | progress of a task that works in steps (B1 solves, sensitivity samples), printed at each quarter; `verbose` prints every one |
+| `sensitivity  66/66  Morris r=3: 66 of 66 samples` | progress of a task that works in steps (sensitivity samples), printed at each quarter; `verbose` prints every one |
 | `heartbeat  1.2 h elapsed  tasks: 9 done, 22 running, 3 waiting` | followed by one line per running task: phase, seed `k/n`, iteration, best `J`, the task's elapsed time and a rough `~N min left` (from the pace so far, so only an estimate), or `no update for N min` when it has been silent for 5 min |
 | summary | every task with its seconds, the slowest task and the critical path (the slowest task of each wave, added), wall time against the estimate, failed tasks with the path of their log, and the next command |
 
@@ -142,8 +141,7 @@ run; `--force` only ignores the entries it finds. The cache is also keyed by the
 code (`run_record.json` has `source_hash`) and by the versions of Python and the numerical libraries
 (`library_versions`, pinned in `pyproject.toml`), so neither a code change nor a library change serves an old
 result. Add
-`--workers N` to choose the number of processes; B1 solves are memory-heavy, so keep it at 3 or fewer
-on a small machine when running `--only B1`.
+`--workers N` to choose the number of processes.
 
 ## More
 

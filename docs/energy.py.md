@@ -1,5 +1,7 @@
 > [!abstract] What this file is Analysis E: the **mission energy budget** (Q1) and **reserve** (Q7). It adds up the energy of take-off, forward transition, climb, cruise, descent, back transition, landing and reserve, and compares the total with the usable pack energy. It returns the **maximum range** and the margin at chosen ranges. Section 10E of the proposal; equation (10.6). It is quasi-steady bookkeeping: each segment is a trim power times a time, except the back transition, which is a simulation (analysis D). It is not a time-stepped mission simulation.
 
+> B1 was removed (docs/B1_removal.md); mentions of B1 below are history.
+
 > [!note] Where the numbers in this note come from Section 4 quotes the repo's own `task_basics` run (stages D, F, E, Q2) with the real `study.yaml`, `mission.yaml`, `scenarios.yaml`, `vehicle.yaml` and `controller.yaml`, loaded with `io.inputs.load_inputs` in draft mode (one draft reason, no register fallbacks). The **corrected-altitude** results (4.2) and the **SoC** numbers (6) are **my experiments**, run in scripts; the repo is unchanged. In the corrected-altitude experiment I patched the trim bracket (7.1) in the script only.
 
 > [!warning] Fix implemented on branch `feat/e-mission-budget` (26 Oct 2026)

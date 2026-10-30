@@ -18,9 +18,9 @@ from typing import Any
 
 # a table the registry asks for by its current name <- the legacy names that can stand in for it
 ALIASES: dict[str, tuple[str, ...]] = {"C_runs": ("C_ensemble_runs",)}
-LEGACY_PREFIXES: dict[str, str] = {"B1_front": "B1_pareto_"}  # B1_pareto_<scenario> files
+LEGACY_PREFIXES: dict[str, str] = {}  # legacy file-name prefixes that stand in for a table
 # a folder counts as results if it has a run record or a table with one of these prefixes
-KNOWN_PREFIXES = ("A_", "Q2_", "D_", "F_", "E_", "FT_", "C_", "B1_", "sens_", "settings_")
+KNOWN_PREFIXES = ("A_", "Q2_", "D_", "F_", "E_", "FT_", "C_", "sens_", "settings_")
 
 
 @dataclass

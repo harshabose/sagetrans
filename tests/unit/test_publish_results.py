@@ -84,10 +84,10 @@ def test_a_dry_run_checks_everything_and_creates_nothing(tmp_path, repo):
 
 
 def test_a_page_that_would_404_is_not_published(tmp_path, repo):
-    html = PAGE_HTML.replace("</body>", "<a href='B1_front.csv'>missing</a></body>")
+    html = PAGE_HTML.replace("</body>", "<a href='Z_missing.csv'>missing</a></body>")
     with pytest.raises(pub.PublishError, match="would 404|would not be on the branch") as exc:
         pub.publish(make_folder(tmp_path, html=html), repo)
-    assert "B1_front.csv" in str(exc.value)
+    assert "Z_missing.csv" in str(exc.value)
     assert sh(repo, "branch", "--list", "results/*") == ""
 
 

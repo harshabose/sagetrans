@@ -12,9 +12,8 @@ stopping point, x_tgt = V_ground^2 / (2 q) (O-02), and it is the cascade's accel
 **Legacy: `evaluate_back`, `plan_decel`, `evaluate_full`, `optimise`, `BACK_BOUNDS`, `FULL_BOUNDS`,
 `DEFAULT_PARAMS`, `THETA_P`.** The old scopes: ``back`` starts from an idealised level cruise and
 takes Q_TRANS_DECEL from a planner run (`a_plan_source`), ``full`` adds the forward transition and
-AIRSPEED_MIN, Q_TRANSITION_MS and TKOFF_THR_MAX. They stay because `analysis/sensitivity.py` and
-`collocation.bound_check` call them; B1 is compared with C on the AIRBRAKE-exit entry through
-`evaluate_c`. The study no longer runs them.
+AIRSPEED_MIN, Q_TRANSITION_MS and TKOFF_THR_MAX. They stay because `analysis/sensitivity.py` calls
+them. The study no longer runs them.
 """
 
 from __future__ import annotations

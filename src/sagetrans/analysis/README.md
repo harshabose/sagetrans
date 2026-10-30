@@ -10,7 +10,6 @@ scenario and options to a results object. Analysis letters follow the proposal's
 | Module | Proposal | Question answered |
 | --- | --- | --- |
 | `zero_loss.py` | **A** — quasi-steady zero-altitude-loss feasibility | For which constant decelerations at which speeds can the hardware hold altitude, inside an angle-of-attack band? What fails at each edge? |
-| `collocation.py` | **B1** — open-loop optimum by direct collocation | What is the best trajectory under the constraints? (energy against excursion and distance) |
 | `restricted.py` | **C** — ArduPilot-parameter optimisation | What can the autopilot be *configured* to do? |
 | `forward.py` | **FT** — forward transition from hover | Which `AIRSPEED_MIN`, `Q_TRANSITION_MS`, `TKOFF_THR_MAX` and `Q_TRAN_PIT_MAX` leave the altitude and the stall margin intact? |
 | `braking.py` | **D** — Position1 braking and `Q_TRANS_DECEL` | How far does the aircraft need to brake, and what deceleration should the planner assume? |
@@ -73,7 +72,7 @@ J = w_h p95(dh)/h_ref + w_E mean(E)/E_ref + w_x p95(x)/x_ref + P * (number of fa
 
 ### `runs.py`
 
-Helpers shared by C and B1: a cached `vehicle_for(vp)`; `stall_speed`;
+Helpers used by C: a cached `vehicle_for(vp)`; `stall_speed`;
 `cruise_entry_state(vp, scen, v_air)` (level steady cruise from `steady_trim`, rotors stopped,
 pusher at its trim speed, ground speed `V_air − headwind`); `end_events`; `failure_flags`;
 `segment_stats`; `run_metrics`.
@@ -94,8 +93,8 @@ and for which decelerations at which speeds?
 **Scope — an idealised scan, not a simulation.** A constant deceleration `a` from a free entry speed
 `V0` down to `v_end` (1 m/s), `gamma = 0`, no wind, **pusher off** (`t_p = 0`; the argument is kept
 but is not a config axis). The rotors are always treated as **pre-spun**: their speed at the first
-sample is the first schedule value. There is no entry step and no jerk limit. The argument for
-treating the rotor start speed as a decision variable now lives in B1 (`prespin_max`) and D.
+sample is the first schedule value. There is no entry step and no jerk limit. The rotor start
+speed is not a decision variable (D and C start the rotors at the AIRBRAKE exit).
 
 **Method.** At each speed the force balance leaves pitch as the one unknown. Eliminating the rotor
 thrust gives one equation in pitch:
@@ -269,7 +268,7 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
   not fixed: `D.sens.lag_s_sweep` (0, 0.1, 0.25, 0.5 s) is a sensitivity, and the altitude excursion
   stays a lower bound until a bench value is set.
   * `vehicle.rotor.I_rot` is separate and stays: the vehicle model integrates the rotor speed with it
-    and analyses A and B1 depend on it. It is a physical parameter, not a D setting, and D does
+    and analysis A depends on it. It is a physical parameter, not a D setting, and D does
     not sweep it. `braking.rotor_speed_tau` is the model's own time constant at hover (about 0.023 s
     at the placeholder, linear in `I_rot`); it adds in series with `rotor_lag_s`, so the lag
     dominates for any value worth sweeping. `D_sensitivity` shows `rotor_lag_s`,
@@ -279,8 +278,6 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
     `tau_meas`. Then `rotor_lag_s = max(0, tau_meas - tau_rotor_model_s)`, so the model's lag is not
     counted twice. If a measured `I_rot` arrives, enter it in `vehicle.yaml` and reduce `rotor_lag_s`
     by the model time constant it adds.
-  * B1 has only `I_rot`, not this lag; C uses the controller and gets it. Compare B1 with C
-    at `rotor_lag_s = 0`.
 
 ### The wing is stalled while braking
 
@@ -580,7 +577,7 @@ records `tkoff_thr_max` and its status; if the register entry is absent the 0.7 
 the row says `fallback (placeholder)`.
 
 **Airspeed convention.** `AIRSPEED_MIN` is an equivalent airspeed (`Q2.feed_convention: eas`, since
-2026-10-28 the default, and the one D, C, B1 and FT use); both conventions are still tabulated. E
+2026-10-28 the default, and the one D, C and FT use); both conventions are still tabulated. E
 converts it once, in `energy.mission_at_site` (the true airspeed at the clearance altitude above the
 site), so E's forward segment and Q2's end speed are the same number. At 5000 m EAS and TAS differ by
 29 percent (17 EAS is 21.9 TAS).
@@ -677,6 +674,7 @@ Record `result.search.spread` as `search_spreads={"C": …}` so the release gate
 | `C_runs` | per ensemble member at the optimum: inputs, `x_tgt`, `x_end`, overshoot, energy, excursion, end sink rate, flags, `a_cap_ms2`, `q_over_a_cap`, and D's `braking_flags` (alpha above the 0.8 C_L,max band, VRS ratio; reporting only, not in `J`) |
 | `C_q_curve` | the optimum's `T_bt`, `theta_A`, `spin_min` with `q` varied (`C.q_curve`): the energy-against-distance curve, from which any overshoot tolerance can be read |
 | `C_sens` | one at a time at the optimum: `rotor_lag_s`, `rotor_start`, `z_vel_p`, `z_acc_p`, `theta_fw0_deg` |
+| `C_history` | two time-history views: the optimum and the ArduPilot default on `C.history_scenario` (altitude band `C.history_band_m`), and both on the ensemble member where the default overshoots most |
 | `C_alpha_curve` | one row per wing limit: `kind` (`unconstrained` or `enforced`), `alpha_frac`, `limit_deg`, the four variables, `p95_distance_m`, `p95_stop_time_s`, `mean_energy_kJ`, failures, `J` |
 | `C_ref_params`, `C_ref_runs`, `C_ref_history` | the unconstrained reference, same columns as `C_params`, `C_runs`, `C_history` |
 
@@ -685,8 +683,7 @@ Record `result.search.spread` as `search_spreads={"C": …}` so the release gate
 (`Q_A_ANGLE_MAX`, `PTCH_LIM_MAX_DEG` 20 deg) takes the wing past the peak, so the unconstrained search
 flies through the stall. With `enforce_alpha` on (the shipped setting, the headline) the pitch command
 is capped at `limit + gamma` while `V` is above the 5 m/s gate, with `limit = margin_alpha_frac x
-alpha_s` (`stages.c_wing_limit_rad`; one study-level fraction, 0.7, ASSUMED/PROPOSED, shared with the B1
-`margin` variant). It is a command-side cap, so the angle can still sit about a degree above the limit;
+alpha_s` (`stages.c_wing_limit_rad`; one study-level fraction, 0.7, ASSUMED/PROPOSED, study-wide). It is a command-side cap, so the angle can still sit about a degree above the limit;
 the C_L peak is the real stall. `alpha_s` (15.70 deg) is a guess (the CFD has no lift peak up to
 15 deg) and the blend sharpness `M` (70) is a numerical parameter that also sets C_L,max: **every stall
 number is provisional until the register is filled.** Reported, not penalised, in `C_runs` and
@@ -701,7 +698,7 @@ never a recommendation") in `C_ref_params`, `C_ref_runs`, `C_ref_history`. `C:al
 fraction in `C.alpha_curve_fracs`, `[1.0, 0.85]` in the shipped file) searches with the wing held to `f x alpha_s`
 and writes one row of `C_alpha_curve` (the unconstrained row first, then the fractions from the largest
 down): the price of the margin, energy, distance and stop time against the limit. The settings sheet
-(`Q_TRANS_DECEL` note), the B1-C gap, the C sensitivity and the viewer all read the enforced optimum.
+(`Q_TRANS_DECEL` note), the C sensitivity and the viewer all read the enforced optimum.
 With the cap on, q is lower, the stop longer and the energy higher than without it; by how much
 depends on `alpha_s`, which is a guess, so the first full run after the register is filled gives the
 number. `docs/time_histories.md` compares C's q with D's `a_rec`.
@@ -713,9 +710,9 @@ fifth variable of this search, with the entry speed following it). Also not in t
 
 **Legacy.** `evaluate_back`, `plan_decel`, `evaluate_full`, `optimise`, `BACK_BOUNDS`, `FULL_BOUNDS`,
 `DEFAULT_PARAMS` and `THETA_P` are untouched and marked legacy in their docstrings.
-`analysis/sensitivity.py` and `analysis/collocation.py` still call `evaluate_back`, `plan_decel`,
-`DEFAULT_PARAMS` and `THETA_P`; their migration is a separate step. B-9 (B2 against C) is
-withdrawn: B2 was removed, and B1 is compared with C through `B1_gap`. C's `x` is the distance from the AIRBRAKE exit to the stop; it
+`analysis/sensitivity.py` still calls `evaluate_back`, `plan_decel`,
+`DEFAULT_PARAMS` and `THETA_P`; its migration is a separate step. B-9 (B2 against C) is
+withdrawn: B2 and B1 were removed (docs/B2_removal_spec.md, docs/B1_removal.md). C's `x` is the distance from the AIRBRAKE exit to the stop; it
 leaves out the APPROACH/AIRBRAKE leg and the `2 * V_closing` term of the switch test (O-02), which belong
 to E's budget.
 
@@ -771,191 +768,6 @@ with the source facts in `docs/ardupilot_open_questions.md` (O-14 to O-22).
 * **A reference, not a recommendation.** The `ardupilot_default` case sets the four searched values to what
   ArduPilot ships with (`configs/ardupilot_defaults.yaml`, docs/DEFAULTS_spec.md) and keeps the rest of the
   register; C has the same third case. It is simulated to show how far the default is from the optimum.
-
----
-
-## B1 — open-loop optimum by direct collocation (`collocation.py`)
-
-**Question.** What is the least bus energy for the AIRBRAKE-exit-to-hover problem, as a function of
-distance, under a **stated wing limit**? It is the energy-against-distance front to set beside C's
-`C_q_curve`. It is not "the shape of the schedule" and not a strict lower bound (B-2).
-
-**Entry.** B1 starts at the AIRBRAKE exit, like D and C: `make_problem_exit` builds the problem from
-`braking.airbrake_entry_state` (all nine states fixed to it, the rotor speed included; `prespin_max`
-stays 0), at the entry speed of D's rule `AIRSPEED_MIN - 2`. The rotor start
-(`carry` or `idle`) and the end sink tolerance are read from the **C block**, the entry-speed rule and
-`theta_fw0` from the **D block**; the B1 block does not repeat them. The old level-cruise problem
-(`make_problem`, 22 m/s) is kept for the legacy `bound_check` and the unit tests. B-9 (B2 against C) is
-withdrawn: B2 was removed. `with_options` now keeps the
-problem's entry state (it used to rebuild a cruise problem).
-
-**The wing limit is stated, never silent.** Three variants are run and labelled in every table:
-`margin` (|alpha_w| <= `margin_alpha_frac` x alpha_s, 0.7, and the pitch command <= `PTCH_LIM_MAX_DEG`:
-the same wing limit and the same pitch ceiling as the enforced C, so it is the flyable bound),
-`attached` (|alpha_w| <= 0.85 alpha_s, pitch command <= 34.4 deg: an upper bound at the lift peak) and
-`c_envelope` (|alpha_w| <= 30 deg, pitch command <= `PTCH_LIM_MAX_DEG`: an upper bound that flies the
-stall).
-`CollocationOptions.alpha_max` replaces `stall_margin x alpha_s` when set. There is **no "no limit"
-variant**: without one the solver puts the wing at about 51 deg on the blended post-stall model
-(eqs. 6.2 to 6.5), which is not credible without validation. **The wing limit decides the number**: S-01
-at a 1 m band costs 8.9 kJ over 73 m with `attached`, about 8.2 kJ over 40 m with `c_envelope`, and
-about 7.1 kJ with no limit at all. `attached` cannot go much below 73 m at that band; a point that does
-not converge from the three starts is kept in the table with its energy blank, and it means the solver
-failed, not that the point is infeasible.
-
-**The band.** The headline altitude band is 1 m (C holds 0.5 to 1 m with the ArduPilot Z loop), symmetric.
-A 10 m band is an energy store: B1 dives to gain speed and zoom-climbs while braking, which says nothing
-about the autopilot. 3 m and 10 m are a sensitivity (`B1_sens`). The end band on `|v_h|` is C's sink
-tolerance (1.76 m/s), plus a 0.5 m/s sensitivity row; B1 bounds climb as well as sink, where C flags only
-sink, so B1 can be very slightly less cheap than a sink-only bound.
-
-**Formulation.** Hermite–Simpson collocation of the single CasADi vehicle (with smoothing), free final
-time, solved with IPOPT through CasADi's `Opti`. States are the 9 vehicle states; the unknowns are the
-rotor-throttle and pitch-command histories and the final time. The pusher stays off.
-
-```
-minimise  E = integral V_bus I_bus dt   (+ a small control-rate regulariser)
-subject to dynamics (HS defects), |h - h_ref| <= eps_h at nodes AND midpoints,
-           ground distance <= eps_x,   vx(T_f) = V_f,  |vh(T_f)| <= vh_band (C's sink tol),
-           0 <= delta_r <= 0.95, |theta_cmd| <= theta_cmd_max, throttle and pitch slew limits,
-           V_bus >= V_min, |vh| <= 3 m/s, rotor speed >= 0,
-           wing limit |alpha_w| <= alpha_max (or 0.85 alpha_s) while V >= V_s (nodes AND midpoints)
-```
-
-There is no equivalent of C's `rotor_lag_s`: B1's rotor state and its throttle slew limit (5 per s) play
-that role, so the gap to C includes that difference.
-
-`B1.end_balance` (default off in the class, on in the shipped study for every variant) adds one
-equality: the vertical acceleration at the last node is zero (`f(x_N, u_N)[3] = 0`). Without it only the
-climb rate is bounded at the end and the last interval buys energy by letting the aircraft fall at about
-0.6 g (the throttle and pitch dump); with it the stop is in vertical force balance, ready to hover. It
-costs a few percent of energy and is applied to all variants so they stay comparable.
-
-The second objective, `"excursion"`, minimises the maximum altitude deviation instead (the
-`epsilon_h*` of the Pareto front).
-
-### What it took to make it work — read this before changing it
-
-The first versions converged poorly, and then converged to solutions that **did not survive replay in
-`simulate()`**. Each issue below was diagnosed, not guessed:
-
-1. **Speed.** An exact Hessian through the MX graph took minutes. `expand=True` (SX expansion) cut a
-   solve from 42 s to 3.8 s. Limited-memory Hessians were fast but stalled.
-2. **Mesh refinement.** Large meshes converge poorly from a rough guess; `solve_refined` solves on a
-   coarse mesh first (default 20 intervals) and warm-starts the finer mesh.
-3. **Graded mesh** (`grading=0.5`): finer steps at both ends, where the rotors spool and the pusher
-   speed decays.
-4. **ESC dead-zone dither.** The optimiser kept the rotor throttle inside the dead zone, where the
-   smoothed corner leaks a little torque that Hermite–Simpson integrates differently from the
-   simulator. **Fix: the NLP's rotor control is the *effective* throttle** (dead zone removed from the
-   NLP vehicle); the replay maps back with `command = dz + (1 − dz) * effective`.
-5. **Stall cliff.** The wing's stall blend is about 0.01 rad wide, and the optimiser flew a pitch-up
-   through it between nodes, where Hermite–Simpson cannot see it; replays disagreed by metres.
-   **Fix: a stall margin (0.85 of the stall angle), enforced at collocation midpoints as well as
-   nodes**, and the altitude band is enforced at midpoints too.
-6. **Pitch pumping and flat optima.** `|vh| <= 3 m/s` and a small control-rate regulariser
-   (`reg=1e-2`) removed violent pumping and conditioned the energy-flat optimum.
-7. **Smoothing leakage.** The current-clip smoothing width biases energy; at 0.5 A the replay energy
-   differed by about 2 %, at the default 0.02 A by 0.4–0.7 %.
-
-### Replay and verification (T-11)
-
-`replay(prob, sol)` re-simulates the controls with the near-exact vehicle and RK4 at 0.02 s and compares
-energy, distance, duration and excursion (`ReplayCheck.passes`): energy, distance and duration within
-2 %, and the excursion within 2 % **or 0.3 m** (a small difference of large integrals that agrees only
-to about 0.25 m at N = 40; this is a deliberate deviation from a flat 2 %). A solution that fails its
-replay is not trusted. `solve_verified` tries several initial guesses (baseline-controller runs with
-different pitch limits and ramp times) and returns the best result that both **converged and replays**;
-every attempt is kept, and non-convergence is recorded, never raised or hidden. `pareto_sweep` builds
-the epsilon-constraint front this way; `min_excursion` is the least reliable mode (a converged
-excursion-objective solution once reported 0.0 m at the nodes while the replay showed several metres)
-and its result must be checked via `Verified.verified`.
-
-### Reading B1's result
-
-* **Which points are quoted.** Only converged, replay-verified points; `B1_front.reason` says why any
-  other point is not (not converged, replay mismatch, fails 10 ms late). The headline gap quotes the
-  `margin` rows first ("flyable bound"; a scenario where `margin` has no verified point says so and
-  quotes nothing for it) and the `attached` and `c_envelope` rows after them ("upper bounds at the lift
-  peak", `c_envelope` with its timing warning).
-* **Is `attached` attached?** The `attached` limit is `alpha_margin x alpha_s` in the convention
-  `alpha_w = alpha + i_w`. The columns `alpha_w_clmax_deg`, `cl_max` and `cl_at_limit_over_max` (a 0.01
-  deg scan of `aero.coefficients`) show where the model's C_L peaks: with the shipped wing the peak is
-  at 13.43 deg and the limit at 13.34 deg, 0.09 deg below it, where C_L is 99.98 % of C_L,max. So the
-  limit leaves no stall margin in lift: "attached" means below `alpha_s`, which is 2.3 deg past the
-  peak. The variant is unchanged.
-* **Is `margin` flyable?** The same computation for the `margin` limit: where it sits against the
-  lift peak (with the shipped wing 0.7 x 15.70 = 10.99 deg against the peak at 13.43 deg, and C_L at that angle
-  as a fraction of C_L,max, both read from the `B1_front` columns), a margin in angle before the peak, which `attached` does not have.
-* **What the gap to C contains.** `margin` flies C's wing limit and C's pitch ceiling, so the pitch
-  freedom is already out of the gap between them; what is left is the missing rotor lag and the
-  foreknowledge of the scenario (B1 is open loop for one scenario, C's four settings serve the whole
-  ensemble). `attached` and `c_envelope` add operation at the lift peak on top; the paragraph and the
-  gap ladder (C with the wing held, `margin`, `attached`, `c_envelope`, and C without the cap as a
-  hatched reference) give each step in kJ. None of it is what a better parameter set could save.
-
-### Comparing with C
-
-**`bound_check_c(prob, c)`** solves B1 at C's own excursion and distance (`eps_h = max(c.excursion x
-1.02, 0.3)`, `eps_x = c.distance x 1.02`, objective energy, the three starts of `solve_verified`) and
-reports `energy_margin = (C energy - B1 energy) / C energy`. `c` is `restricted.evaluate_c` for the same
-scenario. Read it as the **same-problem gap**: B1 is clairvoyant (it knows the scenario exactly), open
-loop (no disturbance) and has no rotor lag, so the gap is an upper bound on what the structure of the
-ArduPilot controller costs. It is one scenario and one variant at a time (`B1_gap` has a row per
-variant). Each B1 task is an independent process, so it cannot read C's optimum from the C task: the gap
-evaluates C at `B1.gap_c` (paste the optimum from `C_params`), or, if that is null, at the register
-parameters with `q` = 2, and the table says which. `bound_check` (against the 20 deg / 3 s guess
-controller with the repo altitude hold, B-1) stays as legacy. `compare(prob, b1, c_params)`
-tabulates B1 and C (`evaluate_c`).
-
-`baseline_run` and `baseline_guess` and the three `(theta_A, T_bt)` starts of `solve_verified` only
-generate initial guesses; they are not a baseline for comparison.
-
-**Outputs.** `B1_front` (per scenario, variant and distance cap: converged, replay-verified, attempts
-converged of 3, energy, excursion, distance, `t_f`, entry speeds, `below_vs`, replay errors, the shape
-of the replayed schedule from `schedule_summary` (when the rotors come in, `V / V_s` then, peak wing
-angle, peaks), D's VRS ratio and alpha-above-band time (reporting only), `J_point` = C's cost of the
-point with C's normalisers, `end_balance` (whether the point ends in vertical force balance) and `j_best` marking the least per
-scenario and variant), `B1_gap` (also `c_wing_held`, and `c_unconstrained_energy_kJ` and
-`c_unconstrained_distance_m` for C without the wing cap, for the gap ladder),
-`B1_sens` (the 3 m and 10 m bands on every scenario; the other rotor start, the 0.5 m/s end band and
-the 34.4 deg pitch limit on the first) and `B1_schedule` (the replay of the `j_best` point of the first
-scenario, per variant, every fifth sample). A point that is not replay-verified has its energy blank.
-`V_0` at 5000 m is below the 1g stall speed (S-02: 17.4 m/s), where the wing limit is relaxed by the
-smooth gate; `below_vs` says so. VRS is only reported, not a constraint (B-3).
-
-**Cost.** 60 to 105 s per converged point (three starts, two meshes) and about 100 solves with the
-shipped block (2 to 3 hours on one core). B1 tasks run in parallel across scenarios; the exact-Hessian
-solves are memory hungry (eleven at once ran out of memory with `std::bad_alloc` on a 24-core
-workstation), so limit `parallel.max_workers` if memory is short.
-
-**B1 is *not* a strict lower bound.** It keeps limits the baseline does not respect (`|vh|`, stall
-margin, slew limits), so a controller that breaks them can be cheaper at the same excursion. Relaxing the limits makes the NLP much harder (none of three retries
-converged). The claim that *can* be made is one-sided: if B1 under its tighter limits already beats the
-baseline, the true bound is at least that good.
-
-**What it found (placeholder, level-cruise entry at 22 m/s, sea level; the legacy level-cruise problem).**
-
-| Case | Excursion | Energy | Distance |
-| --- | --- | --- | --- |
-| B1, 20 m band (nearly unconstrained) | 16 m | 2.11 kJ | 83 m |
-| B1, 10 m band | 10 m | 2.34 kJ | 129 m |
-| B1, 5 m band | 5 m | 2.56 kJ | 176 m |
-| Baseline, tuned (C) | 13.4 m | 3.21 kJ | 93 m |
-| Baseline, default, vs B1 at the same excursion/distance | 12.4 m | 4.53 kJ vs 2.23 kJ | 121 m vs 108 m |
-
-The cost of a tighter altitude band is visible in the first three rows. The baseline spends about twice
-the energy of B1 at the same excursion and distance.
-
-**Known weaknesses.** Convergence is fragile, especially for infeasible caps (a 100 m or 80 m stopping
-distance from 22 m/s). Solves at 100–120 intervals work with refinement but take 140–160 s. Not
-implemented: a sourced vortex-ring exclusion, five initial guesses per point (three are used), and the
-free rotor start is an option (`prespin_max`) whose pre-entry spin-up energy is **not** counted.
-
-**Tests** (`test_m6.py`): the graded mesh, the dead-zone mapping in the open-loop controller, that the
-solution satisfies every constraint, **T-11**, the Pareto trend (a tighter band costs energy and time),
-non-convergence being recorded, the baseline comparison, the replay check rejecting a doctored
-solution, and that sweeps keep every attempt.
 
 ---
 
