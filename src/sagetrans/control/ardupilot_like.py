@@ -64,6 +64,15 @@ class BackTransitionParams:
     brake_at_limit: bool = False  # worst-case braking test for analysis D
     # pitch envelope as ArduPilot (O-04, O-05)
     theta_fw0: float = 0.0  # rad; last FW pitch at the AIRBRAKE exit (ramp start, initial pitch)
+    # True: the entry pitch is the level-trim pitch of the entry state (mass, density, speed) and
+    # `theta_fw0` is replaced by it when the entry is built (`braking.resolve_entry_pitch`); the
+    # controller refuses a parameter set that is still unresolved.
+    theta_fw0_trim: bool = False
+    # Bumpless start: the pitch command is not allowed below the entry pitch, released at this rate
+    # (rad/s; 0 = off). The cascade takes over as soon as its own demand is higher, so the braking
+    # is not slowed; without it the command starts at 0 (the cascade is on its velocity profile)
+    # and the attitude loop pulls a trimmed aircraft nose-down, which loses the wing's lift.
+    pitch_release_rate: float = 0.0
     pit_lim_mode: str = "constant"  # "constant" | "airspeed"
     v_min_ref: float | None = None  # m/s; V_min of the airspeed form (set from AIRSPEED_MIN)
     # altitude-hold feed-forward
@@ -212,6 +221,10 @@ class Position1Controller:
                 raise ValueError("z_mode 'ardupilot' needs a LiftFF (its thrust map)")
             if z_i0 is None:
                 raise ValueError("z_mode 'ardupilot' needs z_i0 (entry thrust over T(delta_max))")
+        if p.theta_fw0_trim:
+            raise ValueError(
+                "theta_fw0_trim is set: resolve the entry pitch first (braking.resolve_entry_pitch)"
+            )
         self.p = p
         self.ff = ff
         self.z_i0 = z_i0
@@ -301,7 +314,11 @@ class Position1Controller:
             v_des = math.sqrt(2.0 * p.a_lim * d) if d > d_lin else p.K_p * d
             a_cmd = p.K_v * (vx - v_des)
             theta_cmd = max(0.0, min(lim, math.atan(a_cmd / G)))
-        new = ModeState(mode.name, mode.t_enter, t, {"integ": integ, **mem})
+        theta0 = mode.memory.get("theta0", float(x[4]))  # the pitch at the entry, kept
+        if p.pitch_release_rate > 0.0:
+            floor = max(0.0, theta0 - p.pitch_release_rate * (t - mode.t_enter))
+            theta_cmd = min(lim, max(theta_cmd, floor))
+        new = ModeState(mode.name, mode.t_enter, t, {"integ": integ, "theta0": theta0, **mem})
         return np.array([delta, 0.0, theta_cmd]), new
 
 

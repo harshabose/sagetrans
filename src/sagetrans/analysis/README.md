@@ -237,9 +237,22 @@ a_rec = a low percentile (and the minimum) of a_eq over the ensemble            
 * **Entry is the AIRBRAKE exit.** `t = 0` is when ArduPilot leaves AIRBRAKE, which is also when it
   starts the pitch-envelope clock (`set_last_fw_pitch()`, open question O-03). The rotors are
   already spun up and carry what the wing does not (`hold_hover(0)`; no spool dynamics), the pusher
-  is off, and the pitch is the last fixed-wing pitch `theta_fw0` (**placeholder 0**: the real value
-  is the TECS/navigation pitch demand at the AIRBRAKE exit, from a SITL run or a flight log; each
-  degree adds about 0.05 m/s² to `a_eq`). `airbrake_entry_state` builds that state.
+  is off, and the pitch is the last fixed-wing pitch `theta_fw0`. `D.theta_fw0_deg` is a number
+  (a placeholder until a SITL run or flight log gives the TECS/navigation pitch demand at the
+  AIRBRAKE exit; each degree adds about 0.05 m/s² to `a_eq`) or `"trim"`: the pitch of level steady
+  flight at each scenario's entry state (mass, density, entry speed; `braking.resolve_entry_pitch`
+  calls `trim.steady_trim`), where the wing carries the weight. `airbrake_entry_state` builds that
+  state, and every caller that runs the controller resolves the entry pitch first (the controller
+  refuses an unresolved `"trim"`).
+* **A bumpless start** (`D.pitch_release_dps`, assumed; 0 = off). The cascade's pitch command is a
+  lean angle for the deceleration demand only, and at `t = 0` the aircraft is on its velocity
+  profile, so it is 0 whatever the entry pitch is: a trimmed aircraft is pulled nose-down within
+  0.4 s and loses lift (peak vertical acceleration 2.6 m/s² even from the trim pitch, 6.0 m/s² from
+  0°). With the release the command is not allowed below the entry pitch, which is then released at
+  this rate; the cascade takes over as soon as its demand is higher, so the braking is not slowed.
+  At 2 deg/s the first-second peak is 0.3 to 0.4 m/s² (S-01, S-02, S-03, register parameters, `q`
+  1.5, enforced). Whether ArduPilot's own Position1 target starts near the previous pitch was not
+  established from the source.
 * **The entry speed comes from the airspeed exit rule only**: `entry_airspeed` returns
   `AIRSPEED_MIN - 2` as a true airspeed (`Q_ASSIST_SPEED` is not modelled; the study assumes it is 0,
   O-20). `entry_convention: eas` (set in
@@ -718,7 +731,7 @@ to E's budget.
 
 **Limits.** The end state is only a sink-rate check (DEC-5 lean, 1.76 m/s): there is no landing-error
 criterion (DEC-4) and no check on position or heading at the stop. The entry state still has
-placeholders (`theta_fw0_deg` = 0; `AIRSPEED_MIN` read as a true airspeed, DEC-1). `theta_A` against its
+placeholders (`theta_fw0_deg` is `trim`, the pitch release is assumed; `AIRSPEED_MIN` read as a true airspeed, DEC-1). `theta_A` against its
 30° bound is a stalled-wing brake as in D: read D's alpha and VRS flags next to it, and do not read the
 result as a recommendation to fly at 30°.
 

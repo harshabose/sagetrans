@@ -582,13 +582,13 @@ def scenarios_panel(rows: Sequence[Row]) -> str:
         "The scenarios of scenarios.yaml and the state each back transition starts from: the "
         f"AIRBRAKE exit at AIRSPEED_MIN - 2, read as an equivalent airspeed, with the register's "
         f"AIRSPEED_MIN ({reg:g} m/s) -> the recommended one ({rec:g} m/s). The columns with an "
-        "arrow are in m/s (register -> recommended): the entry true airspeed, the ground speed "
+        "arrow are register -> recommended (m/s, and degrees for the pitch): the entry true airspeed, the ground speed "
         "(the true airspeed less the headwind) and V/Vs, the true airspeed over the 1 g stall "
         "speed at the scenario's mass." if ok(reg) and ok(rec)
         else "The scenarios of scenarios.yaml and the state each back transition starts from.")
-    if ok(num(r0.get("entry_pitch_deg"))):
-        head += (f" Pitch at the exit {num(r0['entry_pitch_deg']):g} deg and rotors "
-                 f"'{r0.get('entry_rotor_start')}' (D.theta_fw0_deg and C.rotor_start).")
+    if r0.get("entry_rotor_start"):
+        head += (f" The rotors start at '{r0['entry_rotor_start']}' (C.rotor_start); the entry pitch "
+                 "is the trim pitch of the entry state when D.theta_fw0_deg is \"trim\".")
     show = [{
         "scenario": r["scenario"], "altitude_m": r.get("altitude_m"),
         "isa_offset_k": r.get("isa_offset_k"), "mass_kg": r.get("mass_kg"), "soc": r.get("soc"),
@@ -596,6 +596,7 @@ def scenarios_panel(rows: Sequence[Row]) -> str:
         "entry TAS": _pair(r, "entry_tas_@_ms", ".1f"),
         "ground speed": _pair(r, "entry_ground_@_ms", ".1f"),
         "V/Vs": _pair(r, "entry_over_stall_@", ".2f"),
+        "entry pitch [deg]": _pair(r, "entry_pitch_@_deg", ".1f"),
     } for r in rows]
     body = table_html("E_scenarios", list(show[0]), show)
     if notes:

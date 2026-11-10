@@ -80,6 +80,29 @@ def entry_airspeed(
     raise ValueError(f"unknown entry convention {convention!r}")
 
 
+def resolve_entry_pitch(
+    vp: VehicleParams, scen: Scenario, bp: BackTransitionParams, v_air0: float
+) -> BackTransitionParams:
+    """`bp` with the entry pitch resolved: `theta_fw0` itself, or, when `theta_fw0_trim` is set,
+    the pitch of level steady flight at the entry state (the scenario's mass, density and SoC at
+    the entry true airspeed `v_air0`), where the wing carries the weight and the pusher the drag.
+
+    A parameter set with `theta_fw0_trim` set cannot be run (`Position1Controller` refuses it), so
+    every caller that builds an entry resolves first and runs the controller with the result.
+    Raises ValueError when the wing cannot carry the weight at `v_air0` (no trim exists).
+    """
+    if not bp.theta_fw0_trim:
+        return bp
+    try:
+        tr = trim.steady_trim(scen.vehicle_for(vp), scen.rho, v_air0, 0.0, scen.soc)
+    except ValueError as exc:
+        raise ValueError(
+            f"D.theta_fw0_deg is 'trim', but {exc} (entry airspeed {v_air0:.2f} m/s true); "
+            "give a number for this entry"
+        ) from exc
+    return replace(bp, theta_fw0=float(tr.alpha), theta_fw0_trim=False)
+
+
 def entry_rotor_thrust(
     vps: VehicleParams, scen: Scenario, bp: BackTransitionParams, v_air0: float,
     rotor_start: str = "carry", ff: LiftFF | None = None,
@@ -93,6 +116,7 @@ def entry_rotor_thrust(
     POSITION1 starts; read from source, not checked in SITL). `ff` is a `LiftFF` with a table up to
     the largest command, built here if not given (`"idle"` only).
     """
+    bp = resolve_entry_pitch(vps, scen, bp, v_air0)
     if rotor_start == "carry":
         lift0 = float(aero.forces(scen.rho, v_air0, bp.theta_fw0 + vps.wing.i_w, vps.wing)[0])
         weight = vps.m * G
@@ -113,6 +137,7 @@ def airbrake_entry_state(
     `rotor_start="carry"` (the default, D's assumption) is the thrust the wing does not supply,
     `"idle"` the thrust at `bp.delta_min` (O-13). There is no spool dynamics.
     """
+    bp = resolve_entry_pitch(vp, scen, bp, v_air0)
     v0_ground = v_air0 - scen.headwind_ms  # headwind is positive against the aircraft
     if v0_ground <= v_f:
         raise ValueError(f"ground speed {v0_ground:.2f} m/s at entry is not above {v_f:g} m/s")
@@ -275,6 +300,8 @@ def run_braking(
     """
     vps = scen.vehicle_for(vp)
     veh = vehicle or runs.vehicle_for(vps)
+    if bp.theta_fw0_trim and x0 is not None:  # an AIRBRAKE-exit start: its own trim pitch
+        bp = resolve_entry_pitch(vp, scen, bp, float(x0[2]) + scen.headwind_ms)
     bp = replace(bp, h_tgt=scen.altitude_amsl_m)
     if refresh_hover:
         bp = replace(bp, delta_hover=trim.hover_throttle(vps, scen.rho, scen.soc))

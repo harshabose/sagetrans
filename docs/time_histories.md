@@ -75,14 +75,18 @@ Under the enforced configuration the one-at-a-time sensitivity has no failing me
 (*tiny*; the unconstrained search had failures at `rotor_lag_s` 0.5 and `z_acc_p` 0.015), and the
 change of J without the penalty stays within about 10 %.
 
-### Where the entry state is set (not changed here)
+### Where the entry state is set (changed afterwards: a bumpless start)
 
 `braking.airbrake_entry_state` builds all nine states at the AIRBRAKE exit: pitch is
-`bp.theta_fw0` (from `D.theta_fw0_deg`, a placeholder at 0 deg, through `stages.exit_params`), the
-pusher is off and the rotors are spun to `entry_rotor_thrust` (`C.rotor_start`). The wing is
-therefore not trimmed at 15 m/s (the wing carries about a third of the weight at t = 0), so the
-first second has a vertical acceleration of about -6 m/s^2. Trimming the entry is a separate
-change and is out of scope.
+`bp.theta_fw0` (from `D.theta_fw0_deg` through `stages.exit_params`), the pusher is off and the
+rotors are spun to `entry_rotor_thrust` (`C.rotor_start`). With `theta_fw0_deg: 0` the wing is not
+trimmed at 15 m/s (it carries about a third of the weight at t = 0), so the first second has a
+vertical acceleration of about -6 m/s^2. Measured later (S-01, register parameters, q 1.5): trimming
+the entry pitch alone leaves 2.6 m/s^2, because the pitch command starts at 0 (the cascade is on
+its velocity profile) and the attitude loop pulls the trimmed aircraft nose-down within 0.4 s.
+`D.theta_fw0_deg: trim` (the level-flight pitch of each scenario's entry state) together with
+`D.pitch_release_dps` (the command is held at the entry pitch and released at that rate) brings the
+peak to 0.3 to 0.4 m/s^2 (docs: analysis README, D).
 
 ## B1: the optimum sits on the edge of the lift curve and ends falling
 

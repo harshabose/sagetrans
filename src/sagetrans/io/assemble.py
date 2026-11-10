@@ -14,7 +14,7 @@ from sagetrans.analysis.braking import RHO0
 from sagetrans.io import figures, gate, recommended, report, results
 from sagetrans.io.inputs import StudyInputs
 from sagetrans.io.record import FullRunRecord, build_record
-from sagetrans.io.stages import FT_PARAM_COLUMNS, ft_bounds, grid_winner
+from sagetrans.io.stages import FT_PARAM_COLUMNS, d_exit_params, ft_bounds, grid_winner
 
 Table = list[dict[str, Any]]
 
@@ -143,8 +143,10 @@ def _section_d(q: dict[str, Any]) -> str | None:
         "holds the angle to the top of A's band and shows the other bound (see `D_sensitivity`). "
         "`D.ff_mode: lift_aware` is an oracle at its defaults (it reads the simulated lift). "
         "Altitude excursions are lower bounds: ideal actuators, assumed gains, no gusts. "
-        "`D.theta_fw0_deg` is a placeholder until a SITL run or flight log gives the pitch at the "
-        "AIRBRAKE exit.", ""]  # fmt: skip
+        "`D.theta_fw0_deg` is the pitch at the AIRBRAKE exit: \"trim\" (the pitch of level steady "
+        "flight at each scenario's entry state) or a number, a placeholder until a SITL run or "
+        "flight log gives it. `D.pitch_release_dps` (assumed) holds the pitch command at the entry "
+        "pitch and releases it, so the start is bumpless.", ""]  # fmt: skip
     rec = t.get("D_recommendation")
     if "a_rec" in q and rec:
         r0 = rec[0]
@@ -228,10 +230,11 @@ def e_scenarios(inp: StudyInputs, rec: Mapping[str, Any]) -> Table:
     One row per scenario: where it is (altitude, ISA offset, mass, SoC, headwind) and, at the
     register's AIRSPEED_MIN and at the FT optimum's, the AIRBRAKE-exit state D and C start
     from: the entry airspeed (`AIRSPEED_MIN - 2`, read as an equivalent airspeed), its true and
-    ground speed, and the ratio to the 1 g stall speed. The pitch and the rotor start are the
-    settings of D and C.
+    ground speed, the ratio to the 1 g stall speed and the entry pitch (the trim pitch of that
+    state when `D.theta_fw0_deg` is "trim", else the number). The rotor start is the setting of C.
     """
     conv = inp.study.D.entry_convention
+    exit_bp = d_exit_params(inp)
     rows: Table = []
     for name, sc in inp.scenarios.items():
         vp_s = sc.vehicle_for(inp.vehicle)
@@ -250,7 +253,8 @@ def e_scenarios(inp: StudyInputs, rec: Mapping[str, Any]) -> Table:
             row[f"entry_tas_{lab}_ms"] = tas
             row[f"entry_ground_{lab}_ms"] = tas - sc.headwind_ms
             row[f"entry_over_stall_{lab}"] = tas / v_stall
-        row["entry_pitch_deg"] = inp.study.D.theta_fw0_deg
+            row[f"entry_pitch_{lab}_deg"] = math.degrees(
+                braking.resolve_entry_pitch(inp.vehicle, sc, exit_bp, tas).theta_fw0)
         row["entry_rotor_start"] = inp.study.C.rotor_start
         rows.append(row)
     return rows

@@ -147,7 +147,12 @@ class DCfg(_Strict):
     ff_mode: Literal["repo", "lift_aware"] = "lift_aware"
     ff_lift_tau_s: float = Field(0.0, ge=0.0)
     ff_lift_scale: float = Field(1.0, gt=0.0)
-    theta_fw0_deg: float = 0.0  # last fixed-wing pitch at the AIRBRAKE exit (placeholder)
+    # last fixed-wing pitch at the AIRBRAKE exit: a number (a placeholder until a SITL run or flight
+    # log gives it), or "trim": the pitch of level steady flight at each scenario's entry state
+    theta_fw0_deg: float | Literal["trim"] = 0.0
+    # bumpless start: the pitch command is held at the entry pitch and released at this rate (deg/s;
+    # 0 = off). The cascade takes over as soon as its demand is higher. ASSUMED, PROPOSED.
+    pitch_release_dps: float = Field(0.0, ge=0.0)
     pit_lim_mode: Literal["constant", "airspeed"] = "constant"  # Q_BCK_PIT_LIM form (O-05)
     entry_convention: Literal["tas", "eas"] = "tas"  # AIRSPEED_MIN read as true or equivalent
     enforce_alpha: bool = False  # hold the wing angle of attack to the 0.8 C_L,max band top
