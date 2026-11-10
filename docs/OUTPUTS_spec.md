@@ -191,8 +191,9 @@ today unless marked NEW.
   with `E_scenarios`, written by `assemble.e_scenarios`): one row per scenario of
   `scenarios.yaml` with its altitude, ISA offset, mass, SoC and headwind, and the AIRBRAKE-exit
   state D and C start from at the register's and the recommended `AIRSPEED_MIN` (entry
-  airspeed `AIRSPEED_MIN - 2` read as EAS, its TAS, the ground speed, V/Vs). The pitch and rotor
-  start are the settings of D and C.
+  airspeed `AIRSPEED_MIN - 2` read as EAS, its TAS, the ground speed, V/Vs, and the entry pitch:
+  the trim pitch of that state when `D.theta_fw0_deg` is `trim`). The rotor start is the setting of
+  C.
 - **What each analysis is** (right after the scenarios panel, so only with `E_scenarios`): a
   reader's guide with one row per analysis (A, D, F, Q2, E, FT, C, Sensitivity): the question its
   chapter answers, what it gives and who reads it. The text is fixed in the viewer

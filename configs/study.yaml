@@ -52,7 +52,8 @@ D:                         # braking and Q_TRANS_DECEL
   ff_mode: lift_aware
   ff_lift_tau_s: 0.0
   ff_lift_scale: 1.0
-  theta_fw0_deg: 0.0                # last fixed-wing pitch at the AIRBRAKE exit; PLACEHOLDER (SITL/log)
+  theta_fw0_deg: trim               # last fixed-wing pitch at the AIRBRAKE exit: a number (PLACEHOLDER until SITL/log), or "trim" = the pitch of level steady flight at each scenario's entry state (mass, density, speed), so the wing carries the weight at t = 0
+  pitch_release_dps: 2.0            # bumpless start, deg/s (0 = off): the pitch command is held at the entry pitch and released at this rate; the cascade takes over as soon as its demand is higher. ASSUMED, PROPOSED (a slower release is smoother, 1 to 3 deg/s all keep the first-second vertical acceleration below 0.6 m/s^2)
   pit_lim_mode: constant            # constant | airspeed (Q_BCK_PIT_LIM form, needs Q_BCK_PIT_LIM)
   enforce_alpha: false              # true: hold wing alpha to the 0.8 C_L,max band top of analysis A
   alpha_gate_ms: 5.0                # alpha is not judged below this airspeed

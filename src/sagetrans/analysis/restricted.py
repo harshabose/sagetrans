@@ -288,6 +288,7 @@ def _simulate_c(
         base_bp, T_bt=prm["T_bt"], theta_A=prm["theta_A"], delta_min=prm["spin_min"], a_lim=q,
         h_tgt=scen.altitude_amsl_m, delta_hover=d_hover,
     )  # fmt: skip
+    bp = braking.resolve_entry_pitch(vps, scen, bp, v_air)
     x0, v_ground = braking.airbrake_entry_state(
         vps, scen, bp, v_air, cfg.end_speed, cfg.rotor_start, ff
     )

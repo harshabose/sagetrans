@@ -159,7 +159,8 @@ def test_the_scenario_table_gives_each_scenario_and_its_entry_state_at_both_sett
     assert s4["entry_ground_register_ms"] == pytest.approx(s4["entry_tas_register_ms"] + 5.0)
     for r in rows.values():
         assert r["entry_over_stall_recommended"] > r["entry_over_stall_register"]
-        assert r["entry_pitch_deg"] == inp.study.D.theta_fw0_deg
+        # "trim": the pitch that carries the weight, less at the faster recommended entry
+        assert r["entry_pitch_register_deg"] > r["entry_pitch_recommended_deg"] > 0.0
         assert r["entry_rotor_start"] == inp.study.C.rotor_start
     assert rows["S-03"]["mass_kg"] > rows["S-01"]["mass_kg"]  # 1.15 x
     assert "sea level" in s1["note"]

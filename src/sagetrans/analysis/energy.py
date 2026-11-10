@@ -441,6 +441,7 @@ def back_transition_segment(
     if bp is None:
         bp = BackTransitionParams.for_vehicle(vp, scen.rho, soc, scen.altitude_amsl_m)
     else:
+        bp = braking.resolve_entry_pitch(vp, scen, bp, v0)
         x0, _ = braking.airbrake_entry_state(vp, scen, bp, v0)
     r = braking.landing_error(vp, scen, v0, a_plan, bp, agl0=mp.h_bt_agl_m, x0=x0)
     if r.sim.terminated_by != "ground_speed_reached":

@@ -105,7 +105,10 @@ def exit_params(
     """
     c = inp.study.D
     return dataclasses.replace(
-        inp.controller, theta_fw0=math.radians(c.theta_fw0_deg), pit_lim_mode=c.pit_lim_mode,
+        inp.controller,
+        theta_fw0=0.0 if c.theta_fw0_deg == "trim" else math.radians(c.theta_fw0_deg),
+        theta_fw0_trim=c.theta_fw0_deg == "trim",
+        pitch_release_rate=math.radians(c.pitch_release_dps), pit_lim_mode=c.pit_lim_mode,
         v_min_ref=inp.airspeed_min, ff_mode=c.ff_mode, ff_lift_tau_s=c.ff_lift_tau_s,
         ff_lift_scale=c.ff_lift_scale, rotor_lag_s=rotor_lag_s, alpha_cap=alpha_cap,
         alpha_cap_vmin=c.alpha_gate_ms, **extra,
@@ -393,6 +396,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         def run(sc: Scenario, bp: Any, v_air: float) -> Run:
             d_runs[0] += 1
             progress.phase(f"D: {d_part[0]} (run {d_runs[0]})")
+            bp = braking.resolve_entry_pitch(vp, sc, bp, v_air)
             x0, v_ground = braking.airbrake_entry_state(vp, sc, bp, v_air)
             r = braking.measure_a_eq(vp, sc, v_ground, bp, x0=x0)
             fl = braking.braking_flags(
@@ -573,7 +577,8 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
                     progress.phase(f"D: trade curve (a_plan {a_plan:g}, headwind {wind:g}, {test})")
                     for a_lim in sorted({base_bp.a_lim, a_plan}):
                         scw = dataclasses.replace(sc0, headwind_ms=wind)
-                        bpw = dataclasses.replace(base_bp, a_lim=a_lim)
+                        bpw = braking.resolve_entry_pitch(
+                            vp, scw, dataclasses.replace(base_bp, a_lim=a_lim), v_air0)
                         x0, v0g = braking.airbrake_entry_state(vp, scw, bpw, v_air0)
                         r = braking.landing_error(vp, scw, v0g, a_plan, bpw, speed_test=test, x0=x0)
                         v_ref = v0g if test == "ground" else v_air0
@@ -593,7 +598,7 @@ def task_basics(inp: StudyInputs) -> dict[str, Any]:
         v_air_n = entry(scn)
         deg = math.radians
         cases: list[tuple[str, dict[str, Any]]] = [("base", {})]
-        cases += [(f"theta_fw0_{d:g}deg", {"theta_fw0": deg(d)})
+        cases += [(f"theta_fw0_{d:g}deg", {"theta_fw0": deg(d), "theta_fw0_trim": False})
                   for d in c.sens.theta_fw0_deg_sweep]  # fmt: skip
         cases += [(f"rotor_lag_{s:g}s", {"ff_mode": "lift_aware", "rotor_lag_s": s})
                   for s in c.sens.lag_s_sweep]  # fmt: skip
@@ -1279,7 +1284,8 @@ def task_c(inp: StudyInputs, variant: str = "") -> dict[str, Any]:
     for v in sc_.z_acc_p:
         sens_case("z_acc_p", v, bp=dataclasses.replace(base, z_acc_p=v))
     for v in sc_.theta_fw0_deg:
-        sens_case("theta_fw0_deg", v, bp=dataclasses.replace(base, theta_fw0=math.radians(v)))
+        sens_case("theta_fw0_deg", v, bp=dataclasses.replace(
+            base, theta_fw0=math.radians(v), theta_fw0_trim=False))
     for row in sens_rows:
         row.pop("case", None)
     progress.note(f"C reports: {time.time() - t0:.0f} s")
