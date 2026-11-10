@@ -1,0 +1,30 @@
+{
+  "distance_m": {
+    "column": "nominal_out",
+    "row": 1,
+    "table": "sens_oat",
+    "unit": "m",
+    "value": 79.29362013299985
+  },
+  "energy_J": {
+    "column": "nominal_out",
+    "row": 2,
+    "table": "sens_oat",
+    "unit": "J",
+    "value": 16181.674025708307
+  },
+  "excursion_m": {
+    "column": "nominal_out",
+    "row": 0,
+    "table": "sens_oat",
+    "unit": "m",
+    "value": 0.15826438304703627
+  },
+  "max_range_km": {
+    "column": "nominal_out",
+    "row": 3,
+    "table": "sens_oat",
+    "unit": "km",
+    "value": 91.49715964491271
+  }
+}

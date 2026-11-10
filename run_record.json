@@ -1,0 +1,2027 @@
+{
+  "analyses": {
+    "C": "c5246bee3793ef7fef38e452393e6917ace959764f06de2280c1efafd738d015",
+    "E:0m_one_way": "4e31b5bc734abe316b80052f53e89d6c8ccd52be48eb27b8b5f956e523c06bc3",
+    "E:0m_round_trip": "f6860c54f7ee632f4a65b979c8bc0e5287d0b73361986ee0798d576d65e46bbd",
+    "E:1500m_one_way": "6dafe1178be5cfa653fa2191ebd5abd8090212160b4230dedd240f78b528140c",
+    "E:1500m_round_trip": "9fa77f0f8ccecd45d4bb2e08d4c2b8e50656438b3371e7eb424f1b607391dac8",
+    "E:2500m_one_way": "e8562cfc91b6c63c0f1379999def503c979cf27d102007178b2c4cb08fd83bb5",
+    "E:2500m_round_trip": "cab411b9c5241d7d130e50b18c8aeb4bbd6e6ea11b8b31a70328ec715f4d90df",
+    "E:5000m_one_way": "ac9a97273540781ecc1c08a0e9d05e65221c0111d8fdbe9dad27648af4d6acab",
+    "E:5000m_round_trip": "7913119d5b4c2c623e7aad36ba31537a27c3f48ee8b8500796266614370658fc",
+    "FT": "08c63b7e456845f6671096fe4d3a4c5e953f50908b41ca872cf9bd622cf971b3",
+    "sensitivity": "2ec93ed19deb52b2a7ca89be73890b1e6603478d9290d1affb79ccaa1daaa8d5"
+  },
+  "code_version": "0.0.1",
+  "config_hash": "332d5dcccda956865129f8ed4923334018aae3c56d6a5fefc1755972362c5323",
+  "context": {
+    "ft_grid": {
+      "t12_failed": [],
+      "winner_on_q_bound": false,
+      "winner_q_transition_s": 17.0,
+      "winner_t12_ok": true,
+      "within_2pct_q_transition_s": [
+        14.0,
+        15.0,
+        15.5,
+        16.0,
+        16.5,
+        17.0,
+        20.0
+      ]
+    },
+    "ft_scenarios": {
+      "axes": {
+        "altitude_m": [
+          0.0,
+          5000.0
+        ],
+        "headwind_ms": [
+          0.0,
+          5.0
+        ],
+        "isa_offset_k": [
+          -10.0,
+          20.0
+        ],
+        "mass_factor": [
+          0.8,
+          1.15
+        ],
+        "soc": [
+          0.2,
+          1.0
+        ]
+      },
+      "scenarios": {
+        "S-03": {
+          "altitude_m": 5000.0,
+          "headwind_ms": 0.0,
+          "isa_offset_k": 10.0,
+          "mass_factor": 1.15,
+          "note": "high, hot, heavy, low pack",
+          "soc": 0.5
+        },
+        "S-07": {
+          "altitude_m": 1500.0,
+          "headwind_ms": 0.0,
+          "isa_offset_k": 0.0,
+          "mass_factor": 1.0,
+          "note": "1,500 m reference altitude (cruise reference), nominal",
+          "soc": 0.8
+        }
+      }
+    },
+    "limitations": [
+      "Back-transition: C. Forward transition: FT, when it is among the analyses; C does not cover it.",
+      "The forward transition in the energy budget is a quasi-steady estimate.",
+      "AIRSPEED_MIN: D, C and FT read it as an equivalent airspeed (D.entry_convention); Q2, which feeds E, reads it as an equivalent airspeed (Q2.feed_convention). Which one ArduPilot compares is open (O-02).",
+      "Input set is not release grade: 72 register entries are TBD: controller.altitude_hold.K_h, controller.altitude_hold.K_i, controller.altitude_hold.K_vh, controller.altitude_hold.i_max, controller.altitude_hold.v_dem_max, controller.ardupilot.AIRSPEED_MIN, ... (72 in all)"
+    ],
+    "mission": {
+      "fwd_alt_gain_max_m": 10.0,
+      "fwd_alt_loss_max_m": 10.0
+    },
+    "notes": {
+      "C": [
+        "Q_A_ANGLE_MAX is searched up to 20 deg = min(30, PTCH_LIM_MAX_DEG 20): the pitch cap is min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG), so the 30 deg limit (DEC-7) is now the pitch limit."
+      ],
+      "C:alpha:0.85": [
+        "Q_A_ANGLE_MAX is searched up to 20 deg = min(30, PTCH_LIM_MAX_DEG 20): the pitch cap is min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG), so the 30 deg limit (DEC-7) is now the pitch limit."
+      ],
+      "C:alpha:1": [
+        "Q_A_ANGLE_MAX is searched up to 20 deg = min(30, PTCH_LIM_MAX_DEG 20): the pitch cap is min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG), so the 30 deg limit (DEC-7) is now the pitch limit."
+      ],
+      "C:unconstrained": [
+        "C without the wing-angle cap: the model ignores the stall. Reference only; never a recommendation.",
+        "Q_A_ANGLE_MAX is searched up to 20 deg = min(30, PTCH_LIM_MAX_DEG 20): the pitch cap is min(Q_A_ANGLE_MAX, PTCH_LIM_MAX_DEG), so the 30 deg limit (DEC-7) is now the pitch limit."
+      ],
+      "FT": [
+        "FT_params, FT_runs and FT_history evaluate the optimum, the register start and the ArduPilot default on the first 32 members of the Sobol sample and the 8 corners. The grid search, FT_grid, FT_sens and J_start use the first 16 members. The optimum is the best snapped point of FT_grid: whole m/s, whole degrees, whole percent and whole milliseconds, the values ArduPilot can take.",
+        "FT_robust and the optimum_robust row of FT_params are evaluated on the first 16 members, the ensemble of the sensitivities, and are reported only: no search, never the recommendation.",
+        "T-12 on the grid: 15 of 15 points have a three-seed spread within 1%. The winner (17 s) passes. Q_TRANSITION_MS within 2% of the best cost: 14, 15, 15.5, 16, 16.5, 17, 20 s."
+      ],
+      "basics_rec:18:17000:100": [
+        "E and Q2 at the FT optimum's AIRSPEED_MIN 18 m/s, Q_TRANSITION_MS 17000 and TKOFF_THR_MAX 100 %: D is re-run at that entry speed, so E's back transition and its planned deceleration follow the recommended settings"
+      ]
+    },
+    "study": {
+      "A": {
+        "alpha_min_deg": 0.0,
+        "cl_frac": 0.8,
+        "decel_ms2": [
+          0.2,
+          0.4,
+          0.6,
+          0.8,
+          1.0,
+          1.2,
+          1.4,
+          1.6,
+          1.8,
+          2.0,
+          2.2,
+          2.4,
+          2.6,
+          2.8,
+          3.0
+        ],
+        "max_decel_v0_eas_ms": [
+          10.0,
+          12.0,
+          14.0,
+          16.0,
+          18.0,
+          20.9
+        ],
+        "samples": 120,
+        "scenarios": [
+          "S-01",
+          "S-03",
+          "S-06",
+          "S-07"
+        ],
+        "v0_eas_ms": [
+          10.0,
+          12.0,
+          14.0,
+          16.0,
+          18.0,
+          20.9
+        ],
+        "vrs_enforce": false
+      },
+      "C": {
+        "alpha_curve_fracs": [
+          1.0,
+          0.85
+        ],
+        "bounds": {
+          "T_bt": [
+            1.0,
+            6.0
+          ],
+          "q": [
+            1.0,
+            3.0
+          ],
+          "spin_min": [
+            0.06,
+            0.25
+          ],
+          "theta_A_deg": [
+            10.0,
+            30.0
+          ]
+        },
+        "enforce_alpha": true,
+        "ensemble_n": 32,
+        "ensemble_seed": 8,
+        "history_band_m": 1.0,
+        "history_scenario": "S-01",
+        "margin_flag_m": 0.5,
+        "margin_flag_ms": 0.3,
+        "margin_frac": 0.75,
+        "maxiter": 20,
+        "os_tol_m": 2.0,
+        "popsize": 8,
+        "q_curve": [
+          1.0,
+          1.5,
+          2.0,
+          2.25,
+          2.5,
+          2.75,
+          3.0
+        ],
+        "q_fine_offsets_ms2": [
+          -0.1,
+          -0.05,
+          0.0,
+          0.05,
+          0.1,
+          0.15,
+          0.2
+        ],
+        "rotor_lag_s": 0.25,
+        "rotor_start": "idle",
+        "seeds": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "sens": {
+          "rotor_lag_s": [
+            0.0,
+            0.25,
+            0.5
+          ],
+          "rotor_start": [
+            "idle",
+            "carry"
+          ],
+          "theta_fw0_deg": [
+            0.0,
+            8.0
+          ],
+          "z_acc_p": [
+            0.015,
+            0.03,
+            0.06
+          ],
+          "z_vel_p": [
+            2.5,
+            5.0,
+            10.0
+          ]
+        },
+        "sink_tol_ms": 1.76,
+        "unconstrained_reference": true,
+        "weights": {
+          "E_ref": 15000.0,
+          "h_ref": 2.0,
+          "x_ref": 100.0
+        },
+        "z": {
+          "acc_flt_hz": 10.0,
+          "acc_i": 0.1,
+          "acc_imax": 0.8,
+          "acc_p": 0.03,
+          "pos_p": 1.0,
+          "vel_flt_hz": 5.0,
+          "vel_p": 5.0,
+          "vmax": 2.5
+        }
+      },
+      "D": {
+        "alpha_gate_ms": 5.0,
+        "curve": {
+          "ground_speeds_ms": [
+            5.0,
+            6.0,
+            8.0,
+            10.0,
+            12.0,
+            14.0,
+            15.0,
+            16.0,
+            18.0,
+            20.0
+          ]
+        },
+        "enforce_alpha": false,
+        "entry_convention": "eas",
+        "ff_lift_scale": 1.0,
+        "ff_lift_tau_s": 0.0,
+        "ff_mode": "lift_aware",
+        "mass_factors": [
+          0.8,
+          1.0,
+          1.15
+        ],
+        "pit_lim_mode": "constant",
+        "pitch_release_dps": 2.0,
+        "recommendation": {
+          "corners": true,
+          "design_ground_speed_ms": null,
+          "ensemble_n": 32,
+          "ensemble_seed": 8,
+          "n_boot": 1000,
+          "percentile": 5.0
+        },
+        "rotor_lag_s": 0.0,
+        "scenarios": [
+          "S-01",
+          "S-02",
+          "S-03",
+          "S-05",
+          "S-06",
+          "S-07"
+        ],
+        "sens": {
+          "lag_s_sweep": [
+            0.0,
+            0.1,
+            0.25,
+            0.5
+          ],
+          "lift_scale_sweep": [
+            0.8,
+            1.2
+          ],
+          "lift_tau_s_sweep": [
+            0.0,
+            0.5
+          ],
+          "theta_fw0_deg_sweep": [
+            0.0,
+            4.0,
+            8.0,
+            12.0
+          ]
+        },
+        "sink_tol_ms": 0.5,
+        "theta_fw0_deg": "trim",
+        "trade": {
+          "a_plan_ms2": [
+            1.5,
+            1.55,
+            1.6,
+            1.65,
+            1.7,
+            1.75,
+            1.8,
+            1.85,
+            1.9,
+            1.95,
+            2.0,
+            2.1,
+            2.25,
+            2.5,
+            3.0,
+            3.5
+          ],
+          "headwinds_ms": [
+            -5.0,
+            0.0,
+            5.0
+          ]
+        },
+        "v0_eas_ms": [
+          16.0,
+          17.1,
+          20.9
+        ]
+      },
+      "E": {
+        "a_fwd_metric": "min",
+        "a_fwd_mode": "case",
+        "a_plan_fallback_ms2": 2.5,
+        "fade_wing_share": 0.4,
+        "missions": [
+          "round_trip",
+          "one_way"
+        ],
+        "sites_amsl_m": [
+          0.0,
+          1500.0,
+          2500.0,
+          5000.0
+        ]
+      },
+      "F": {
+        "scenarios": [
+          "S-01",
+          "S-02",
+          "S-03",
+          "S-05",
+          "S-06"
+        ]
+      },
+      "FT": {
+        "bounds": {
+          "airspeed_min_eas_ms": [
+            14.0,
+            20.0
+          ],
+          "q_tran_pit_max_deg": [
+            1.0,
+            10.0
+          ],
+          "q_transition_s": [
+            2.0,
+            20.0
+          ],
+          "tkoff_thr_max": [
+            0.5,
+            1.0
+          ]
+        },
+        "ensemble_n": 16,
+        "ensemble_seed": 8,
+        "final_ensemble_n": 32,
+        "grid": {
+          "descent_max_rounds": 50,
+          "fine_offsets_s": [
+            -1.0,
+            -0.5,
+            0.5,
+            1.0
+          ],
+          "maxiter": 12,
+          "q_transition_s": [
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            8.0,
+            10.0,
+            12.0,
+            14.0,
+            16.0,
+            20.0
+          ],
+          "seeds": [
+            1,
+            2,
+            3
+          ]
+        },
+        "headwind_ms": [
+          0.0,
+          5.0
+        ],
+        "history_scenarios": [
+          "S-07",
+          "S-03"
+        ],
+        "popsize": 8,
+        "proj_is_failure": true,
+        "rec_cl_frac": null,
+        "robust": {
+          "airspeed_min_steps": [
+            -1.0,
+            0.0,
+            1.0,
+            2.0
+          ],
+          "cl_max_scale": [
+            0.9,
+            1.0,
+            1.1
+          ]
+        },
+        "rotor_lag_s": 0.25,
+        "scan": {
+          "airspeed_min_eas_ms": [
+            15.0,
+            16.0,
+            17.0,
+            18.0,
+            19.0,
+            20.0
+          ],
+          "maxiter": 12,
+          "seeds": [
+            1,
+            2,
+            3
+          ]
+        },
+        "sens": {
+          "CL_max_scale": [
+            0.9,
+            1.1
+          ],
+          "TECS_INTEG_GAIN": [
+            0.15,
+            0.3,
+            0.6
+          ],
+          "TECS_TIME_CONST": [
+            3.0,
+            5.0,
+            8.0
+          ],
+          "TRIM_THROTTLE": [
+            0.35,
+            0.45,
+            0.55
+          ],
+          "rec_cl_frac": [
+            0.7,
+            0.8,
+            0.9
+          ],
+          "rotor_lag_s": [
+            0.0,
+            0.25,
+            0.5
+          ],
+          "tecs_start": [
+            "warm",
+            "cold"
+          ],
+          "z_acc_p": [
+            0.015,
+            0.03,
+            0.06
+          ],
+          "z_vel_p": [
+            2.5,
+            5.0,
+            10.0
+          ]
+        },
+        "stall_margin": 1.2,
+        "t_end_s": 90.0,
+        "t_settle_s": 10.0,
+        "tecs_start": "warm",
+        "weights": {
+          "E_ref": null,
+          "h_ref": 5.0,
+          "w_E": 0.3,
+          "w_h": 1.0,
+          "w_x": 0.0,
+          "x_ref": 100.0
+        }
+      },
+      "Q2": {
+        "altitudes_m": [
+          0.0,
+          1500.0,
+          2500.0,
+          5000.0
+        ],
+        "conventions": [
+          "tas",
+          "eas"
+        ],
+        "feed_convention": "eas",
+        "isa_offset_k": 0.0,
+        "mass_factors": [
+          0.8,
+          1.0,
+          1.15
+        ],
+        "n_speed": 41,
+        "soc": [
+          0.8,
+          0.6,
+          0.3
+        ],
+        "write_profile": false
+      },
+      "sensitivity": {
+        "include_budget": true,
+        "r_large": 12,
+        "r_small": 6,
+        "scenario": "S-01"
+      }
+    }
+  },
+  "date": "2026-11-10",
+  "evidence_counts": {
+    "TBD": 72,
+    "assumed": 21,
+    "datasheet": 9,
+    "derived": 19,
+    "documented": 16,
+    "measured": 0,
+    "stated": 6
+  },
+  "fallbacks": [],
+  "git_commit": "9a46bd4",
+  "git_dirty": false,
+  "label": "DRAFT",
+  "library_versions": {
+    "SALib": "1.6.0",
+    "casadi": "3.8.1",
+    "cma": "4.5.0",
+    "matplotlib": "3.11.2",
+    "numpy": "2.5.3",
+    "pydantic": "2.13.5",
+    "python": "3.14.7",
+    "scipy": "1.18.1"
+  },
+  "mode": "draft",
+  "outputs": {
+    "A_feasibility.csv": "696ea953cf41caeef7e57348872eb9ab94244db2806665cd32f88f80ebab023d",
+    "A_feasibility_S-01.png": "7caa40251a624f4eb2d7650a258c57080950b70ebd759ccbd0b2fef11d05842b",
+    "A_feasibility_S-01.svg": "b43542ce1d1971707e68ad8f2930c84db1ffe1d0d3de43ae538327589c9a4907",
+    "A_feasibility_S-03.png": "378dc9214a3db449e8782ed3f320c9c8c453166aa3745d5a4aa97ca00583eae8",
+    "A_feasibility_S-03.svg": "9960996590ce58b5cf16451cf13768f3eb1cc11ffb00657092fa0abe9e9b7f4d",
+    "A_feasibility_S-06.png": "cdfcb7f84560b2ae8017de098ec53048684af6a51771d9c421b2a65f7f12985f",
+    "A_feasibility_S-06.svg": "13d88d0c040f4d4853342051e3eaa67cba92c6675292c06e6474a9f9f7a801f5",
+    "A_feasibility_S-07.png": "7caa40251a624f4eb2d7650a258c57080950b70ebd759ccbd0b2fef11d05842b",
+    "A_feasibility_S-07.svg": "b43542ce1d1971707e68ad8f2930c84db1ffe1d0d3de43ae538327589c9a4907",
+    "A_max_feasible_decel.csv": "5b26b16a616fa36fe47239b757590b9d94f76b19ac5e76fb59b132b7bb0d87f0",
+    "A_window.csv": "f9d98e9cff99ffe4e155278bc8ff003de86d5f0e0eec9980062817252edf4e0a",
+    "C_alpha_curve.csv": "e7864dbc7ce1ac506a5a3f5c29ad9f9abb724a283d369d07f7c7fa3b262686e1",
+    "C_history.csv": "62e8a11b5a6512f4e79c6b779a5b71811752e980ae62df6fdff5e3340b062b8e",
+    "C_params.csv": "6a1931f7d07d2c81126ab8edb560b83de13810710ba43811964410881ca12a9e",
+    "C_q_curve.csv": "bd917b8b79a6dd9e7230df1668f076e1929c7c0bb2fcb36bc4b206b3b6282b5c",
+    "C_ref_history.csv": "2bdd6aaf3b83e3d124626390ae7aca4079a7cd975bdd477172c5e65a120a007a",
+    "C_ref_params.csv": "026aaf9d1a4394e5d9e507c6ee35521d68f757f56eed8dac5575bb2239143a71",
+    "C_ref_runs.csv": "ed47750b6253e51ee95a56ab2a932a0b558864a4088e2a8aec62bfbe328ba538",
+    "C_runs.csv": "961032e79166edb20531a7dd2b363a5ee1563366fb7ea8b82e32998f71da5480",
+    "C_search.csv": "1985542d26c357b67aff575129ab97e5d8162b9a5167b5c8c63369064fe7fb28",
+    "C_sens.csv": "0c34059ae8a3a53e0a0c0de262ffe9f5bcbec82d468743b89da40b3798beec58",
+    "D_a_eq.csv": "405c245eb8e5effe7551d1560ab525de6b53ead50c343e4a0f41b0f9eeec7e09",
+    "D_a_eq_speed.csv": "be768b42def94daeadb9d5ad05aaf3b37b571f5dc26d91bbde94fd957ea4cd7e",
+    "D_a_rec_curve.csv": "d693eacdc1f13714ad7b9d14915b3743418dd53fa572a24a5cedbc5d28ba89ee",
+    "D_recommendation.csv": "12efcdcbcb4774bd5d652a5f9eb9a5a73bfc67af337d5dae2bf3487e61d7d10d",
+    "D_recommendation_ensemble.csv": "09ba5972e20657edbb0648cd6e1dce2caf6e0c25fda4dce45bae20e7766fb2e4",
+    "D_sensitivity.csv": "7671377d51318ac5851a2dc21f661e88c34fafff3fa9bbde11c94eb9b3c2ad18",
+    "D_trade_curve.csv": "da084f93e30ba03a8cff15f3e89943c92a6e400ff30aee1bfb608dd51cbece5b",
+    "E_budget.csv": "de1a3ea14a3af80749ff0dc418d45843919d69b9bd487df9340041e09505e661",
+    "E_budget_recommended.csv": "a1e90eeb59f044073b55631efb4a8cb7127036f59f1cc53da10e775b1c2bc821",
+    "E_cases.csv": "b9c232f2c19e9f9d1739bbc0436bd617ad313f0d4e9cccc08b6bdd7ddbefcbf9",
+    "E_cruise_sweep.csv": "05a588558180502441fbdb904d038c74277ed4ba47e286d6f3f2ace334d3d47f",
+    "E_cruise_sweep_recommended.csv": "05a588558180502441fbdb904d038c74277ed4ba47e286d6f3f2ace334d3d47f",
+    "E_hover_check.csv": "085d98ca31c0979ac878d06b6dad9fa7624ceaf1b610325ffcb1179ac2f64cbb",
+    "E_hover_check_recommended.csv": "36dd3912fe866c5368471f549cb3bc600c6ec87f55024899ae32358fe8ecc20d",
+    "E_range_margin_0m_one_way.png": "27d9de20dd5bd4d644038df1ee03f9394a03460a7858852e600a3490c4baee2e",
+    "E_range_margin_0m_one_way.svg": "e29615555a67e2f408a0652eee32142097cbd1216831e8968d4a066be66e32c6",
+    "E_range_margin_0m_round_trip.png": "02a7c97de5918ffa4bb50445782dff5ce5c604cabee977be7425e55fea9d22bd",
+    "E_range_margin_0m_round_trip.svg": "03c29e9b7a942addfc74758443db090511009f21dfce966c7a26b79d2040fd0c",
+    "E_range_margin_1500m_one_way.png": "a855170ad9b3741282fb9b7c8104f28247fd1ecd05762f59e4fd2d4809564105",
+    "E_range_margin_1500m_one_way.svg": "dac120494eaf7bdc47d453a47c9de06ff7fa9a09f98da93c172d64dbe8f99316",
+    "E_range_margin_1500m_round_trip.png": "3f7a0e37e75afda7209987fb65b2e9aa7fdedbf5c0cd0fb001a85e3500cc6626",
+    "E_range_margin_1500m_round_trip.svg": "a992a4f95e2e09033449fc64f10646f449801f81943155063a73bd308b3fa66f",
+    "E_range_margin_2500m_one_way.png": "6994983ce803f6b1f06e7e209d2043371e1c533afb32f33ebc319e32c943cd40",
+    "E_range_margin_2500m_one_way.svg": "879517fa5892dea8701366dd707073671921cb9786c7444b2236fe729dd96d26",
+    "E_range_margin_2500m_round_trip.png": "a558cef67c9f8b7072c60b253b381543a4a710ccc260e8610386f33a8ea9985c",
+    "E_range_margin_2500m_round_trip.svg": "8e803307f8b294b64263b89543dfa950c06931b2f92b33d1cfb3004dac38e57b",
+    "E_range_margin_5000m_one_way.png": "2480515d99052ae59b645c6dff75e1226d9ca15cbe77ac75e3d03fc3cadbe6fb",
+    "E_range_margin_5000m_one_way.svg": "2c8cb3dd982e0704d179db1c2d2227ca9f2349de78c851472c5a8dcf92bae35c",
+    "E_range_margin_5000m_round_trip.png": "e7268f68fe3af08d067ae5342b458ce439fb099bf893953b29304d6fc13ff0d5",
+    "E_range_margin_5000m_round_trip.svg": "e032e22c047b00bcac12202541c4af2e784bd7b41be5d38fa1d08b96a570c4eb",
+    "E_reserve.csv": "1d24cf595baee867d450c6f501c9d4a1aeb1ac5dae55682d30461c5bd98bd582",
+    "E_reserve_recommended.csv": "1d24cf595baee867d450c6f501c9d4a1aeb1ac5dae55682d30461c5bd98bd582",
+    "E_scenarios.csv": "b85453ebacc0cfe8bcddc6718222b2ae3bcbdc261ea0832722929da678550dca",
+    "E_segments.csv": "acd1a911fad9e05270fe989d1edbc59aeb92cada2ed03a43df24487f93650fe3",
+    "E_segments_recommended.csv": "31ebb12ffa1e7a68aecd61669b12cd6d370d6d70afd613fad2dfb222707a9a12",
+    "E_summary.csv": "d0e55cc6190d02af5dfec11984d1546c581c540dc27f9c8ec331fbd10f8cc3a9",
+    "E_summary_recommended.csv": "cb60aac17c6eda8db22e9e07632573e01a41ee33435b9fbe527e165cab27d2dc",
+    "FT_grid.csv": "4f11eee4b41532dc9382525d6b6ede78ac93ed10011a3c99fc312bd93b4235a0",
+    "FT_history.csv": "83a7092ae92c3439fe20605c28f5bec5de388b9a25f53385ede9ac7fe6d4f659",
+    "FT_params.csv": "31c59230680c4d74f43f046af14d2d66ba63c45a2007315066b8fa62a3f05e98",
+    "FT_robust.csv": "ac23a1e1e88fff582d1b418f8b384459804b02631ff00bbd8bc7e68babdac021",
+    "FT_runs.csv": "3f6fb7f650cf32c66d16b5782c1a240bb34a15cc08f36e93768bb20e6a730a73",
+    "FT_scan.csv": "aa8080417c993575cd3986e27bbc4480d96a008348ad11cb06350a79f731559f",
+    "FT_search.csv": "6c31814eda10275eb792bcfbd1581fd1613fb80c820fd9ab869557f8637ef692",
+    "FT_sens.csv": "04f9bd4655d2d9cb3a5a63df7851264b055f44bd6c23e6835dcee65728977827",
+    "F_descent.csv": "ed84a2df733ede8756555956fa6dbc70469c6325f5d3e3bc10408fd895c6cd2c",
+    "F_profile.csv": "4550ef92f68d42faeffcf4ebe8efbb96bf58ef0cd1d984b78873668861d4fcf9",
+    "Q2_pusher_margin.csv": "5ef5e738f2bc6288845c2666a41634d88b112ea94b48a5942857a2b96e99c961",
+    "Q2_pusher_margin_recommended.csv": "05f7345a7b97fb2de9e462cefcfd2c52cbcbdddc5e96da28c64e72a0940dd2ed",
+    "Q2_worst.csv": "22e76179bb5503c468c60369689717c48073921ae3e32c57319ef94c739c2e24",
+    "Q2_worst_recommended.csv": "31c961a80ac4f589cac970b891b2314512dccbedad35be7ab2a4a745eb6a1630",
+    "headline.json": "1d7f1be73127420d5ea568e4b725d6c96feb55835af70aed7e8940cb96a9a113",
+    "inputs_register.csv": "fca7598ff484b2086e21df1c8628f16af4886a7373f92cdc08ef5ec9fde9cad6",
+    "inputs_used.md": "55b04c1d16b43e69924e4ede9e85ff062df84d1f29fb42b9eb271768401bf003",
+    "release_gate.txt": "5fd232914ec84f16d6f10d2f3f6a238d1220c62e5fec121d7b545709ab893db8",
+    "report.md": "021edd23ddba1dde8037f0e019c24f6b96c685988ffb51ecee7f600ed1b02078",
+    "sens_global.csv": "ebdddb34bfe17e3e1054b41c7a77c3704799b03582803191c21ba358f4657005",
+    "sens_oat.csv": "9e64a5e8572948dc0b294c83122c9e07c39bb85e154732b00a44899404ca640b",
+    "settings_recommended.csv": "a50a4b121557d46a13dbc92792fc36dea94e4cb7d680378b258c035a01c4c979",
+    "tornado_distance_m.png": "0955451912075705a5997b1ccb1d6f0052c99ff51edf9463104f6f88179a714f",
+    "tornado_distance_m.svg": "9712640af019b9cf1c9a126238c9f681c9e2dd570c8e1bcff26f932957319022",
+    "tornado_energy_J.png": "f17bb6b53988f6abaddb6af415e0f16b14e0e9414aa8e9337de383dc68eb15ce",
+    "tornado_energy_J.svg": "d1f6b949f17b67fd5bb977af8434ec01b2836803c1a5778b3a0688bf2aab3469",
+    "tornado_excursion_m.png": "575c28eac295793c233dff3fa523a603ffffdb9feaf2115e70a7a89e06672cb8",
+    "tornado_excursion_m.svg": "a05d5d337540365d7a4dfdda25593bafb4285387c8e60ac38c6d3467841af57f",
+    "tornado_max_range_km.png": "6b3bfe8a0bc5aafd544b4acd984ebde6ce620dad7c1ebbd5625c589766a04c48",
+    "tornado_max_range_km.svg": "a5b00fe0e4c7b95fcb227cd45c8ee7ce2c26efa7d338ab321a74363a8b8250c1"
+  },
+  "override": true,
+  "reasons": [
+    "72 register entries are TBD: controller.altitude_hold.K_h, controller.altitude_hold.K_i, controller.altitude_hold.K_vh, controller.altitude_hold.i_max, controller.altitude_hold.v_dem_max, controller.ardupilot.AIRSPEED_MIN, ... (72 in all)",
+    "analysis 'E:0m_round_trip' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'E:0m_one_way' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'E:1500m_round_trip' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'E:1500m_one_way' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'E:2500m_round_trip' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'E:2500m_one_way' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'E:5000m_round_trip' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'E:5000m_one_way' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'FT' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'C' ran on placeholder inputs (record is DRAFT)",
+    "analysis 'sensitivity' ran on placeholder inputs (record is DRAFT)"
+  ],
+  "schema_version": 2,
+  "search_spreads": {
+    "C": 0.007384074318801478,
+    "FT": 0.003916405632384515
+  },
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "settings_hash": "863816c596b9be8fc3b1666586497d5e2f09ff9f767fe9aa2c5c0bb7890e5d40",
+  "source_hash": "f15d85434b1d17e36af37a7e7922bb6e737fc11ab3fcf6db5c19e91f370f1917",
+  "tables": {
+    "A_feasibility": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "V0_eas_ms",
+        "V0_tas_ms",
+        "decel_ms2",
+        "feasible",
+        "violated",
+        "vrs_min",
+        "vrs_min_t_s"
+      ],
+      "rows": 360
+    },
+    "A_max_feasible_decel": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "V0_eas_ms",
+        "min_feasible_decel_ms2",
+        "max_feasible_decel_ms2",
+        "islands"
+      ],
+      "rows": 24
+    },
+    "A_window": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "V0_eas_ms",
+        "V0_tas_ms",
+        "a_lo",
+        "a_hi",
+        "bind_lo",
+        "bind_hi",
+        "theta_lo_deg",
+        "theta_hi_deg",
+        "vrs_lo",
+        "vrs_hi"
+      ],
+      "rows": 24
+    },
+    "C_alpha_curve": {
+      "columns": [
+        "kind",
+        "alpha_frac",
+        "limit_deg",
+        "Q_TRANS_DECEL_ms2",
+        "T_bt_s",
+        "theta_A_deg",
+        "spin_min",
+        "p95_distance_m",
+        "p95_stop_time_s",
+        "mean_energy_kJ",
+        "n_fail_total",
+        "n_failing_members",
+        "max_overshoot_m",
+        "max_end_sink_ms",
+        "J",
+        "at_bound"
+      ],
+      "rows": 4
+    },
+    "C_history": {
+      "columns": [
+        "case",
+        "member",
+        "view",
+        "scenario",
+        "altitude_m",
+        "isa_offset_k",
+        "soc",
+        "headwind_ms",
+        "mass_kg",
+        "V0_tas_ms",
+        "V0_eas_ms",
+        "band_eps_h_m",
+        "run_overshoot_m",
+        "t",
+        "x",
+        "h",
+        "V",
+        "v_h",
+        "theta",
+        "alpha_w_deg",
+        "delta_r",
+        "theta_cmd",
+        "omega_r",
+        "default_fails"
+      ],
+      "rows": 529
+    },
+    "C_params": {
+      "columns": [
+        "case",
+        "T_bt_s",
+        "theta_A_deg",
+        "spin_min",
+        "Q_TRANS_DECEL_ms2",
+        "J",
+        "J_start",
+        "seed_spread",
+        "at_bound",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "max_overshoot_m",
+        "n_overshoot",
+        "n_sinking",
+        "n_other_flags",
+        "theta_A_hi_deg",
+        "theta_A_cfg_hi_deg",
+        "ptch_lim_deg",
+        "rotor_lag_s",
+        "p95_stop_time_s",
+        "stall_alpha_peak_deg_max",
+        "stall_t_above_peak_s_max",
+        "stall_t_above_peak_s_mean",
+        "stall_t_above_limit_s_max",
+        "stall_wing_share_min",
+        "stall_members_above_peak",
+        "stall_members",
+        "alpha_enforced",
+        "alpha_limit_deg",
+        "alpha_frac",
+        "alpha_peak_deg",
+        "alpha_s_deg",
+        "blend_M",
+        "cl_max",
+        "rotor_constant_coeffs",
+        "os_tol_m",
+        "sink_tol_ms",
+        "max_end_sink_ms",
+        "os_margin_m",
+        "sink_margin_ms",
+        "at_edge",
+        "n_failing_members",
+        "n_not_stopped",
+        "n_fail_total",
+        "J_smooth"
+      ],
+      "rows": 4
+    },
+    "C_q_curve": {
+      "columns": [
+        "case",
+        "J",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "max_overshoot_m",
+        "n_overshoot",
+        "n_sinking",
+        "n_other_flags",
+        "n_failing_members",
+        "n_not_stopped",
+        "n_fail_total",
+        "J_smooth",
+        "max_end_sink_ms",
+        "q",
+        "grid"
+      ],
+      "rows": 14
+    },
+    "C_ref_history": {
+      "columns": [
+        "case",
+        "member",
+        "view",
+        "scenario",
+        "altitude_m",
+        "isa_offset_k",
+        "soc",
+        "headwind_ms",
+        "mass_kg",
+        "V0_tas_ms",
+        "V0_eas_ms",
+        "band_eps_h_m",
+        "run_overshoot_m",
+        "t",
+        "x",
+        "h",
+        "V",
+        "v_h",
+        "theta",
+        "alpha_w_deg",
+        "delta_r",
+        "theta_cmd",
+        "omega_r"
+      ],
+      "rows": 60
+    },
+    "C_ref_params": {
+      "columns": [
+        "case",
+        "T_bt_s",
+        "theta_A_deg",
+        "spin_min",
+        "Q_TRANS_DECEL_ms2",
+        "J",
+        "J_start",
+        "seed_spread",
+        "at_bound",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "max_overshoot_m",
+        "n_overshoot",
+        "n_sinking",
+        "n_other_flags",
+        "theta_A_hi_deg",
+        "theta_A_cfg_hi_deg",
+        "ptch_lim_deg",
+        "rotor_lag_s",
+        "p95_stop_time_s",
+        "stall_alpha_peak_deg_max",
+        "stall_t_above_peak_s_max",
+        "stall_t_above_peak_s_mean",
+        "stall_t_above_limit_s_max",
+        "stall_wing_share_min",
+        "stall_members_above_peak",
+        "stall_members",
+        "alpha_enforced",
+        "alpha_limit_deg",
+        "alpha_frac",
+        "alpha_peak_deg",
+        "alpha_s_deg",
+        "blend_M",
+        "cl_max",
+        "rotor_constant_coeffs"
+      ],
+      "rows": 3
+    },
+    "C_ref_runs": {
+      "columns": [
+        "case",
+        "member",
+        "altitude_m",
+        "isa_offset_k",
+        "mass_kg",
+        "soc",
+        "headwind_ms",
+        "V0_air_ms",
+        "V0_ground_ms",
+        "x_tgt_m",
+        "x_end_m",
+        "overshoot_m",
+        "energy_kJ",
+        "excursion_m",
+        "end_sink_ms",
+        "flags",
+        "a_cap_ms2",
+        "q_over_a_cap",
+        "alpha_max_deg",
+        "alpha_max_gated_deg",
+        "t_alpha_08_first_s",
+        "V_at_alpha_08_first_ms",
+        "t_above_alpha_08_s",
+        "t_above_alpha_s_s",
+        "t_below_alpha_min_s",
+        "rotor_share_max",
+        "wing_share_min",
+        "throttle_margin_min",
+        "t_throttle_sat_s",
+        "vrs_min",
+        "vrs_min_t_s",
+        "t_vrs_onset_s",
+        "peak_motor_current_A",
+        "current_over",
+        "min_bus_voltage_V",
+        "voltage_under",
+        "vh_end_ms",
+        "dh_end_m",
+        "stopped",
+        "sinking",
+        "stall_alpha_peak_deg",
+        "stall_t_above_peak_s",
+        "stall_t_above_limit_s",
+        "stall_wing_share_min"
+      ],
+      "rows": 64
+    },
+    "C_runs": {
+      "columns": [
+        "case",
+        "member",
+        "altitude_m",
+        "isa_offset_k",
+        "mass_kg",
+        "soc",
+        "headwind_ms",
+        "V0_air_ms",
+        "V0_ground_ms",
+        "x_tgt_m",
+        "x_end_m",
+        "overshoot_m",
+        "energy_kJ",
+        "excursion_m",
+        "end_sink_ms",
+        "flags",
+        "a_cap_ms2",
+        "q_over_a_cap",
+        "alpha_max_deg",
+        "alpha_max_gated_deg",
+        "t_alpha_08_first_s",
+        "V_at_alpha_08_first_ms",
+        "t_above_alpha_08_s",
+        "t_above_alpha_s_s",
+        "t_below_alpha_min_s",
+        "rotor_share_max",
+        "wing_share_min",
+        "throttle_margin_min",
+        "t_throttle_sat_s",
+        "vrs_min",
+        "vrs_min_t_s",
+        "t_vrs_onset_s",
+        "peak_motor_current_A",
+        "current_over",
+        "min_bus_voltage_V",
+        "voltage_under",
+        "vh_end_ms",
+        "dh_end_m",
+        "stopped",
+        "sinking",
+        "stall_alpha_peak_deg",
+        "stall_t_above_peak_s",
+        "stall_t_above_limit_s",
+        "stall_wing_share_min"
+      ],
+      "rows": 64
+    },
+    "C_search": {
+      "columns": [
+        "seed",
+        "best_cost",
+        "evaluations",
+        "T_bt_s",
+        "theta_A_deg",
+        "spin_min",
+        "Q_TRANS_DECEL_ms2"
+      ],
+      "rows": 8
+    },
+    "C_sens": {
+      "columns": [
+        "parameter",
+        "value",
+        "J",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "max_overshoot_m",
+        "n_overshoot",
+        "n_sinking",
+        "n_other_flags",
+        "n_failing_members",
+        "n_not_stopped",
+        "n_fail_total",
+        "J_smooth",
+        "max_end_sink_ms"
+      ],
+      "rows": 13
+    },
+    "D_a_eq": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "mass_kg",
+        "V0_air_ms",
+        "V0_ground_ms",
+        "a_eq_ms2",
+        "x_actual_m",
+        "t_stop_s",
+        "altitude_excursion_m",
+        "alt_gain_m",
+        "alt_loss_m",
+        "peak_bus_current_A",
+        "min_bus_voltage_V",
+        "alpha_max_deg",
+        "alpha_max_gated_deg",
+        "t_alpha_08_first_s",
+        "V_at_alpha_08_first_ms",
+        "t_above_alpha_08_s",
+        "t_above_alpha_s_s",
+        "t_below_alpha_min_s",
+        "rotor_share_max",
+        "wing_share_min",
+        "throttle_margin_min",
+        "t_throttle_sat_s",
+        "vrs_min",
+        "vrs_min_t_s",
+        "t_vrs_onset_s",
+        "peak_motor_current_A",
+        "current_over",
+        "voltage_under",
+        "vh_end_ms",
+        "dh_end_m",
+        "stopped",
+        "sinking"
+      ],
+      "rows": 18
+    },
+    "D_a_eq_speed": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "mass_kg",
+        "V0_eas_ms",
+        "V0_air_ms",
+        "V0_ground_ms",
+        "a_eq_ms2",
+        "x_actual_m",
+        "alpha_max_deg",
+        "alpha_max_gated_deg",
+        "t_alpha_08_first_s",
+        "V_at_alpha_08_first_ms",
+        "t_above_alpha_08_s",
+        "t_above_alpha_s_s",
+        "t_below_alpha_min_s",
+        "rotor_share_max",
+        "wing_share_min",
+        "throttle_margin_min",
+        "t_throttle_sat_s",
+        "vrs_min",
+        "vrs_min_t_s",
+        "t_vrs_onset_s",
+        "peak_motor_current_A",
+        "current_over",
+        "min_bus_voltage_V",
+        "voltage_under",
+        "vh_end_ms",
+        "dh_end_m",
+        "stopped",
+        "sinking"
+      ],
+      "rows": 54
+    },
+    "D_a_rec_curve": {
+      "columns": [
+        "ground_speed_ms",
+        "n_runs",
+        "n_nan",
+        "headwind_ms",
+        "V0_air_ms",
+        "a_rec_min_ms2",
+        "set_by",
+        "a_eq_median_ms2",
+        "a_eq_max_ms2",
+        "x_at_min_m",
+        "t_stop_at_min_s",
+        "excursion_max_m",
+        "n_sinking",
+        "note"
+      ],
+      "rows": 10
+    },
+    "D_recommendation": {
+      "columns": [
+        "n",
+        "seed",
+        "n_corners",
+        "convention",
+        "percentile",
+        "a_rec_min_ms2",
+        "a_rec_pct_ms2",
+        "a_rec_pct_ci_lo_ms2",
+        "a_rec_pct_ci_hi_ms2",
+        "a_rec_pct_half_ms2",
+        "n_below_vs",
+        "n_nan",
+        "min_set_by",
+        "worst_corner",
+        "spearman_altitude",
+        "spearman_isa",
+        "spearman_mass",
+        "spearman_headwind",
+        "spearman_soc",
+        "ground_speed_min_ms",
+        "ground_speed_max_ms",
+        "headwind_min_ms",
+        "headwind_max_ms",
+        "covers",
+        "a_rec_design_ms2"
+      ],
+      "rows": 1
+    },
+    "D_recommendation_ensemble": {
+      "columns": [
+        "set",
+        "altitude_m",
+        "isa_offset_k",
+        "mass_kg",
+        "soc",
+        "headwind_ms",
+        "V0_air_ms",
+        "V0_ground_ms",
+        "Vs_ms",
+        "below_vs",
+        "a_eq_ms2",
+        "alpha_max_deg",
+        "alpha_max_gated_deg",
+        "t_alpha_08_first_s",
+        "V_at_alpha_08_first_ms",
+        "t_above_alpha_08_s",
+        "t_above_alpha_s_s",
+        "t_below_alpha_min_s",
+        "rotor_share_max",
+        "wing_share_min",
+        "throttle_margin_min",
+        "t_throttle_sat_s",
+        "vrs_min",
+        "vrs_min_t_s",
+        "t_vrs_onset_s",
+        "peak_motor_current_A",
+        "current_over",
+        "min_bus_voltage_V",
+        "voltage_under",
+        "vh_end_ms",
+        "dh_end_m",
+        "stopped",
+        "sinking"
+      ],
+      "rows": 40
+    },
+    "D_sensitivity": {
+      "columns": [
+        "case",
+        "a_eq_ms2",
+        "x_actual_m",
+        "alt_gain_m",
+        "alt_loss_m",
+        "vh_end_ms",
+        "alpha_max_gated_deg",
+        "t_above_alpha_08_s",
+        "t_above_alpha_s_s",
+        "a_rec_pct_ensemble_ms2",
+        "rotor_lag_s",
+        "tau_rotor_model_s",
+        "tau_total_s"
+      ],
+      "rows": 15
+    },
+    "D_trade_curve": {
+      "columns": [
+        "a_plan_ms2",
+        "a_lim_ms2",
+        "speed_test",
+        "headwind_ms",
+        "V0_air_ms",
+        "V0_ground_ms",
+        "x_plan_m",
+        "x_actual_m",
+        "overshoot_m",
+        "energy_J",
+        "altitude_excursion_m"
+      ],
+      "rows": 124
+    },
+    "E_budget": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "case",
+        "required_km",
+        "flown_km",
+        "range_km",
+        "out_takeoff_Wh",
+        "out_fwd_transition_Wh",
+        "out_climb_Wh",
+        "out_descent_Wh",
+        "out_back_transition_Wh",
+        "out_landing_Wh",
+        "ret_takeoff_Wh",
+        "ret_fwd_transition_Wh",
+        "ret_climb_Wh",
+        "ret_descent_Wh",
+        "ret_back_transition_Wh",
+        "ret_landing_Wh",
+        "cruise_Wh",
+        "reserve_Wh",
+        "drop_Wh",
+        "total_Wh",
+        "usable_Wh",
+        "margin_Wh",
+        "margin_pct",
+        "fits",
+        "leg_takeoff_Wh",
+        "leg_fwd_transition_Wh",
+        "leg_climb_Wh",
+        "leg_descent_Wh",
+        "leg_back_transition_Wh",
+        "leg_landing_Wh"
+      ],
+      "rows": 24
+    },
+    "E_budget_recommended": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "case",
+        "required_km",
+        "flown_km",
+        "range_km",
+        "out_takeoff_Wh",
+        "out_fwd_transition_Wh",
+        "out_climb_Wh",
+        "out_descent_Wh",
+        "out_back_transition_Wh",
+        "out_landing_Wh",
+        "ret_takeoff_Wh",
+        "ret_fwd_transition_Wh",
+        "ret_climb_Wh",
+        "ret_descent_Wh",
+        "ret_back_transition_Wh",
+        "ret_landing_Wh",
+        "cruise_Wh",
+        "reserve_Wh",
+        "drop_Wh",
+        "total_Wh",
+        "usable_Wh",
+        "margin_Wh",
+        "margin_pct",
+        "fits",
+        "leg_takeoff_Wh",
+        "leg_fwd_transition_Wh",
+        "leg_climb_Wh",
+        "leg_descent_Wh",
+        "leg_back_transition_Wh",
+        "leg_landing_Wh"
+      ],
+      "rows": 24
+    },
+    "E_cases": {
+      "columns": [
+        "case",
+        "site_amsl_m",
+        "mission",
+        "airspeed_min_ms",
+        "tkoff_thr_max",
+        "max_range_km",
+        "e_fwd_kJ",
+        "e_fwd_time_s",
+        "e_fwd_distance_m",
+        "ft_site_energy_kJ",
+        "ft_site_wait_kJ",
+        "ft_site_fade_kJ",
+        "ft_site_members",
+        "e_fwd_over_ft"
+      ],
+      "rows": 16
+    },
+    "E_cruise_sweep": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "V_tas_ms",
+        "power_W",
+        "Wh_per_km"
+      ],
+      "rows": 150
+    },
+    "E_cruise_sweep_recommended": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "V_tas_ms",
+        "power_W",
+        "Wh_per_km"
+      ],
+      "rows": 150
+    },
+    "E_hover_check": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "point",
+        "soc",
+        "p_hover_req_W",
+        "v_bus_eod_V",
+        "p_available_W",
+        "margin_pct",
+        "throttle_cmd",
+        "ok"
+      ],
+      "rows": 24
+    },
+    "E_hover_check_recommended": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "point",
+        "soc",
+        "p_hover_req_W",
+        "v_bus_eod_V",
+        "p_available_W",
+        "margin_pct",
+        "throttle_cmd",
+        "ok"
+      ],
+      "rows": 24
+    },
+    "E_reserve": {
+      "columns": [
+        "component",
+        "energy_Wh"
+      ],
+      "rows": 5
+    },
+    "E_reserve_recommended": {
+      "columns": [
+        "component",
+        "energy_Wh"
+      ],
+      "rows": 5
+    },
+    "E_scenarios": {
+      "columns": [
+        "scenario",
+        "note",
+        "altitude_m",
+        "isa_offset_k",
+        "mass_kg",
+        "soc",
+        "headwind_ms",
+        "stall_tas_ms",
+        "airspeed_min_register_ms",
+        "entry_eas_register_ms",
+        "entry_tas_register_ms",
+        "entry_ground_register_ms",
+        "entry_over_stall_register",
+        "entry_pitch_register_deg",
+        "airspeed_min_recommended_ms",
+        "entry_eas_recommended_ms",
+        "entry_tas_recommended_ms",
+        "entry_ground_recommended_ms",
+        "entry_over_stall_recommended",
+        "entry_pitch_recommended_deg",
+        "entry_rotor_start"
+      ],
+      "rows": 7
+    },
+    "E_segments": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "leg",
+        "segment",
+        "mass_kg",
+        "energy_Wh",
+        "time_s",
+        "distance_m",
+        "source",
+        "soc_start",
+        "soc_end",
+        "feasible",
+        "limit",
+        "pusher_cmd_max",
+        "rotor_cmd_max",
+        "over_ceiling",
+        "roc_at_ceiling_ms"
+      ],
+      "rows": 84
+    },
+    "E_segments_recommended": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "leg",
+        "segment",
+        "mass_kg",
+        "energy_Wh",
+        "time_s",
+        "distance_m",
+        "source",
+        "soc_start",
+        "soc_end",
+        "feasible",
+        "limit",
+        "pusher_cmd_max",
+        "rotor_cmd_max",
+        "over_ceiling",
+        "roc_at_ceiling_ms"
+      ],
+      "rows": 84
+    },
+    "E_summary": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "cruise_amsl_m",
+        "v_cruise_tas_ms",
+        "v_cruise_eas_ms",
+        "max_range_km",
+        "flown_total_km",
+        "fixed_Wh",
+        "fixed_out_Wh",
+        "fixed_ret_Wh",
+        "cruise_Wh",
+        "reserve_Wh",
+        "reserve_binding_leg",
+        "drop_Wh",
+        "usable_Wh",
+        "soc_start",
+        "soc_end_before_reserve",
+        "soc_end_after_reserve",
+        "window_ok",
+        "flyable",
+        "n_infeasible",
+        "first_infeasible",
+        "n_over_ceiling",
+        "a_fwd_mode",
+        "a_fwd_out_ms2",
+        "a_fwd_ret_ms2",
+        "a_fwd_worst_ms2",
+        "a_plan_ms2",
+        "a_plan_source",
+        "margin_Wh_at_100km",
+        "conflict_100km",
+        "radius_at_100km",
+        "margin_Wh_at_120km",
+        "conflict_120km",
+        "radius_at_120km",
+        "fixed_leg_Wh"
+      ],
+      "rows": 8
+    },
+    "E_summary_recommended": {
+      "columns": [
+        "site_amsl_m",
+        "mission",
+        "cruise_amsl_m",
+        "v_cruise_tas_ms",
+        "v_cruise_eas_ms",
+        "max_range_km",
+        "flown_total_km",
+        "fixed_Wh",
+        "fixed_out_Wh",
+        "fixed_ret_Wh",
+        "cruise_Wh",
+        "reserve_Wh",
+        "reserve_binding_leg",
+        "drop_Wh",
+        "usable_Wh",
+        "soc_start",
+        "soc_end_before_reserve",
+        "soc_end_after_reserve",
+        "window_ok",
+        "flyable",
+        "n_infeasible",
+        "first_infeasible",
+        "n_over_ceiling",
+        "a_fwd_mode",
+        "a_fwd_out_ms2",
+        "a_fwd_ret_ms2",
+        "a_fwd_worst_ms2",
+        "a_plan_ms2",
+        "a_plan_source",
+        "margin_Wh_at_100km",
+        "conflict_100km",
+        "radius_at_100km",
+        "margin_Wh_at_120km",
+        "conflict_120km",
+        "radius_at_120km",
+        "fixed_leg_Wh"
+      ],
+      "rows": 8
+    },
+    "FT_grid": {
+      "columns": [
+        "point",
+        "winner",
+        "q_transition_s",
+        "airspeed_min_eas_ms_continuous",
+        "q_transition_s_continuous",
+        "tkoff_thr_max_continuous",
+        "tran_pit_max_deg_continuous",
+        "J_continuous",
+        "seed_spread",
+        "t12_ok",
+        "at_bound",
+        "airspeed_min_eas_ms",
+        "tkoff_thr_max",
+        "tran_pit_max_deg",
+        "J_snap",
+        "J_snapped",
+        "J_snapped_minus_continuous",
+        "descent_moves",
+        "descent_evaluations",
+        "ensemble_n",
+        "J_exc",
+        "J_E",
+        "J_x",
+        "J_pen",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "worst_sink_ms",
+        "worst_stall_margin",
+        "n_no_handover",
+        "n_stall_margin",
+        "n_stall",
+        "n_alt_loss",
+        "n_alt_gain",
+        "n_proj_loss",
+        "n_underspeed",
+        "n_battery_cutoff",
+        "n_touchdown",
+        "n_flags",
+        "flags",
+        "within_2pct"
+      ],
+      "rows": 15
+    },
+    "FT_history": {
+      "columns": [
+        "scenario",
+        "case",
+        "t",
+        "mode",
+        "x",
+        "h_rel",
+        "V_eas",
+        "v_h",
+        "theta",
+        "theta_cap",
+        "theta_cmd",
+        "alpha_w_deg",
+        "delta_r",
+        "delta_p",
+        "wing_share",
+        "rotor_share"
+      ],
+      "rows": 1745
+    },
+    "FT_params": {
+      "columns": [
+        "case",
+        "airspeed_min_eas_ms",
+        "q_transition_s",
+        "tkoff_thr_max",
+        "tran_pit_max_deg",
+        "ensemble_n",
+        "J_start",
+        "thr_max",
+        "tkoff_thr_max_hi",
+        "J",
+        "J_exc",
+        "J_E",
+        "J_x",
+        "J_pen",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "worst_sink_ms",
+        "worst_stall_margin",
+        "n_no_handover",
+        "n_stall_margin",
+        "n_stall",
+        "n_alt_loss",
+        "n_alt_gain",
+        "n_proj_loss",
+        "n_underspeed",
+        "n_battery_cutoff",
+        "n_touchdown",
+        "n_flags",
+        "seed_spread",
+        "at_bound",
+        "airspeed_min_eas_ms_continuous",
+        "q_transition_s_continuous",
+        "tkoff_thr_max_continuous",
+        "tran_pit_max_deg_continuous",
+        "J_continuous",
+        "J_snapped_minus_continuous",
+        "robust_found",
+        "cl_max_scales",
+        "J_optimum_same_ensemble",
+        "delta_J",
+        "delta_J_in_seed_spreads"
+      ],
+      "rows": 4
+    },
+    "FT_robust": {
+      "columns": [
+        "airspeed_min_eas_ms",
+        "step_ms",
+        "cl_max_scale",
+        "J",
+        "J_exc",
+        "J_E",
+        "J_x",
+        "J_pen",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "worst_sink_ms",
+        "worst_stall_margin",
+        "n_no_handover",
+        "n_stall_margin",
+        "n_stall",
+        "n_alt_loss",
+        "n_alt_gain",
+        "n_proj_loss",
+        "n_underspeed",
+        "n_battery_cutoff",
+        "n_touchdown",
+        "n_flags",
+        "flags",
+        "ensemble_n"
+      ],
+      "rows": 12
+    },
+    "FT_runs": {
+      "columns": [
+        "case",
+        "set",
+        "member",
+        "altitude_m",
+        "isa_offset_k",
+        "mass_kg",
+        "soc",
+        "headwind_ms",
+        "t_handover_s",
+        "x_handover_m",
+        "V_handover_eas_ms",
+        "margin_handover",
+        "wing_share_handover",
+        "last_throttle",
+        "t_done_s",
+        "h_end_rel_m",
+        "vh_end_ms",
+        "V_end_eas_ms",
+        "theta_end_deg",
+        "wing_share_end",
+        "a_wing_ms2",
+        "a_rec_ms2",
+        "proj_loss_m",
+        "h_proj_rel_m",
+        "stall_margin_min",
+        "V_eas_min_fade_ms",
+        "a_mean_ms2",
+        "a_equiv_ms2",
+        "V_s_eas_ms",
+        "a_rec_binding",
+        "loss_m",
+        "gain_m",
+        "alpha_w_peak_deg",
+        "t_above_alpha_band_s",
+        "t_pitch_cap_s",
+        "t_pusher_sat_s",
+        "energy_kJ",
+        "E_wait_kJ",
+        "E_fade_kJ",
+        "distance_m",
+        "peak_motor_current_A",
+        "current_over",
+        "flags"
+      ],
+      "rows": 120
+    },
+    "FT_scan": {
+      "columns": [
+        "airspeed_min_eas_ms",
+        "q_transition_s",
+        "tkoff_thr_max",
+        "tran_pit_max_deg",
+        "J_search",
+        "seed_spread",
+        "at_bound",
+        "entry_eas_back_ms",
+        "J",
+        "J_exc",
+        "J_E",
+        "J_x",
+        "J_pen",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "worst_sink_ms",
+        "worst_stall_margin",
+        "n_no_handover",
+        "n_stall_margin",
+        "n_stall",
+        "n_alt_loss",
+        "n_alt_gain",
+        "n_proj_loss",
+        "n_underspeed",
+        "n_battery_cutoff",
+        "n_touchdown",
+        "n_flags",
+        "flags"
+      ],
+      "rows": 6
+    },
+    "FT_search": {
+      "columns": [
+        "seed",
+        "best_cost",
+        "evaluations",
+        "q_transition_s",
+        "airspeed_min_eas_ms",
+        "tkoff_thr_max",
+        "tran_pit_max_deg"
+      ],
+      "rows": 3
+    },
+    "FT_sens": {
+      "columns": [
+        "parameter",
+        "value",
+        "ensemble_n",
+        "cl_max",
+        "alpha_s_rad",
+        "J",
+        "J_exc",
+        "J_E",
+        "J_x",
+        "J_pen",
+        "p95_excursion_m",
+        "mean_energy_kJ",
+        "p95_distance_m",
+        "worst_sink_ms",
+        "worst_stall_margin",
+        "n_no_handover",
+        "n_stall_margin",
+        "n_stall",
+        "n_alt_loss",
+        "n_alt_gain",
+        "n_proj_loss",
+        "n_underspeed",
+        "n_battery_cutoff",
+        "n_touchdown",
+        "n_flags"
+      ],
+      "rows": 26
+    },
+    "F_descent": {
+      "columns": [
+        "scenario",
+        "altitude_m",
+        "v_h_ms",
+        "v_cap_ms",
+        "binding_limit",
+        "descent_time_s",
+        "hover_power_W",
+        "hover_energy_J",
+        "kappa_source"
+      ],
+      "rows": 5
+    },
+    "F_profile": {
+      "columns": [
+        "scenario",
+        "h_m",
+        "descent_rate_ms",
+        "time_to_go_s",
+        "energy_to_go_J"
+      ],
+      "rows": 155
+    },
+    "Q2_pusher_margin": {
+      "columns": [
+        "convention",
+        "feeds_e",
+        "altitude_m",
+        "rho_kg_m3",
+        "mass_factor",
+        "mass_kg",
+        "soc",
+        "tkoff_thr_max",
+        "tkoff_status",
+        "v_end_tas_ms",
+        "a_min_ms2",
+        "v_at_min_ms",
+        "a_equiv_ms2",
+        "t_s",
+        "x_m",
+        "v_reach_ms",
+        "reachable",
+        "rotor_saturated",
+        "current_limited"
+      ],
+      "rows": 72
+    },
+    "Q2_pusher_margin_recommended": {
+      "columns": [
+        "convention",
+        "feeds_e",
+        "altitude_m",
+        "rho_kg_m3",
+        "mass_factor",
+        "mass_kg",
+        "soc",
+        "tkoff_thr_max",
+        "tkoff_status",
+        "v_end_tas_ms",
+        "a_min_ms2",
+        "v_at_min_ms",
+        "a_equiv_ms2",
+        "t_s",
+        "x_m",
+        "v_reach_ms",
+        "reachable",
+        "rotor_saturated",
+        "current_limited"
+      ],
+      "rows": 72
+    },
+    "Q2_worst": {
+      "columns": [
+        "convention",
+        "feeds_e",
+        "altitude_m",
+        "rho_kg_m3",
+        "mass_factor",
+        "mass_kg",
+        "soc",
+        "tkoff_thr_max",
+        "tkoff_status",
+        "v_end_tas_ms",
+        "a_min_ms2",
+        "v_at_min_ms",
+        "a_equiv_ms2",
+        "t_s",
+        "x_m",
+        "v_reach_ms",
+        "reachable",
+        "rotor_saturated",
+        "current_limited"
+      ],
+      "rows": 2
+    },
+    "Q2_worst_recommended": {
+      "columns": [
+        "convention",
+        "feeds_e",
+        "altitude_m",
+        "rho_kg_m3",
+        "mass_factor",
+        "mass_kg",
+        "soc",
+        "tkoff_thr_max",
+        "tkoff_status",
+        "v_end_tas_ms",
+        "a_min_ms2",
+        "v_at_min_ms",
+        "a_equiv_ms2",
+        "t_s",
+        "x_m",
+        "v_reach_ms",
+        "reachable",
+        "rotor_saturated",
+        "current_limited"
+      ],
+      "rows": 2
+    },
+    "inputs_register": {
+      "columns": [
+        "name",
+        "group",
+        "value",
+        "unit",
+        "grade",
+        "source"
+      ],
+      "rows": 143
+    },
+    "sens_global": {
+      "columns": [
+        "output",
+        "input",
+        "morris_mu_star_large",
+        "morris_mu_star_small",
+        "status"
+      ],
+      "rows": 84
+    },
+    "sens_oat": {
+      "columns": [
+        "input",
+        "output",
+        "status",
+        "nominal_out",
+        "lo",
+        "hi",
+        "lo_half",
+        "hi_half"
+      ],
+      "rows": 84
+    },
+    "settings_recommended": {
+      "columns": [
+        "parameter",
+        "unit",
+        "register",
+        "default",
+        "default_unit",
+        "default_text",
+        "default_source",
+        "value",
+        "analysis",
+        "grade",
+        "flags",
+        "depends_on",
+        "note",
+        "searched_range",
+        "change_vs_default"
+      ],
+      "rows": 9
+    }
+  }
+}
